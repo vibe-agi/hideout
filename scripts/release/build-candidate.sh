@@ -658,7 +658,8 @@ verify_package() {
   local expected_binaries expected_files actual_files
   local path digest executable kind actual_digest binary_count
   local helper_count schema_count browser_count
-  local binary_path observer_manifest tun_manifest catalog_sha contract_sha
+  local binary_path observer_manifest adoption_manifest
+  local host_adoption_manifest tun_manifest catalog_sha contract_sha
 
   if [ ! -d "$package_root" ] || [ -L "$package_root" ] ||
     [ ! -f "$manifest" ] || [ -L "$manifest" ]; then
@@ -672,6 +673,8 @@ verify_package() {
       "bin/hideout-shim",
       ("bin/hideout-dns-stub-linux-" + $arch),
       ("bin/hideout-hostfsd-linux-" + $arch),
+      ("bin/hideout-migration-adopt-linux-" + $arch),
+      "bin/hideout-migration-vz-adopt-darwin-arm64",
       ("bin/hideout-observer-linux-" + $arch),
       ("bin/hideout-session-supervisor-linux-" + $arch),
       ("bin/hideout-shim-linux-" + $arch),
@@ -843,8 +846,8 @@ verify_package() {
       | .path
     ' "$manifest"
   )
-  if [ "$binary_count" -ne 9 ]; then
-    printf 'build-candidate: build %s binary count=%s want=9\n' \
+  if [ "$binary_count" -ne 11 ]; then
+    printf 'build-candidate: build %s binary count=%s want=11\n' \
       "$build" "$binary_count" >&2
     return 1
   fi
@@ -859,8 +862,11 @@ verify_package() {
       --arg binarySHA256 "$(sha256_file "$package_root/$binary_path")" \
       --arg builtAt "$candidate_built_at" '
         .version == "hideout.helper-manifest/v1" and
-        .targetOS == "linux" and
-        .targetArch == $arch and
+        (if .command == "hideout-migration-vz-adopt" then
+          .targetOS == "darwin" and .targetArch == "arm64"
+        else
+          .targetOS == "linux" and .targetArch == $arch
+        end) and
         .artifact == $artifact and
         .sha256 == $binarySHA256 and
         .builtAt == $builtAt and
@@ -875,9 +881,54 @@ verify_package() {
       "$package_root/$path" >/dev/null
   done < <(jq -r '.files[] | select(.kind == "helper-manifest") | .path' \
     "$manifest")
-  if [ "$helper_count" -ne 6 ]; then
-    printf 'build-candidate: build %s helper manifest count=%s want=6\n' \
+  if [ "$helper_count" -ne 8 ]; then
+    printf 'build-candidate: build %s helper manifest count=%s want=8\n' \
       "$build" "$helper_count" >&2
+    return 1
+  fi
+
+  host_adoption_manifest="$package_root/bin/hideout-migration-vz-adopt-darwin-arm64.manifest.json"
+  if ! jq -e '
+    .command == "hideout-migration-vz-adopt" and
+    .targetOS == "darwin" and
+    .targetArch == "arm64" and
+    .artifact == "hideout-migration-vz-adopt-darwin-arm64" and
+    .builder == "go build -mod=readonly -trimpath" and
+    .upstreamModule == "github.com/Code-Hex/vz/v3" and
+    .upstreamVersion == "v3.7.1" and
+    .license == "Apache-2.0" and
+    .buildMode == "apple-vz-zero-network-adoption-v1" and
+    .packageOwned == true
+  ' "$host_adoption_manifest" >/dev/null ||
+    ! "$package_root/bin/hideout-migration-vz-adopt-darwin-arm64" --probe |
+      jq -e '
+        .schema == "hideout.migration-vz-adopt-probe/v1" and
+        .protocol == "hideout.migration-vz-adopt/v1" and
+        .version == "1.0.0" and
+        .hostOS == "darwin" and
+        .hostArch == "arm64" and
+        .hypervisor == "apple-virtualization-framework" and
+        .networkDeviceCount == 0 and
+        .controlChannel == "virtiofs-private" and
+        .bootTrigger == "nocloud-fixed-cloud-boothook"
+      ' >/dev/null; then
+    printf 'build-candidate: build %s host migration adoption provenance/probe failed\n' \
+      "$build" >&2
+    return 1
+  fi
+
+  adoption_manifest="$package_root/bin/hideout-migration-adopt-linux-arm64.manifest.json"
+  if ! jq -e '
+    .command == "hideout-migration-adopt" and
+    .builder == "go build -trimpath" and
+    .license == "Apache-2.0" and
+    .buildMode == "strict-data-only-adoption-v1" and
+    .packageOwned == true and
+    (.upstreamModule == null) and
+    (.upstreamVersion == null)
+  ' "$adoption_manifest" >/dev/null; then
+    printf 'build-candidate: build %s migration adoption provenance failed\n' \
+      "$build" >&2
     return 1
   fi
 
@@ -938,8 +989,8 @@ verify_package() {
     jq -er '.assets | length' \
       "$package_root/runtime/browser-console.assets.json"
   )"
-  if [ "$browser_count" -ne 8 ]; then
-    printf 'build-candidate: build %s browser asset count=%s want=8\n' \
+  if [ "$browser_count" -ne 9 ]; then
+    printf 'build-candidate: build %s browser asset count=%s want=9\n' \
       "$build" "$browser_count" >&2
     return 1
   fi
@@ -1059,7 +1110,7 @@ if ! jq -e '
   .schema == "hideout.vulnerability-gate-evidence/v1" and
   .result == "passed" and
   .scanner.scanLevel == "symbol" and
-  .executed.packageBinaryCount == 9
+  .executed.packageBinaryCount == 11
 ' "$scratch/evidence/vulnerability/summary.json" >/dev/null; then
   printf 'build-candidate: binary vulnerability evidence is invalid\n' >&2
   exit 1

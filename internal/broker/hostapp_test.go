@@ -223,6 +223,39 @@ func TestProjectionDisabledFailsClosed(t *testing.T) {
 	assertNoHostPath(t, resp, hostRoot)
 }
 
+func TestProjectionCanonicalizesExactPhysicalWorkspaceAlias(t *testing.T) {
+	hostRoot := t.TempDir()
+	if err := os.WriteFile(filepath.Join(hostRoot, "a.go"), []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	workspaceID := "wrk_" + strings.Repeat("a", 64)
+	physicalRoot := "/hideout/workspaces/" + workspaceID
+	server := Server{
+		SessionID: "ses_1", Profile: "privacy", Backend: "lima",
+		HostRoot: hostRoot, GuestRoot: "/workspace", WorkspaceID: workspaceID,
+		PhysicalGuestRoot: physicalRoot,
+	}
+	resolver := &brokerResourceResolver{s: &server}
+	resource, err := resolver.ResolveResource(physicalRoot + "/a.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantHostPath, err := filepath.EvalSymlinks(filepath.Join(hostRoot, "a.go"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resource.AuthorityID != workspaceID || resource.Ref.Kind != hostcap.KindWorkspace ||
+		resource.Ref.GuestPath != "/workspace/a.go" || resource.Ref.RelativePath != "a.go" ||
+		resource.HostPath != wantHostPath {
+		t.Fatalf("resolved physical alias = %#v", resource)
+	}
+
+	sibling := "/hideout/workspaces/wrk_" + strings.Repeat("b", 64) + "/a.go"
+	if _, err := (&brokerResourceResolver{s: &server}).ResolveResource(sibling); err == nil {
+		t.Fatal("projection accepted a sibling physical workspace")
+	}
+}
+
 func TestProjectionBindingCannotSubstituteForExactCommandRegistration(t *testing.T) {
 	hostRoot := t.TempDir()
 	if err := os.WriteFile(filepath.Join(hostRoot, "a.go"), []byte("x"), 0o600); err != nil {

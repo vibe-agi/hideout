@@ -47,11 +47,23 @@ func (a app) runTUICommand(options tuiOptions) error {
 	var activityProvider manager.ActivityProvider
 	var configProvider tuimodal.Provider
 	var lifecycleProvider tuimodal.LifecycleProvider
+	var migrationProvider tuimodal.MigrationProvider
+	snapshotProvider := func(refreshContext context.Context) (liveconsole.State, error) {
+		_, refreshedState, _, refreshErr := loadOperatorTUIState(
+			refreshContext, store, query,
+		)
+		if refreshErr != nil {
+			return liveconsole.State{}, refreshErr
+		}
+		refreshedState.ProfileScope = options.profileName
+		return refreshedState, nil
+	}
 	if daemonSeed {
 		activityProvider = daemon.NewActivityClient(store.Root)
 		configurationClient := newTUIConfigurationClient(store.Root)
 		configProvider = configurationClient
 		lifecycleProvider = configurationClient
+		migrationProvider = configurationClient
 		events, err = daemon.SubscribeEvents(ctx, store.Root)
 		if err != nil {
 			state.ReadOnly = true
@@ -68,6 +80,9 @@ func (a app) runTUICommand(options tuiOptions) error {
 		ActivityProvider:  activityProvider,
 		ConfigProvider:    configProvider,
 		LifecycleProvider: lifecycleProvider,
+		MigrationProvider: migrationProvider,
+		SnapshotProvider:  snapshotProvider,
+		FallbackInterval:  options.interval,
 		HelpCatalog:       defaultOperatorHelpCatalog(),
 	})
 	_, err = runTUIProgram(ctx, a.stdin, a.stdout, model)

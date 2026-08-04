@@ -8,6 +8,7 @@
   const valueLabel = presentation.valueLabel;
   const DOM_ROW_LIMIT = presentation.DOM_ROW_LIMIT;
   const DIALOG_ROW_LIMIT = presentation.DIALOG_ROW_LIMIT;
+  const migrationOperationPattern = /^op_[A-Za-z0-9_-]{8,124}$/;
   const cardTones = new Set([
     "live", "seeding", "stale",
     "coverage-available", "coverage-partial", "coverage-unavailable",
@@ -18,6 +19,7 @@
   const connectionReason = document.getElementById("connectionReason");
   const staleBanner = document.getElementById("staleBanner");
   const configMode = document.getElementById("configMode");
+  const migrationMode = document.getElementById("migrationMode");
   const reseedButton = /** @type {HTMLButtonElement} */ (
     document.getElementById("reseed")
   );
@@ -36,6 +38,7 @@
     coverage: document.getElementById("coverageBody"),
     risks: document.getElementById("risksBody"),
     operations: document.getElementById("operationsBody"),
+    migration: document.getElementById("migrationBody"),
     config: document.getElementById("configBody"),
     help: document.getElementById("helpBody")
   };
@@ -52,6 +55,11 @@
   let selectedProfile = "";
   let configTransaction = null;
   let configRequest = 0;
+  let migrationFlow = null;
+  let migrationRequest = 0;
+  let migrationRefreshError = "";
+  let migrationPollTimer = null;
+  let migrationPollLoading = false;
   let seedRequest = 0;
   let seedLoading = false;
   let reconnectTimer = null;
@@ -211,6 +219,8 @@
         "Configuration controls are available" :
         "Configuration controls are read-only"
     );
+    migrationMode.textContent = mutable ? "live" : "read-only";
+    migrationMode.className = mutable ? "badge live" : "badge stale";
     reseedButton.disabled = seedLoading;
     reseedButton.textContent = seedLoading ?
       "Refreshing…" :
@@ -247,6 +257,10 @@
         "rollback-unproved", "recovery-required"
       ].includes(value.phase)
     ).length;
+    const migrations = root.Migration.operations(snapshot);
+    const activeMigrations = migrations.filter((value) =>
+      !["complete", "cancelled", "rolled-back", "failed"].includes(value.state)
+    ).length;
     document.getElementById("metricWorkloads").textContent =
       String((snapshot.sessions || []).length);
     document.getElementById("metricCoverage").textContent =
@@ -254,7 +268,8 @@
     document.getElementById("metricRisks").textContent =
       String((details.risks.length ? details.risks : snapshot.risks || []).length);
     document.getElementById("metricOperations").textContent =
-      `${activeOperations}/${(snapshot.operations || []).length}`;
+      `${activeOperations + activeMigrations}/` +
+      `${(snapshot.operations || []).length + migrations.length}`;
   }
 
   function syncSessionScope() {
@@ -716,6 +731,1130 @@
       "No durable operation history.",
       bounded.omitted
     );
+  }
+
+  function clearMigrationFlow() {
+    migrationRequest++;
+    if (migrationFlow) {
+      migrationFlow.secretInputHandle = "";
+      migrationFlow.inspectHandle = "";
+    }
+    migrationFlow = null;
+    closeConsoleDialog();
+  }
+
+  /** @param {Object} operation */
+  function acceptMigrationOperation(operation) {
+    if (!root.Migration.validOperation(operation)) return;
+    const values = state.snapshot.migrations || [];
+    const index = values.findIndex(
+      (value) => value.operationId === operation.operationId
+    );
+    if (index >= 0) {
+      if (values[index].revision <= operation.revision) values[index] = operation;
+    } else {
+      values.unshift(operation);
+    }
+  }
+
+  /** @param {Object} view */
+  function migrationProgressCard(view) {
+    return card(
+      `${String(view.kind).toUpperCase()} · ${view.phase}`,
+      view.state,
+      [
+        ["operation / revision", `${view.id} / ${view.revision}`],
+        ["bundle", view.bundle],
+        ["current item", view.currentItem],
+        ["logical bytes", view.logical],
+        ["encoded bytes", view.encoded],
+        ["components", view.components],
+        ["elapsed / ETA", `${view.elapsed} / ${view.eta}`],
+        ["retained partial bytes", view.retained],
+        ["blockers", view.blockers],
+        ["next action", view.next]
+      ],
+      view.recovery.required || view.state === "failed" ? "stale" :
+        view.terminal ? "live" : "seeding"
+    );
+  }
+
+  /** @param {Object} operation */
+  function openMigrationOperation(operation) {
+    let view;
+    try {
+      view = root.Migration.operationView(operation);
+    } catch {
+      return;
+    }
+    const effects = view.effects.map((effect) => card(
+      effect.kind || "migration effect",
+      effect.status || "unknown",
+      [["summary", effect.summary || "No effect summary reported."]],
+      effect.status === "failed" || effect.status === "unproved" ? "stale" : ""
+    ));
+    const receipt = view.receipt ? card(
+      view.receipt.resultCode || "terminal receipt",
+      view.receipt.terminalState || view.state,
+      [
+        ["operation", view.receipt.operationId],
+        ["bundle", view.receipt.bundleId],
+        ["components", `${view.receipt.completedComponents} / ${view.receipt.totalComponents}`],
+        ["claims released", view.receipt.claimsReleased],
+        ["completed", view.receipt.completedAt]
+      ],
+      "live"
+    ) : card(
+      "Operation is not terminal",
+      "in progress",
+      [["next action", view.next]]
+    );
+    const actions = element("div", "dialog-actions");
+    const close = element("button");
+    close.type = "button";
+    close.textContent = "Close";
+    close.addEventListener("click", closeConsoleDialog);
+    actions.append(close);
+    if (root.State.canMutate(state) && view.recovery.required &&
+        view.recovery.allowedActions.length === 1) {
+      const recover = element("button");
+      recover.type = "button";
+      recover.className = "primary";
+      recover.dataset.requiresAuthority = "true";
+      recover.textContent = view.recovery.allowedActions[0] === "resume" ?
+        "Resume this operation" : "Review exact recovery";
+      recover.addEventListener("click", () =>
+        openMigrationRecovery(operation)
+      );
+      actions.append(recover);
+    }
+    if (root.State.canMutate(state) && !view.terminal &&
+        !view.recovery.required) {
+      const cancel = element("button");
+      cancel.type = "button";
+      cancel.className = "danger-action";
+      cancel.dataset.requiresAuthority = "true";
+      cancel.textContent = "Review cancellation";
+      cancel.addEventListener("click", () =>
+        openMigrationCancellation(operation)
+      );
+      actions.append(cancel);
+    }
+    showConsoleDialog(
+      `Migration · ${view.id}`,
+      [
+        migrationProgressCard(view),
+        group("Effects", effects),
+        group("Terminal result", [receipt]),
+        actions
+      ]
+    );
+  }
+
+  /** @param {Object} operation */
+  function openMigrationCancellation(operation) {
+    const view = root.Migration.operationView(operation);
+    const notice = element("div", "notice");
+    notice.append(text(
+      "Cancellation is bound to the displayed operation revision and stops " +
+      "only at a safe boundary. Enter alone never cancels."
+    ));
+    let retain = null;
+    const nodes = [notice];
+    if (operation.kind === "export") {
+      const choice = element("label", "confirm-check");
+      retain = element("input");
+      retain.type = "checkbox";
+      retain.checked = true;
+      choice.append(
+        retain,
+        text("Retain unsealed partial output for inspection (unusable until resumed).")
+      );
+      nodes.push(choice);
+    }
+    const confirmLabel = element("label", "confirm-check");
+    const confirm = element("input");
+    confirm.type = "checkbox";
+    confirmLabel.append(
+      confirm,
+      text(`Cancel ${operation.operationId} at revision ${operation.revision}.`)
+    );
+    const error = element("p", "form-error");
+    error.setAttribute("role", "alert");
+    const actions = element("div", "dialog-actions");
+    const back = element("button");
+    back.type = "button";
+    back.textContent = "Back";
+    back.addEventListener("click", () => openMigrationOperation(operation));
+    const apply = element("button");
+    apply.type = "button";
+    apply.className = "danger-action";
+    apply.dataset.requiresAuthority = "true";
+    apply.textContent = "Request cancellation";
+    apply.disabled = true;
+    confirm.addEventListener("change", () => {
+      apply.disabled = !confirm.checked || !root.State.canMutate(state);
+    });
+    apply.addEventListener("click", async () => {
+      apply.disabled = true;
+      try {
+        const payload = {revision: operation.revision};
+        if (retain) payload.retainPartial = retain.checked;
+        const updated = await root.Client.migrationAction(
+          operation.operationId, "cancel", payload
+        );
+        acceptMigrationOperation(updated);
+        closeConsoleDialog();
+        renderAll();
+        openMigrationOperation(updated);
+      } catch {
+        error.textContent =
+          "Hideout did not accept cancellation. Refresh the exact operation revision.";
+        apply.disabled = false;
+      }
+    });
+    actions.append(back, apply);
+    nodes.push(confirmLabel, error, actions);
+    showConsoleDialog("Confirm migration cancellation", nodes);
+  }
+
+  /** @param {Object} operation */
+  function openMigrationRecovery(operation) {
+    const action = operation.recovery.allowedActions[0];
+    if (action === "manual") {
+      showConsoleDialog("Manual migration recovery", [
+        migrationProgressCard(root.Migration.operationView(operation)),
+        card("Manager requires manual review", operation.recovery.code, [
+          ["next action", operation.recovery.nextAction]
+        ], "stale")
+      ]);
+      return;
+    }
+    if (action === "resume") {
+      const passwordLabel = element("label", "field");
+      passwordLabel.append(text("Bundle passphrase"));
+      const password = element("input");
+      password.type = "password";
+      password.autocomplete = "off";
+      passwordLabel.append(password, text(
+        "The value is exchanged for a one-shot in-memory Manager handle."
+      , "muted"));
+      const error = element("p", "form-error");
+      error.setAttribute("role", "alert");
+      const actions = element("div", "dialog-actions");
+      const back = element("button");
+      back.type = "button";
+      back.textContent = "Back";
+      back.addEventListener("click", () => {
+        password.value = "";
+        openMigrationOperation(operation);
+      });
+      const resume = element("button");
+      resume.type = "button";
+      resume.className = "primary";
+      resume.dataset.requiresAuthority = "true";
+      resume.textContent = "Resume exact revision";
+      resume.addEventListener("click", async () => {
+        const passphrase = password.value;
+        password.value = "";
+        if (!passphrase || !root.State.canMutate(state)) return;
+        resume.disabled = true;
+        try {
+          const handle = await root.Client.migrationSecretInput({
+            purpose: operation.kind === "export" ? "export-resume" : "import",
+            operationId: operation.operationId,
+            passphrase
+          });
+          const updated = await root.Client.migrationAction(
+            operation.operationId,
+            "resume",
+            {revision: operation.revision, secretInputHandle: handle.handle}
+          );
+          acceptMigrationOperation(updated);
+          closeConsoleDialog();
+          renderAll();
+          openMigrationOperation(updated);
+        } catch {
+          error.textContent =
+            "Resume was not accepted. Check the passphrase and refresh current status.";
+          resume.disabled = false;
+        }
+      });
+      actions.append(back, resume);
+      showConsoleDialog("Resume migration", [
+        card(operation.operationId, operation.recovery.code, [
+          ["revision", operation.revision],
+          ["next action", operation.recovery.nextAction]
+        ]),
+        passwordLabel,
+        error,
+        actions
+      ]);
+      return;
+    }
+    const confirmLabel = element("label", "confirm-check");
+    const confirm = element("input");
+    confirm.type = "checkbox";
+    confirmLabel.append(
+      confirm,
+      text(`${operation.recovery.nextAction} This is bound to revision ${operation.revision}.`)
+    );
+    const error = element("p", "form-error");
+    const actions = element("div", "dialog-actions");
+    const back = element("button");
+    back.type = "button";
+    back.textContent = "Back";
+    back.addEventListener("click", () => openMigrationOperation(operation));
+    const recover = element("button");
+    recover.type = "button";
+    recover.className = "danger-action";
+    recover.dataset.requiresAuthority = "true";
+    recover.textContent = `Apply ${action}`;
+    recover.disabled = true;
+    confirm.addEventListener("change", () => {
+      recover.disabled = !confirm.checked || !root.State.canMutate(state);
+    });
+    recover.addEventListener("click", async () => {
+      recover.disabled = true;
+      try {
+        const updated = await root.Client.migrationAction(
+          operation.operationId,
+          "recover",
+          {revision: operation.revision, action}
+        );
+        acceptMigrationOperation(updated);
+        closeConsoleDialog();
+        renderAll();
+        openMigrationOperation(updated);
+      } catch {
+        error.textContent =
+          "Recovery was not accepted. Refresh the exact operation revision.";
+        recover.disabled = false;
+      }
+    });
+    actions.append(back, recover);
+    showConsoleDialog("Confirm exact migration recovery", [
+      migrationProgressCard(root.Migration.operationView(operation)),
+      confirmLabel,
+      error,
+      actions
+    ]);
+  }
+
+  /** @param {string} label @param {HTMLElement} control @param {string=} help */
+  function migrationField(label, control, help) {
+    const node = element("label", "field");
+    node.append(text(label), control);
+    if (help) node.append(text(help, "muted"));
+    return node;
+  }
+
+  function openMigrationExport() {
+    if (!root.State.canMutate(state)) return;
+    const environments = (state.snapshot.environments || []).slice()
+      .sort((left, right) => String(left.name).localeCompare(String(right.name)));
+    const scope = element("div", "stack");
+    const selections = [];
+    for (const environment of environments) {
+      const label = element("label", "confirm-check");
+      const checkbox = element("input");
+      checkbox.type = "checkbox";
+      checkbox.dataset.environmentName = environment.name;
+      selections.push(checkbox);
+      label.append(
+        checkbox,
+        text(`${environment.name} · ${environment.status} · ${environment.backend || "backend unknown"}`)
+      );
+      scope.append(label);
+    }
+    if (!environments.length) {
+      scope.append(text("No environment is present in the verified snapshot.", "muted"));
+    }
+    const mode = element("select");
+    for (const [value, label] of [
+      ["config", "Configuration only (safe default)"],
+      ["full", "Full VM state and persistent disks"]
+    ]) {
+      const option = element("option");
+      option.value = value;
+      option.textContent = label;
+      mode.append(option);
+    }
+    const outputPath = element("input");
+    outputPath.type = "text";
+    outputPath.autocomplete = "off";
+    outputPath.placeholder = "/Users/me/Desktop/machine.hideout-migration";
+    const secretRefs = element("input");
+    secretRefs.type = "text";
+    secretRefs.autocomplete = "off";
+    secretRefs.placeholder = "optional-secret-ref, another-ref";
+    const password = element("input");
+    password.type = "password";
+    password.autocomplete = "new-password";
+    const confirmation = element("input");
+    confirmation.type = "password";
+    confirmation.autocomplete = "new-password";
+    const error = element("p", "form-error");
+    error.setAttribute("role", "alert");
+    const actions = element("div", "dialog-actions");
+    const cancel = element("button");
+    cancel.type = "button";
+    cancel.textContent = "Cancel";
+    cancel.addEventListener("click", () => {
+      password.value = "";
+      confirmation.value = "";
+      closeConsoleDialog();
+    });
+    const review = element("button");
+    review.type = "button";
+    review.className = "primary";
+    review.dataset.requiresAuthority = "true";
+    review.textContent = "Build Manager plan";
+    review.disabled = !environments.length;
+    review.addEventListener("click", async () => {
+      let request;
+      try {
+        request = root.Migration.buildExportRequest({
+          mode: mode.value,
+          environmentNames: selections.filter((value) => value.checked)
+            .map((value) => value.dataset.environmentName),
+          includeSecretRefs: secretRefs.value,
+          outputPath: outputPath.value
+        });
+      } catch (cause) {
+        error.textContent = safeText(cause);
+        return;
+      }
+      const passphrase = password.value;
+      const confirmed = confirmation.value;
+      password.value = "";
+      confirmation.value = "";
+      if (!passphrase || passphrase !== confirmed) {
+        error.textContent = "Enter the same non-empty bundle passphrase twice.";
+        return;
+      }
+      review.disabled = true;
+      migrationFlow = {
+        kind: "export", stage: "planning", request,
+        secretInputHandle: "", plan: null, result: null, error: ""
+      };
+      renderAll();
+      const requestID = ++migrationRequest;
+      try {
+        const handle = await root.Client.migrationSecretInput({
+          purpose: "export-create",
+          bundlePath: request.outputPath,
+          passphrase,
+          confirmation: confirmed
+        });
+        const plan = await root.Client.migrationExportPlan(request);
+        if (requestID !== migrationRequest || !migrationFlow ||
+            migrationFlow.kind !== "export") return;
+        const view = root.Migration.exportPlanView(plan);
+        if (plan.mode !== request.mode || plan.outputPath !== request.outputPath) {
+          throw new Error("Manager returned a plan for different export choices");
+        }
+        migrationFlow.stage = "review";
+        migrationFlow.plan = plan;
+        migrationFlow.secretInputHandle = handle.handle;
+        closeConsoleDialog();
+        renderAll();
+        openMigrationPlanReview(view);
+      } catch {
+        if (requestID !== migrationRequest || !migrationFlow) return;
+        migrationFlow.stage = "error";
+        migrationFlow.error =
+          "Export planning was not accepted. Check stopped state, path, capabilities, and passphrase.";
+        closeConsoleDialog();
+        renderAll();
+      }
+    });
+    actions.append(cancel, review);
+    showConsoleDialog("Export this computer", [
+      card("One encrypted bundle", "safe defaults", [
+        ["configuration mode", "profiles and references; no persistent disks"],
+        ["full mode", "stopped VM disks; opaque content may include credentials"],
+        ["existing destination", "refused; Hideout never overwrites it implicitly"],
+        ["passphrase", "memory-only input; not written to URL or browser storage"]
+      ]),
+      group("Select environments explicitly", [scope]),
+      migrationField(
+        "Scope",
+        mode,
+        "Full requires every selected source environment to be stopped."
+      ),
+      migrationField("Output bundle file", outputPath),
+      migrationField(
+        "Optional selected secret references",
+        secretRefs,
+        "Values are included only when named explicitly; the plan shows the risk."
+      ),
+      migrationField("Create bundle passphrase", password),
+      migrationField("Confirm bundle passphrase", confirmation),
+      error,
+      actions
+    ]);
+  }
+
+  /** @param {Object} view */
+  function openMigrationPlanReview(view) {
+    if (!migrationFlow || !migrationFlow.plan) return;
+    const plan = migrationFlow.plan;
+    const identity = card(
+      `${String(view.kind).toUpperCase()} plan · ${view.id}`,
+      "reviewed",
+      [
+        ["digest", view.digest],
+        ["confirmation", view.confirmation],
+        ["risks", view.risks],
+        ["effects", view.effects.map(
+          (effect) => `${effect.kind} via ${effect.provider}`
+        )]
+      ],
+      view.blockers && view.blockers.length ? "stale" : "seeding"
+    );
+    const inventory = view.kind === "export" ? card(
+      "Export inventory",
+      view.mode,
+      [
+        ["output", view.outputPath],
+        ["included", view.included],
+        ["payload estimate", view.payloadEstimate],
+        ["environments", view.environmentEstimates.map(
+          (value) => `${value.displayName} (${value.environmentRef}) · ${
+            root.Migration.bytes(value.estimatedLogicalBytes)
+          } · config ${root.Migration.bytes(value.portableConfigLogicalBytes)} · disks ${
+            value.diskRefs.length ? value.diskRefs.join(", ") : "none"
+          }`
+        )],
+        ["persistent disks", view.diskEstimates.map(
+          (value) => `${value.diskRef} · ${value.role} · logical ${
+            root.Migration.bytes(value.logicalBytes)
+          } · allocated hint ${root.Migration.bytes(value.allocatedBytesHint)} · used by ${
+            value.consumers.join(", ")
+          }`
+        )],
+        ["selected secrets", view.secrets],
+        ["excluded", view.exclusions]
+      ]
+    ) : card(
+      "Import inventory",
+      view.compatibility.available ? "compatible" : "BLOCKED",
+      [
+        ["backend", view.compatibility.backend],
+        ["required / available", `${root.Migration.bytes(view.compatibility.requiredBytes)} / ${root.Migration.bytes(view.compatibility.availableBytes)}`],
+        ["objects", view.environments.map(
+          (value) => `${value.sourceRef} → ${value.destinationName}`
+        )],
+        ["identity", view.identities.map(
+          (value) => `${value.sourceRef}: ${value.guestPolicy}`
+        )],
+        ["workspaces", view.workspaces.map(
+          (value) => `${value.proposalId}: ${value.decision}`
+        )],
+        ["secrets", view.secrets.map(
+          (value) => `${value.sourceRef}: ${value.decision}`
+        )],
+        ["authority", [
+          ...view.authorities.map((value) => `${value.proposalId}: approved`),
+          ...view.disabled.map((value) => `${value}: disabled`)
+        ]]
+      ],
+      view.compatibility.available ? "" : "stale"
+    );
+    const warnings = (view.warnings || []).map((warning) => card(
+      warning.code, "warning", [
+        ["summary", warning.summary], ["next", warning.remediation]
+      ], "coverage-partial"
+    ));
+    const blockers = (view.blockers || []).map((blocker) => card(
+      blocker.code, "BLOCKER", [
+        ["summary", blocker.summary], ["next", blocker.remediation]
+      ], "stale"
+    ));
+    if (view.kind === "import" && !view.compatibility.available) {
+      blockers.push(card(
+        view.compatibility.reasonCode || "migration.compatibility.unavailable",
+        "BLOCKER",
+        [["next", "Use a compatible destination or export configuration only."]],
+        "stale"
+      ));
+    }
+    const actions = element("div", "dialog-actions");
+    const edit = element("button");
+    edit.type = "button";
+    edit.textContent = "Edit choices";
+    edit.addEventListener("click", () => {
+      if (view.kind === "export") {
+        clearMigrationFlow();
+        openMigrationExport();
+      } else {
+        openMigrationImportDecisions();
+      }
+    });
+    const confirm = element("button");
+    confirm.type = "button";
+    confirm.className = "primary";
+    confirm.dataset.requiresAuthority = "true";
+    confirm.textContent = blockers.length ?
+      "Apply disabled · resolve blockers" : "Confirm exact plan";
+    confirm.disabled = blockers.length > 0 || !root.State.canMutate(state);
+    confirm.addEventListener("click", () =>
+      openMigrationPlanConfirmation(view)
+    );
+    actions.append(edit, confirm);
+    showConsoleDialog(`Review ${view.kind} plan`, [
+      identity,
+      inventory,
+      group("Warnings", warnings),
+      group("Blockers", blockers),
+      actions
+    ]);
+  }
+
+  /** @param {Object} view */
+  function openMigrationPlanConfirmation(view) {
+    if (!migrationFlow || !migrationFlow.plan) return;
+    const phrase = String(view.kind).toUpperCase();
+    const checkLabel = element("label", "confirm-check");
+    const check = element("input");
+    check.type = "checkbox";
+    checkLabel.append(
+      check,
+      text("I reviewed inventory, identity, mappings, risks, effects, and blockers.")
+    );
+    const typed = element("input");
+    typed.type = "text";
+    typed.autocomplete = "off";
+    const error = element("p", "form-error");
+    const actions = element("div", "dialog-actions");
+    const back = element("button");
+    back.type = "button";
+    back.textContent = "Back to review";
+    back.addEventListener("click", () => openMigrationPlanReview(view));
+    const apply = element("button");
+    apply.type = "button";
+    apply.className = "danger-action";
+    apply.dataset.requiresAuthority = "true";
+    apply.textContent = `Apply exact ${view.kind} plan`;
+    apply.disabled = true;
+    const update = () => {
+      apply.disabled = !root.State.canMutate(state) ||
+        !check.checked || typed.value !== phrase;
+    };
+    check.addEventListener("change", update);
+    typed.addEventListener("input", update);
+    apply.addEventListener("click", () => {
+      applyMigrationPlan(view).catch(() => {
+        error.textContent =
+          "Apply response was not accepted. Refresh Migration before deciding whether to retry.";
+      });
+    });
+    actions.append(back, apply);
+    showConsoleDialog(`Confirm ${view.kind}`, [
+      card(view.id, "exact reviewed plan", [
+        ["digest", view.digest], ["risks", view.risks]
+      ]),
+      checkLabel,
+      migrationField(`Type ${phrase} exactly`, typed),
+      error,
+      actions
+    ]);
+  }
+
+  /** @param {Object} view */
+  async function applyMigrationPlan(view) {
+    if (!migrationFlow || !migrationFlow.plan ||
+        !root.State.canMutate(state)) return;
+    const flow = migrationFlow;
+    const requestID = ++migrationRequest;
+    flow.stage = "applying";
+    closeConsoleDialog();
+    renderAll();
+    try {
+      const payload = flow.kind === "export" ?
+        root.Migration.exportApply(flow.plan, flow.secretInputHandle) :
+        root.Migration.importApply(flow.plan, flow.secretInputHandle);
+      const result = flow.kind === "export" ?
+        await root.Client.migrationExportApply(payload) :
+        await root.Client.migrationImportApply(payload);
+      if (requestID !== migrationRequest || migrationFlow !== flow) return;
+      if (!migrationOperationPattern.test(result.operationId || "") ||
+          !result.state || !result.next) {
+        throw new Error("invalid migration apply result");
+      }
+      flow.secretInputHandle = "";
+      flow.stage = "terminal";
+      flow.result = result;
+      renderAll();
+      showConsoleDialog("Migration accepted", [
+        card(result.operationId, result.state, [
+          ["created", result.created], ["next", result.next]
+        ], "seeding"),
+        text("The durable operation continues even if this browser dialog closes.", "muted")
+      ]);
+      pollMigrationSnapshot();
+    } catch {
+      if (requestID !== migrationRequest || migrationFlow !== flow) return;
+      flow.stage = "error";
+      flow.error =
+        "Migration apply outcome is unknown or was refused. Refresh status before retrying.";
+      renderAll();
+    }
+  }
+
+  function openMigrationImport() {
+    if (!root.State.canMutate(state)) return;
+    const bundlePath = element("input");
+    bundlePath.type = "text";
+    bundlePath.autocomplete = "off";
+    bundlePath.placeholder = "/Users/me/Desktop/machine.hideout-migration";
+    const password = element("input");
+    password.type = "password";
+    password.autocomplete = "current-password";
+    const error = element("p", "form-error");
+    error.setAttribute("role", "alert");
+    const actions = element("div", "dialog-actions");
+    const cancel = element("button");
+    cancel.type = "button";
+    cancel.textContent = "Cancel";
+    cancel.addEventListener("click", () => {
+      password.value = "";
+      closeConsoleDialog();
+    });
+    const inspect = element("button");
+    inspect.type = "button";
+    inspect.className = "primary";
+    inspect.dataset.requiresAuthority = "true";
+    inspect.textContent = "Unlock and inspect only";
+    inspect.addEventListener("click", async () => {
+      const path = bundlePath.value.trim();
+      const passphrase = password.value;
+      password.value = "";
+      if (!path.startsWith("/") || !passphrase || !root.State.canMutate(state)) {
+        error.textContent = "Enter an absolute bundle path and its passphrase.";
+        return;
+      }
+      inspect.disabled = true;
+      migrationFlow = {
+        kind: "import", stage: "unlocking", bundlePath: path,
+        inspection: null, choices: null, draft: null, plan: null,
+        inspectHandle: "", secretInputHandle: "", result: null, error: ""
+      };
+      renderAll();
+      const flow = migrationFlow;
+      const requestID = ++migrationRequest;
+      try {
+        const inspectHandle = await root.Client.migrationSecretInput({
+          purpose: "inspect", bundlePath: path, passphrase
+        });
+        const inspection = await root.Client.migrationImportInspect({
+          bundlePath: path,
+          secretInputHandle: inspectHandle.handle
+        });
+        const importHandle = await root.Client.migrationSecretInput({
+          purpose: "import", bundlePath: path, passphrase
+        });
+        if (requestID !== migrationRequest || migrationFlow !== flow) return;
+        if (!inspection.binding || !inspection.inventory ||
+            inspection.binding.bundleId !== inspection.inventory.bundleId ||
+            importHandle.bundleId !== inspection.binding.bundleId) {
+          throw new Error("authenticated bundle bindings differ");
+        }
+        flow.inspection = inspection;
+        flow.choices = root.Migration.importChoices(inspection);
+        flow.secretInputHandle = importHandle.handle;
+        flow.stage = "decisions";
+        closeConsoleDialog();
+        renderAll();
+        openMigrationImportDecisions();
+      } catch {
+        if (requestID !== migrationRequest || migrationFlow !== flow) return;
+        flow.stage = "error";
+        flow.error =
+          "Bundle authentication or inspection was not accepted. No destination state changed.";
+        closeConsoleDialog();
+        renderAll();
+      }
+    });
+    actions.append(cancel, inspect);
+    showConsoleDialog("Import an encrypted bundle", [
+      card("Read-only first step", "no destination changes", [
+        ["bundle", "authenticated and inventoried before any selection"],
+        ["default selection", "none"],
+        ["identity", "Safe Clone"],
+        ["workspaces / authority", "disabled"],
+        ["secrets", "unresolved"],
+        ["conflicts", "rename here, or delete the old VM under a separate plan"]
+      ]),
+      migrationField("Encrypted bundle file", bundlePath),
+      migrationField(
+        "Bundle passphrase",
+        password,
+        "Used only to create one-shot in-memory inspection/import handles."
+      ),
+      error,
+      actions
+    ]);
+  }
+
+  function openMigrationImportDecisions() {
+    if (!migrationFlow || migrationFlow.kind !== "import" ||
+        !migrationFlow.inspection || !migrationFlow.choices) return;
+    const flow = migrationFlow;
+    const inventory = flow.inspection.inventory;
+    const environmentNodes = [];
+    const environmentControls = new Map();
+    for (const choice of flow.choices.environments) {
+      const row = element("article", "row migration-choice");
+      const selected = element("input");
+      selected.type = "checkbox";
+      selected.checked = choice.selected;
+      selected.dataset.migrationEnvironment = choice.sourceRef;
+      const selectLabel = element("label", "confirm-check");
+      selectLabel.append(selected, text(
+        `${choice.label} · ${choice.sourceRef}`
+      ));
+      const name = element("input");
+      name.type = "text";
+      name.autocomplete = "off";
+      name.value = choice.destinationName;
+      name.dataset.migrationName = choice.sourceRef;
+      const policy = element("select");
+      policy.dataset.migrationIdentity = choice.sourceRef;
+      for (const [value, label] of [
+        ["safe-clone", "Safe Clone · rotate guest identity (recommended)"],
+        ["exact-guest-restore", "Exact Guest Restore · collision risk"]
+      ]) {
+        const option = element("option");
+        option.value = value;
+        option.textContent = label;
+        policy.append(option);
+      }
+      policy.value = choice.policy;
+      environmentControls.set(choice.sourceRef, {selected, name, policy});
+      row.append(
+        selectLabel,
+        migrationField("Destination name", name),
+        migrationField("Guest identity", policy)
+      );
+      environmentNodes.push(row);
+    }
+    const workspaceControls = new Map();
+    const workspaceNodes = flow.choices.workspaces.map((choice) => {
+      const row = element("article", "row migration-choice");
+      const decision = element("select");
+      decision.dataset.migrationWorkspaceDecision = choice.proposalId;
+      for (const [value, label] of [
+        ["disabled", "Disabled (recommended)"], ["mapped", "Map existing host directory"]
+      ]) {
+        const option = element("option");
+        option.value = value;
+        option.textContent = label;
+        decision.append(option);
+      }
+      decision.value = choice.decision;
+      const destination = element("input");
+      destination.type = "text";
+      destination.autocomplete = "off";
+      destination.placeholder = "/absolute/destination/workspace";
+      destination.value = choice.destinationPath;
+      destination.dataset.migrationWorkspacePath = choice.proposalId;
+      workspaceControls.set(choice.proposalId, {decision, destination});
+      row.append(
+        text(`${choice.guestPath} · source hint ${choice.hint || "none"}`, "row-title"),
+        migrationField("Decision", decision),
+        migrationField("Destination path (mapped only)", destination)
+      );
+      return row;
+    });
+    const secretControls = new Map();
+    const secretNodes = flow.choices.secrets.map((choice) => {
+      const row = element("article", "row migration-choice");
+      const decision = element("select");
+      decision.dataset.migrationSecretDecision = choice.sourceRef;
+      const options = [
+        ["unresolved", "Unresolved (recommended)"],
+        ["existing-ref", "Bind existing destination secret"]
+      ];
+      if (choice.valueIncluded) {
+        options.push(["import-value", "Import encrypted selected value"]);
+      }
+      for (const [value, label] of options) {
+        const option = element("option");
+        option.value = value;
+        option.textContent = label;
+        decision.append(option);
+      }
+      decision.value = choice.decision;
+      const destination = element("input");
+      destination.type = "text";
+      destination.autocomplete = "off";
+      destination.placeholder = "destination-secret-ref";
+      destination.value = choice.destinationRef;
+      destination.dataset.migrationSecretRef = choice.sourceRef;
+      secretControls.set(choice.sourceRef, {decision, destination});
+      row.append(
+        text(`${choice.label} · value included=${choice.valueIncluded}`, "row-title"),
+        migrationField("Decision", decision),
+        migrationField("Destination secret reference", destination)
+      );
+      return row;
+    });
+    const authorityControls = new Map();
+    const authorityNodes = flow.choices.authorities.map((choice) => {
+      const row = element("article", "row migration-choice");
+      const decision = element("select");
+      decision.dataset.migrationAuthorityDecision = choice.proposalId;
+      for (const [value, label] of [
+        ["disabled", "Disabled (recommended)"],
+        ["approved", "Approve reviewed destination JSON"]
+      ]) {
+        const option = element("option");
+        option.value = value;
+        option.textContent = label;
+        decision.append(option);
+      }
+      decision.value = choice.decision;
+      const destination = element("textarea");
+      destination.rows = 3;
+      destination.autocomplete = "off";
+      destination.placeholder = '{"reviewed":"destination-specific value"}';
+      destination.value = choice.destinationValue;
+      destination.dataset.migrationAuthorityValue = choice.proposalId;
+      authorityControls.set(choice.proposalId, {decision, destination});
+      row.append(
+        text(`${choice.class} · ${choice.summary}`, "row-title"),
+        migrationField("Decision", decision),
+        migrationField("Destination authority JSON", destination)
+      );
+      return row;
+    });
+    const error = element("p", "form-error");
+    error.setAttribute("role", "alert");
+    const actions = element("div", "dialog-actions");
+    const discard = element("button");
+    discard.type = "button";
+    discard.textContent = "Discard import session";
+    discard.addEventListener("click", () => {
+      clearMigrationFlow();
+      renderAll();
+    });
+    const planButton = element("button");
+    planButton.type = "button";
+    planButton.className = "primary";
+    planButton.dataset.requiresAuthority = "true";
+    planButton.textContent = "Build Manager plan";
+    planButton.addEventListener("click", async () => {
+      for (const choice of flow.choices.environments) {
+        const controls = environmentControls.get(choice.sourceRef);
+        choice.selected = controls.selected.checked;
+        choice.destinationName = controls.name.value;
+        choice.policy = controls.policy.value;
+      }
+      for (const choice of flow.choices.workspaces) {
+        const controls = workspaceControls.get(choice.proposalId);
+        choice.decision = controls.decision.value;
+        choice.destinationPath = controls.destination.value;
+      }
+      for (const choice of flow.choices.secrets) {
+        const controls = secretControls.get(choice.sourceRef);
+        choice.decision = controls.decision.value;
+        choice.destinationRef = controls.destination.value;
+      }
+      for (const choice of flow.choices.authorities) {
+        const controls = authorityControls.get(choice.proposalId);
+        choice.decision = controls.decision.value;
+        choice.destinationValue = controls.destination.value;
+      }
+      let draft;
+      try {
+        draft = root.Migration.buildImportDraft(
+          flow.inspection, flow.bundlePath, flow.choices
+        );
+      } catch (cause) {
+        error.textContent = safeText(cause);
+        return;
+      }
+      planButton.disabled = true;
+      flow.stage = "planning";
+      flow.draft = draft;
+      renderAll();
+      const requestID = ++migrationRequest;
+      try {
+        const request = Object.assign({}, draft, {
+          secretInputHandle: flow.secretInputHandle
+        });
+        const plan = await root.Client.migrationImportPlan(request);
+        if (requestID !== migrationRequest || migrationFlow !== flow) return;
+        if (plan.bundlePath !== draft.bundlePath ||
+            !plan.bundleBinding ||
+            plan.bundleBinding.bundleId !== draft.bundleBinding.bundleId) {
+          throw new Error("Manager returned a plan for a different bundle");
+        }
+        const view = root.Migration.importPlanView(plan);
+        flow.plan = plan;
+        flow.stage = "review";
+        closeConsoleDialog();
+        renderAll();
+        openMigrationPlanReview(view);
+      } catch {
+        if (requestID !== migrationRequest || migrationFlow !== flow) return;
+        flow.stage = "error";
+        flow.error =
+          "Import planning was not accepted. Review names, paths, secrets, authority, conflicts, and compatibility.";
+        closeConsoleDialog();
+        renderAll();
+      }
+    });
+    actions.append(discard, planButton);
+    showConsoleDialog("Choose import destinations", [
+      card(`Authenticated bundle ${inventory.bundleId}`, "sealed", [
+        ["created", inventory.createdAt],
+        ["encoded / logical", `${root.Migration.bytes(inventory.encodedBytes)} / ${root.Migration.bytes(inventory.logicalBytes)}`],
+        ["components", inventory.components],
+        ["safe defaults", "nothing selected; Safe Clone; workspaces and authority disabled; secrets unresolved"],
+        ["conflicts", "rename the destination, or separately delete an old VM before replanning"]
+      ]),
+      group("Select environments and identity", environmentNodes),
+      group("Workspace mappings", workspaceNodes),
+      group("Secret rebinding", secretNodes),
+      group("Destination authority", authorityNodes),
+      error,
+      actions
+    ]);
+  }
+
+  function renderMigration() {
+    const values = root.Migration.operations(state.snapshot);
+    const container = element("div", "migration-console");
+    const toolbar = element("div", "config-toolbar");
+    const status = element("p", "muted");
+    status.textContent = safeText(
+      migrationRefreshError ?
+        `${migrationRefreshError}; last verified migration state is retained.` :
+        "Progress refreshes from the authenticated Manager snapshot every two seconds."
+    );
+    const actions = element("div", "row-actions");
+    const exportButton = element("button");
+    exportButton.type = "button";
+    exportButton.className = "primary";
+    exportButton.dataset.requiresAuthority = "true";
+    exportButton.textContent = "Export this computer";
+    exportButton.disabled = !root.State.canMutate(state) || Boolean(migrationFlow);
+    exportButton.addEventListener("click", openMigrationExport);
+    const importButton = element("button");
+    importButton.type = "button";
+    importButton.dataset.requiresAuthority = "true";
+    importButton.textContent = "Import bundle";
+    importButton.disabled = !root.State.canMutate(state) || Boolean(migrationFlow);
+    importButton.addEventListener("click", openMigrationImport);
+    actions.append(exportButton, importButton);
+    toolbar.append(status, actions);
+    container.append(toolbar);
+
+    if (migrationFlow) {
+      const flowCard = card(
+        `Guided ${migrationFlow.kind}`,
+        migrationFlow.stage,
+        [
+          ["plan", migrationFlow.plan && migrationFlow.plan.planId || "not built"],
+          ["operation", migrationFlow.result && migrationFlow.result.operationId || "not started"],
+          ["error", migrationFlow.error || "none"],
+          ["protected input", migrationFlow.secretInputHandle ? "one-shot handle ready" : "not retained"]
+        ],
+        migrationFlow.stage === "error" ? "stale" : "seeding"
+      );
+      const flowActions = element("div", "row-actions");
+      if (migrationFlow.stage === "review" && migrationFlow.plan) {
+        const review = element("button");
+        review.type = "button";
+        review.textContent = "Open exact plan review";
+        review.addEventListener("click", () => openMigrationPlanReview(
+          migrationFlow.kind === "export" ?
+            root.Migration.exportPlanView(migrationFlow.plan) :
+            root.Migration.importPlanView(migrationFlow.plan)
+        ));
+        flowActions.append(review);
+      }
+      if (migrationFlow.kind === "import" &&
+          migrationFlow.stage === "decisions") {
+        const decisions = element("button");
+        decisions.type = "button";
+        decisions.textContent = "Continue destination decisions";
+        decisions.addEventListener("click", openMigrationImportDecisions);
+        flowActions.append(decisions);
+      }
+      if (!["planning", "applying", "unlocking"].includes(migrationFlow.stage)) {
+        const discard = element("button");
+        discard.type = "button";
+        discard.textContent = "Discard local flow";
+        discard.addEventListener("click", () => {
+          clearMigrationFlow();
+          renderAll();
+        });
+        flowActions.append(discard);
+      }
+      flowCard.append(flowActions);
+      container.append(flowCard);
+    }
+
+    const rows = values.map((operation) => {
+      const view = root.Migration.operationView(operation);
+      const node = migrationProgressCard(view);
+      const inspect = element("button");
+      inspect.type = "button";
+      inspect.textContent = view.recovery.required ?
+        "Inspect and recover" : "Inspect progress";
+      inspect.addEventListener("click", () => openMigrationOperation(operation));
+      node.append(inspect);
+      return node;
+    });
+    const stack = element("div", "stack");
+    if (rows.length) stack.append(...rows.slice(0, DOM_ROW_LIMIT));
+    else stack.append(text(
+      "No migration has been started on this computer. Export or import opens a guided review.",
+      "empty"
+    ));
+    container.append(group("Durable migration operations", [stack]));
+    bodies.migration.replaceChildren(container);
+  }
+
+  function scheduleMigrationPoll() {
+    if (migrationPollTimer !== null) window.clearTimeout(migrationPollTimer);
+    migrationPollTimer = window.setTimeout(() => {
+      migrationPollTimer = null;
+      pollMigrationSnapshot();
+    }, 2000);
+  }
+
+  async function pollMigrationSnapshot() {
+    if (migrationPollLoading || !state || !root.Client.hasCredential()) {
+      scheduleMigrationPoll();
+      return;
+    }
+    migrationPollLoading = true;
+    try {
+      const snapshot = await root.Client.snapshot();
+      if (snapshot.instanceId !== state.instanceId ||
+          snapshot.credentialGeneration !== state.credentialGeneration) {
+        seedLiveConsole({reason: "migration snapshot authority changed"}).catch(() => {});
+        return;
+      }
+      state.snapshot.migrations = root.Migration.mergeOperations(
+        state.snapshot.migrations || [], snapshot.migrations || []
+      );
+      migrationRefreshError = "";
+      renderAll();
+    } catch (error) {
+      if (!(error && error.credentialExpired)) {
+        migrationRefreshError = "Migration progress refresh failed";
+        renderAll();
+      }
+    } finally {
+      migrationPollLoading = false;
+      scheduleMigrationPoll();
+    }
   }
 
   function syncConfigProfile() {
@@ -1531,6 +2670,7 @@
     renderCoverage();
     renderRisks();
     renderOperations();
+    renderMigration();
     renderConfig();
     renderHelp();
     renderFilterStatus();
@@ -1772,6 +2912,7 @@
       renderAll();
       connectEvents();
       loadDetails();
+      scheduleMigrationPoll();
     } catch (error) {
       if (requestID !== seedRequest) return;
       seedLoading = false;
@@ -1905,6 +3046,10 @@
   });
   root.Client.onAuthorityLost((authority) => {
     cancelReconnect(true);
+    if (migrationPollTimer !== null) {
+      window.clearTimeout(migrationPollTimer);
+      migrationPollTimer = null;
+    }
     seedRequest++;
     seedLoading = false;
     if (stream) {

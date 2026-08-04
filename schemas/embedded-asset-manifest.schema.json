@@ -20,8 +20,8 @@
     "license": {"const": "Apache-2.0"},
     "assets": {
       "type": "array",
-      "minItems": 8,
-      "maxItems": 8,
+      "minItems": 9,
+      "maxItems": 9,
       "prefixItems": [
         {"$ref": "#/$defs/index"},
         {"$ref": "#/$defs/style"},
@@ -29,6 +29,7 @@
         {"$ref": "#/$defs/client"},
         {"$ref": "#/$defs/activity"},
         {"$ref": "#/$defs/config"},
+        {"$ref": "#/$defs/migration"},
         {"$ref": "#/$defs/presentation"},
         {"$ref": "#/$defs/app"}
       ],
@@ -96,6 +97,15 @@
         {"$ref": "#/$defs/asset"},
         {"properties": {
           "path": {"const": "config.js"},
+          "mediaType": {"const": "text/javascript; charset=utf-8"}
+        }}
+      ]
+    },
+    "migration": {
+      "allOf": [
+        {"$ref": "#/$defs/asset"},
+        {"properties": {
+          "path": {"const": "migration.js"},
           "mediaType": {"const": "text/javascript; charset=utf-8"}
         }}
       ]

@@ -14,8 +14,8 @@ import (
 const (
 	LogicalWorkspaceRoot     = "/workspace"
 	PhysicalWorkspaceBase    = "/hideout/workspaces"
-	PathIdentityInputSchema  = "hideout.workspace-path-identity-input/v1"
-	PathIdentityReportSchema = "hideout.workspace-path-identity/v1"
+	PathIdentityInputSchema  = "hideout.workspace-path-identity-input/v2"
+	PathIdentityReportSchema = "hideout.workspace-path-identity/v2"
 )
 
 var researchPathTools = []string{"bash", "git", "node", "python", "go", "claude", "codex"}
@@ -26,6 +26,11 @@ type PathIdentityProbeObservation struct {
 	LogicalPWD            string `json:"logicalPWD"`
 	PhysicalCWD           string `json:"physicalCWD"`
 	ProjectKey            string `json:"projectKey"`
+	ProjectKeyMode        string `json:"projectKeyMode"`
+	ProjectStateKey       string `json:"projectStateKey,omitempty"`
+	HistoryState          bool   `json:"historyState,omitempty"`
+	CacheState            bool   `json:"cacheState,omitempty"`
+	SocketState           bool   `json:"socketState,omitempty"`
 	RepresentativeFixture bool   `json:"representativeFixture"`
 	AfterCdDot            string `json:"afterCdDot"`
 	AfterCdLogical        string `json:"afterCdLogical"`
@@ -54,8 +59,8 @@ type PathIdentityProbeReport struct {
 }
 
 func ResearchPhysicalWorkspaceRoot(workspaceID string) (string, error) {
-	if !validResearchWorkspaceID(workspaceID) {
-		return "", errors.New("research workspace id is invalid")
+	if !validWorkspaceID(workspaceID) {
+		return "", errors.New("workspace id is invalid")
 	}
 	return filepath.ToSlash(filepath.Join(PhysicalWorkspaceBase, workspaceID)), nil
 }
@@ -81,12 +86,29 @@ func ValidatePathIdentityProbe(workspaceID string, observations []PathIdentityPr
 		if observation.LogicalPWD != LogicalWorkspaceRoot {
 			return fmt.Errorf("path identity tool %s lost logical /workspace", observation.Tool)
 		}
-		if observation.PhysicalCWD != physicalRoot || observation.ProjectKey != physicalRoot {
+		if observation.PhysicalCWD != physicalRoot {
 			return fmt.Errorf("path identity tool %s did not retain the opaque physical project identity", observation.Tool)
 		}
+		expectedProjectKey, expectedProjectKeyMode := physicalRoot, "physical-cwd"
+		if observation.Tool == "go" {
+			expectedProjectKey = LogicalWorkspaceRoot
+			expectedProjectKeyMode = "logical-pwd-alias"
+		}
+		if observation.ProjectKey != expectedProjectKey || observation.ProjectKeyMode != expectedProjectKeyMode {
+			return fmt.Errorf("path identity tool %s has an unclassified project key", observation.Tool)
+		}
+		if fixtureExpected {
+			if len(observation.ProjectStateKey) != 64 ||
+				strings.Trim(observation.ProjectStateKey, "0123456789abcdef") != "" ||
+				!observation.HistoryState || !observation.CacheState || !observation.SocketState {
+				return fmt.Errorf("path identity tool %s has incomplete representative project state", observation.Tool)
+			}
+		} else if observation.ProjectStateKey != "" || observation.HistoryState || observation.CacheState || observation.SocketState {
+			return fmt.Errorf("path identity tool %s invented representative project state", observation.Tool)
+		}
 		for name, value := range map[string]string{
-			"physical cwd": observation.PhysicalCWD, "project key": observation.ProjectKey,
-			"cd dot": observation.AfterCdDot, "cd logical": observation.AfterCdLogical,
+			"physical cwd": observation.PhysicalCWD,
+			"cd dot":       observation.AfterCdDot, "cd logical": observation.AfterCdLogical,
 			"subprocess cwd": observation.SubprocessCWD, "shell re-entry cwd": observation.ShellReentryCWD,
 		} {
 			if value != physicalRoot {
@@ -170,19 +192,6 @@ func LoadPathIdentityProbeInput(path string) (PathIdentityProbeInput, error) {
 		return PathIdentityProbeInput{}, fmt.Errorf("path identity input trailing data: %w", err)
 	}
 	return input, nil
-}
-
-func validResearchWorkspaceID(value string) bool {
-	if len(value) < 8 || len(value) > 64 || value[0] < 'a' || value[0] > 'z' {
-		return false
-	}
-	for _, character := range value {
-		if (character >= 'a' && character <= 'z') || (character >= '0' && character <= '9') || character == '_' || character == '-' {
-			continue
-		}
-		return false
-	}
-	return value != "." && value != ".."
 }
 
 func containsResearchPathTool(value string) bool {

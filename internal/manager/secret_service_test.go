@@ -1,6 +1,7 @@
 package manager
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -1188,6 +1189,21 @@ func (store *managerSecretStoreFixture) Set(
 	defer request.Value.Clear()
 	store.mu.Lock()
 	defer store.mu.Unlock()
+	if store.operation == request.OperationID && store.base == request.ExpectedGeneration &&
+		store.reference.Ref == request.Ref &&
+		store.reference.Availability == secrets.AvailabilityAvailable {
+		matched := false
+		if err := request.Value.Use(func(raw []byte) error {
+			matched = bytes.Equal(raw, store.value)
+			return nil
+		}); err != nil {
+			return secrets.Reference{}, err
+		}
+		if !matched {
+			return secrets.Reference{}, secrets.ErrSecretOperationMismatch
+		}
+		return store.reference, nil
+	}
 	if request.ExpectedGeneration != store.reference.Generation {
 		return secrets.Reference{}, &secrets.GenerationConflictError{
 			Ref: request.Ref, Expected: request.ExpectedGeneration,
@@ -1228,6 +1244,11 @@ func (store *managerSecretStoreFixture) Delete(
 ) (secrets.Reference, error) {
 	store.mu.Lock()
 	defer store.mu.Unlock()
+	if store.operation == request.OperationID && store.base == request.ExpectedGeneration &&
+		store.reference.Ref == request.Ref &&
+		store.reference.Availability == secrets.AvailabilityMissing {
+		return store.reference, nil
+	}
 	if request.ExpectedGeneration != store.reference.Generation {
 		return secrets.Reference{}, &secrets.GenerationConflictError{
 			Ref: request.Ref, Expected: request.ExpectedGeneration,

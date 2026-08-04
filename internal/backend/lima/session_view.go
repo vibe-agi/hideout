@@ -184,7 +184,11 @@ func BuildSessionViewCommand(spec SessionViewSpec) ([]string, error) {
 	if spec.SessionSupervisor {
 		target = []string{"env", "-i"}
 	}
-	target = append(target, spec.Env...)
+	targetEnv := spec.Env
+	if portalWorkspace {
+		targetEnv = sessionViewTargetEnv(spec.Env, spec.GuestWork)
+	}
+	target = append(target, targetEnv...)
 	target = append(target, spec.Command...)
 	if portalWorkspace {
 		target = append([]string{
@@ -272,8 +276,8 @@ func writePortalWorkspaceRoot(script *strings.Builder, spec SessionViewSpec) {
 	fmt.Fprintf(script, "workspace_root=%s\n", shellQuote(guestWorkspaceRootFS))
 	script.WriteString("mkdir -p \"$workspace_root\"\n")
 	script.WriteString("mount -t tmpfs -o mode=0755,size=16m hideout-workspace-rootfs \"$workspace_root\"\n")
-	script.WriteString("mkdir -p \"$workspace_root\"/dev \"$workspace_root\"/etc \"$workspace_root\"/proc \"$workspace_root\"/sys \"$workspace_root\"/usr \"$workspace_root\"/var \"$workspace_root\"/run \"$workspace_root\"/opt \"$workspace_root\"/tmp \"$workspace_root\"/workspace\n")
-	script.WriteString("mkdir -p \"$workspace_root\"/hideout/profile \"$workspace_root\"/hideout/session \"$workspace_root\"/hideout/hostfs \"$workspace_root\"/hideout/runtime\n")
+	script.WriteString("mkdir -p \"$workspace_root\"/dev \"$workspace_root\"/etc \"$workspace_root\"/proc \"$workspace_root\"/sys \"$workspace_root\"/usr \"$workspace_root\"/var \"$workspace_root\"/run \"$workspace_root\"/opt \"$workspace_root\"/tmp\n")
+	script.WriteString("mkdir -p \"$workspace_root\"/hideout/profile \"$workspace_root\"/hideout/session \"$workspace_root\"/hideout/hostfs \"$workspace_root\"/hideout/runtime \"$workspace_root\"/hideout/workspaces\n")
 	script.WriteString("for workspace_source in /dev /etc /proc /sys /usr /var /run /opt; do\n")
 	script.WriteString("  [ ! -e \"$workspace_source\" ] || { mount --rbind \"$workspace_source\" \"$workspace_root$workspace_source\"; mount --make-rslave \"$workspace_root$workspace_source\"; }\n")
 	script.WriteString("done\n")
@@ -282,8 +286,16 @@ func writePortalWorkspaceRoot(script *strings.Builder, spec SessionViewSpec) {
 	script.WriteString("mount --rbind /hideout/session \"$workspace_root/hideout/session\"\n")
 	script.WriteString("mount --make-rslave \"$workspace_root/hideout/session\"\n")
 	script.WriteString("[ ! -d /hideout/hostfs ] || { mount --rbind /hideout/hostfs \"$workspace_root/hideout/hostfs\"; mount --make-rslave \"$workspace_root/hideout/hostfs\"; }\n")
-	fmt.Fprintf(script, "mount --rbind %s \"$workspace_root/workspace\"\n", shellQuote(physical))
-	script.WriteString("mount --make-rslave \"$workspace_root/workspace\"\n")
+	// Keep /workspace as the operator-facing entry point while making the kernel
+	// cwd project-unique. Path-keyed tools (including Claude Code and Codex) then
+	// see only the opaque workspace identity, never the host path, and two roots
+	// attached to the same persistent profile cannot share project state.
+	fmt.Fprintf(script, "workspace_physical=\"$workspace_root\"%s\n", shellQuote(physical))
+	script.WriteString("mkdir -p \"$workspace_physical\"\n")
+	fmt.Fprintf(script, "mount --rbind %s \"$workspace_physical\"\n", shellQuote(physical))
+	script.WriteString("mount --make-rslave \"$workspace_physical\"\n")
+	script.WriteString("chmod 0711 \"$workspace_root/hideout/workspaces\"\n")
+	fmt.Fprintf(script, "ln -s %s \"$workspace_root/workspace\"\n", shellQuote(physical))
 	script.WriteString("chmod 1777 \"$workspace_root/tmp\"\n")
 	script.WriteString("chmod 000 \"$workspace_root/hideout/runtime\"\n")
 	script.WriteString("ln -s usr/bin \"$workspace_root/bin\"\n")
@@ -401,6 +413,18 @@ func sessionViewSetupEnv(env []string) []string {
 		out = append(out, values[name])
 	}
 	return out
+}
+
+func sessionViewTargetEnv(env []string, logicalWorkdir string) []string {
+	out := make([]string, 0, len(env)+1)
+	for _, assignment := range env {
+		name, _, ok := strings.Cut(assignment, "=")
+		if ok && name == "PWD" {
+			continue
+		}
+		out = append(out, assignment)
+	}
+	return append(out, "PWD="+logicalWorkdir)
 }
 
 func SessionViewPrimitiveProbeCommand() []string {

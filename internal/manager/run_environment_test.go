@@ -298,6 +298,37 @@ func TestBackendAndIsolationStructureRemainMachineIdentity(t *testing.T) {
 	}
 }
 
+func TestRunEnvironmentSpecForDedicatedPortalKeepsMachineButNotHostWorkspace(t *testing.T) {
+	p := runtimeConfigurationTestProfile("imported-profile")
+	configuration, err := RuntimeConfigurationForProfile(p, "lima", environment.ModeDedicatedPortal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	record := environment.Record{
+		Version: environment.RecordVersion, ID: "env_imported", Name: "imported-machine",
+		ImageRef: p.BaseImageOrBuiltin(), Profile: p.Name, Backend: "lima",
+		Mode: environment.ModeDedicatedPortal, MachineIdentityID: configuration.Layers.MachineID,
+		BootConfigurationID: configuration.Layers.BootID,
+	}
+	spec, err := runEnvironmentSpecForRecord(
+		record, p, "lima", filepath.Join(t.TempDir(), "selected-on-this-host"), "/workspace",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if spec.Mode != environment.ModeDedicatedPortal || spec.Name != record.Name || spec.AutoNamed ||
+		spec.DedicatedWorkspace != "" || spec.DedicatedGuestRoot != "" ||
+		spec.BoundWorkspace != "" || spec.BoundGuestRoot != "" || spec.SharedSlot != "" {
+		t.Fatalf("dedicated Portal spec gained static workspace authority: %+v", spec)
+	}
+	if spec.MachineIdentityID != record.MachineIdentityID || spec.BootConfigurationID != record.BootConfigurationID {
+		t.Fatalf("dedicated Portal configuration drifted: %+v", spec)
+	}
+	if err := ValidateEnvironmentRecord(record, spec); err != nil {
+		t.Fatalf("dedicated Portal record validation: %v", err)
+	}
+}
+
 func runtimeConfigurationTestProfile(name string) profile.Profile {
 	p := profile.Default(name)
 	p.Metadata = map[string]string{

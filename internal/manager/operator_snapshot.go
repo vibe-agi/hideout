@@ -23,6 +23,7 @@ const (
 	DefaultOperatorActivityLimit  = 100
 	MaxOperatorActivityLimit      = 500
 	DefaultOperatorOperationLimit = 100
+	DefaultOperatorMigrationLimit = 100
 
 	OperatorHealthSeeding           = "seeding"
 	OperatorHealthLive              = "live"
@@ -72,6 +73,7 @@ type OperatorSnapshot struct {
 	ActivityStoreRetention *OperatorActivityStoreRetentionProjection `json:"activityStoreRetention,omitempty"`
 	Risks                  []RiskFinding                             `json:"risks"`
 	Operations             []Operation                               `json:"operations"`
+	Migrations             []MigrationOperationProjection            `json:"migrations"`
 	Capabilities           []OperatorCapabilityProjection            `json:"capabilities"`
 	NextActions            []string                                  `json:"nextActions"`
 }
@@ -359,6 +361,21 @@ func (provider OperatorOperationProviderFunc) List(limit int) ([]Operation, erro
 	return provider(limit)
 }
 
+type OperatorMigrationProvider interface {
+	ListMigrations(int) ([]MigrationOperationProjection, error)
+}
+
+type OperatorMigrationProviderFunc func(int) ([]MigrationOperationProjection, error)
+
+func (provider OperatorMigrationProviderFunc) ListMigrations(
+	limit int,
+) ([]MigrationOperationProjection, error) {
+	if provider == nil {
+		return nil, errors.New("migration history provider is unavailable")
+	}
+	return provider(limit)
+}
+
 // OperatorSnapshotService is the single Manager-domain seed builder shared by
 // the CLI, TUI, WebUI, and authenticated API. Optional deep-observation
 // providers degrade to explicit capabilities; they never manufacture empty
@@ -371,6 +388,7 @@ type OperatorSnapshotService struct {
 	ProfileProjections OperatorProfileProjectionProvider
 	NetworkRoutes      OperatorNetworkRouteObserver
 	OperationHistory   OperatorOperationProvider
+	MigrationHistory   OperatorMigrationProvider
 	// MutationCapabilities is appended before canonical sorting. Nil
 	// advertises the Manager profile-transaction surface; daemon hosts may add
 	// secret lifecycle support. A non-nil empty slice advertises no mutations.
@@ -418,6 +436,7 @@ func (service OperatorSnapshotService) Build(
 		query,
 	)
 	operations, operationCapability := service.operations(overview, query)
+	migrations, migrationCapability := service.migrations()
 	for index := range profiles {
 		profiles[index].Transition = profileTransitionFromOperations(
 			profiles[index].Profile,
@@ -455,6 +474,19 @@ func (service OperatorSnapshotService) Build(
 	if operationCapability != nil {
 		capabilities = append(capabilities, *operationCapability)
 	}
+	if migrationCapability != nil {
+		if connection.StreamHealth.State == OperatorHealthLive ||
+			connection.StreamHealth.State == OperatorHealthIdleLive {
+			migrationCapability.Mutable =
+				migrationCapability.State == OperatorCapabilityAvailable
+		} else if migrationCapability.State == OperatorCapabilityAvailable {
+			migrationCapability.State = OperatorCapabilityPartial
+			migrationCapability.Reason =
+				"migration history is readable but changes require the authenticated daemon"
+			migrationCapability.ActionRefs = []string{"snapshot.refresh"}
+		}
+		capabilities = append(capabilities, *migrationCapability)
+	}
 	capabilities = normalizeOperatorCapabilities(capabilities)
 
 	snapshot := OperatorSnapshot{
@@ -476,6 +508,7 @@ func (service OperatorSnapshotService) Build(
 		),
 		Risks:        nonNilSlice(observation.Risks),
 		Operations:   nonNilSlice(operations),
+		Migrations:   nonNilSlice(migrations),
 		Capabilities: nonNilSlice(capabilities),
 	}
 	snapshot.Activity = scopeOperatorActivity(snapshot.Activity, overview, query)
@@ -841,6 +874,70 @@ func (service OperatorSnapshotService) operations(
 	return operations, nil
 }
 
+func (service OperatorSnapshotService) migrations() (
+	[]MigrationOperationProjection,
+	*OperatorCapabilityProjection,
+) {
+	var (
+		projections []MigrationOperationProjection
+		err         error
+	)
+	if service.MigrationHistory != nil {
+		projections, err = service.MigrationHistory.ListMigrations(
+			DefaultOperatorMigrationLimit,
+		)
+	} else {
+		store := MigrationStore{Root: service.Core.Store.Root, Now: service.Now}
+		operations, listErr := store.List(DefaultOperatorMigrationLimit)
+		if listErr != nil {
+			err = listErr
+		} else {
+			projections = make(
+				[]MigrationOperationProjection,
+				0,
+				len(operations),
+			)
+			now := service.now()
+			for _, operation := range operations {
+				projection, projectErr := ProjectStoredMigrationOperation(
+					store,
+					operation,
+					now,
+				)
+				if projectErr != nil {
+					err = projectErr
+					break
+				}
+				projections = append(projections, projection)
+			}
+		}
+	}
+	if err != nil {
+		return nil, &OperatorCapabilityProjection{
+			ID: "migration.manage", State: OperatorCapabilityUnavailable,
+			Provider: "manager", Reason: "durable migration history is unavailable",
+			ActionRefs: []string{"doctor.migration"},
+		}
+	}
+	if len(projections) > DefaultOperatorMigrationLimit {
+		projections = projections[:DefaultOperatorMigrationLimit]
+	}
+	for _, projection := range projections {
+		if projection.Validate() != nil {
+			return nil, &OperatorCapabilityProjection{
+				ID: "migration.manage", State: OperatorCapabilityUnavailable,
+				Provider: "manager", Reason: "migration history failed validation",
+				ActionRefs: []string{"doctor.migration"},
+			}
+		}
+	}
+	return projections, &OperatorCapabilityProjection{
+		ID: "migration.manage", State: OperatorCapabilityAvailable,
+		Provider: "manager", Mutable: true,
+		ActionRefs: []string{"migration.inspect", "migration.export"},
+	}
+}
+
 func (service OperatorSnapshotService) observation(
 	ctx context.Context,
 	query OperatorSnapshotQuery,
@@ -871,7 +968,9 @@ func (snapshot OperatorSnapshot) Validate() error {
 		len(snapshot.Activity) > MaxOperatorActivityLimit || len(snapshot.ActivityCursor) > 4096 ||
 		len(snapshot.Coverage) > 1024 || len(snapshot.ActivityRetention) > 256 ||
 		len(snapshot.Risks) > 500 ||
-		len(snapshot.Operations) > 500 || len(snapshot.Capabilities) > 256 ||
+		len(snapshot.Operations) > 500 ||
+		len(snapshot.Migrations) > DefaultOperatorMigrationLimit ||
+		len(snapshot.Capabilities) > 256 ||
 		len(snapshot.NextActions) > 64 {
 		return errors.New("operator snapshot is invalid")
 	}
@@ -920,6 +1019,11 @@ func (snapshot OperatorSnapshot) Validate() error {
 	}
 	for _, operation := range snapshot.Operations {
 		if err := operation.Validate(); err != nil {
+			return err
+		}
+	}
+	for _, migration := range snapshot.Migrations {
+		if err := migration.Validate(); err != nil {
 			return err
 		}
 	}
@@ -1020,7 +1124,7 @@ func (projection OperatorEnvironmentProjection) Validate() error {
 	}
 	switch projection.Mode {
 	case "", environment.ModeShared, environment.ModeDedicated,
-		environment.ModeWorkspaceBound:
+		environment.ModeDedicatedPortal, environment.ModeWorkspaceBound:
 	default:
 		return errors.New("operator environment mode is invalid")
 	}
@@ -1034,7 +1138,7 @@ func (projection OperatorEnvironmentProjection) Validate() error {
 		return errors.New("operator environment workspace provider state is invalid")
 	}
 	if projection.ActiveWorkspaceViews > 0 &&
-		(projection.Mode != environment.ModeShared ||
+		(!environment.UsesWorkspacePortal(projection.Mode) ||
 			projection.WorkspaceProviderState == "") {
 		return errors.New("operator environment workspace view counts are inconsistent")
 	}
@@ -1530,6 +1634,21 @@ func sortOperatorSnapshot(snapshot *OperatorSnapshot) {
 		}
 		return snapshot.Risks[left].ID < snapshot.Risks[right].ID
 	})
+	sort.Slice(snapshot.Migrations, func(left, right int) bool {
+		leftAt := snapshot.Migrations[left].Progress.CheckpointAt
+		if leftAt.IsZero() {
+			leftAt = snapshot.Migrations[left].Progress.PhaseStartedAt
+		}
+		rightAt := snapshot.Migrations[right].Progress.CheckpointAt
+		if rightAt.IsZero() {
+			rightAt = snapshot.Migrations[right].Progress.PhaseStartedAt
+		}
+		if leftAt.Equal(rightAt) {
+			return snapshot.Migrations[left].OperationID <
+				snapshot.Migrations[right].OperationID
+		}
+		return leftAt.After(rightAt)
+	})
 }
 
 func operatorRiskRank(severity string) int {
@@ -1559,10 +1678,24 @@ func operatorNextActions(snapshot OperatorSnapshot) []string {
 	} else {
 		actions = append(actions, "activity.inspect")
 	}
+	for _, migration := range snapshot.Migrations {
+		if migration.Recovery.Required {
+			actions = append(actions, "migration.recover")
+			continue
+		}
+		if !migrationPhaseTerminal(migration.State) {
+			actions = append(actions, "migration.status")
+		}
+	}
 	if len(snapshot.Risks) > 0 && snapshot.Risks[0].NextAction != "" {
 		actions = append(actions, snapshot.Risks[0].NextAction)
 	}
 	for _, capability := range snapshot.Capabilities {
+		if capability.ID == "migration.manage" &&
+			capability.State == OperatorCapabilityAvailable &&
+			len(snapshot.Migrations) == 0 {
+			actions = append(actions, "migration.export")
+		}
 		if capability.State == OperatorCapabilityAvailable {
 			continue
 		}

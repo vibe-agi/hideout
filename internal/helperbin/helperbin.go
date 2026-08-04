@@ -964,6 +964,9 @@ func sourceRoot(dir string) bool {
 	if _, err := os.Stat(filepath.Join(dir, "cmd", LinuxObserverCommand)); err != nil {
 		return false
 	}
+	if _, err := os.Stat(filepath.Join(dir, "cmd", LinuxMigrationAdoptCommand)); err != nil {
+		return false
+	}
 	return true
 }
 

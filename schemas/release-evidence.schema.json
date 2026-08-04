@@ -215,26 +215,26 @@
           "$ref": "#/$defs/artifactRef"
         },
         "configurationCount": {
-          "const": 12
+          "const": 16
         },
         "moduleCount": {
-          "const": 10
+          "const": 12
         },
         "invariantCount": {
-          "const": 76
+          "const": 122
         },
         "propertyCount": {
-          "const": 19
+          "const": 28
         },
         "goTestCount": {
-          "const": 12
+          "const": 27
         }
       }
     },
     "gates": {
       "type": "array",
-      "minItems": 11,
-      "maxItems": 11,
+      "minItems": 12,
+      "maxItems": 12,
       "items": {
         "$ref": "#/$defs/gate"
       }
@@ -425,6 +425,7 @@
             "ui",
             "performance",
             "lima",
+            "migration-lima",
             "package-build",
             "package-lifecycle"
           ]

@@ -1764,6 +1764,8 @@ func writeTestPackageRoot(t *testing.T) string {
 		"bin/hideout-hostfsd-linux-" + runtime.GOARCH:                                 {kind: "linux-helper", mode: 0o755, data: "#!/bin/sh\n"},
 		"bin/" + helperbin.LinuxSessionSupervisorCommand + "-linux-" + runtime.GOARCH: {kind: "linux-helper", mode: 0o755, data: "#!/bin/sh\n"},
 		"bin/" + helperbin.LinuxObserverCommand + "-linux-" + runtime.GOARCH:          {kind: "linux-helper", mode: 0o755, data: "#!/bin/sh\n"},
+		"bin/" + helperbin.LinuxMigrationAdoptCommand + "-linux-" + runtime.GOARCH:    {kind: "linux-helper", mode: 0o755, data: "#!/bin/sh\n"},
+		"bin/" + helperbin.HostMigrationVZAdoptCommand + "-darwin-arm64":              {kind: "binary", mode: 0o755, data: "#!/bin/sh\n"},
 		"bin/" + helperbin.LinuxWorkspacePortalCommand + "-linux-" + runtime.GOARCH:   {kind: "linux-helper", mode: 0o755, data: "#!/bin/sh\n"},
 		"bin/" + helperbin.LinuxTun2SocksCommand + "-linux-" + runtime.GOARCH:         {kind: "linux-helper", mode: 0o755, data: "#!/bin/sh\n"},
 		"install.sh":                           {kind: "installer", mode: 0o755, data: "#!/bin/sh\n"},
@@ -1774,6 +1776,7 @@ func writeTestPackageRoot(t *testing.T) string {
 		"THIRD_PARTY_NOTICES.md":               {kind: "doc", mode: 0o644, data: "notices\n"},
 		"SECURITY.md":                          {kind: "doc", mode: 0o644, data: "security\n"},
 		"third_party/tun2socks/LICENSE":        {kind: "doc", mode: 0o644, data: "MIT license\n"},
+		"third_party/vz/LICENSE":               {kind: "doc", mode: 0o644, data: "Apache-2.0 license\n"},
 		"runtime/catalog.json":                 {kind: "runtime-catalog", mode: 0o644, data: "{}\n"},
 		"schemas/package-manifest.schema.json": {kind: "schema", mode: 0o644, data: "{}\n"},
 		"schemas/release-dogfood.schema.json":  {kind: "schema", mode: 0o644, data: "{}\n"},
@@ -1852,6 +1855,50 @@ func writeTestPackageRoot(t *testing.T) string {
 		mode: 0o644,
 		data: string(observerManifest) + "\n",
 	}
+	migrationBinaryRel := "bin/" + helperbin.LinuxMigrationAdoptCommand + "-linux-" + runtime.GOARCH
+	migrationSum := sha256.Sum256([]byte(files[migrationBinaryRel].data))
+	migrationManifest, err := json.MarshalIndent(helperbin.Manifest{
+		Version: helperbin.ManifestVersion, Command: helperbin.LinuxMigrationAdoptCommand,
+		TargetOS: "linux", TargetArch: runtime.GOARCH,
+		Artifact: filepath.Base(migrationBinaryRel),
+		SHA256:   hex.EncodeToString(migrationSum[:]),
+		Builder:  "go build -trimpath", BuiltAt: "2026-01-01T00:00:00Z",
+		License:      helperbin.LinuxMigrationAdoptLicense,
+		BuildMode:    helperbin.LinuxMigrationAdoptBuildMode,
+		PackageOwned: true,
+	}, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	files[migrationBinaryRel+".manifest.json"] = struct {
+		kind string
+		mode os.FileMode
+		data string
+	}{
+		kind: "helper-manifest",
+		mode: 0o644,
+		data: string(migrationManifest) + "\n",
+	}
+	hostMigrationBinaryRel := "bin/" + helperbin.HostMigrationVZAdoptCommand + "-darwin-arm64"
+	hostMigrationSum := sha256.Sum256([]byte(files[hostMigrationBinaryRel].data))
+	hostMigrationManifest, err := json.MarshalIndent(helperbin.Manifest{
+		Version: helperbin.ManifestVersion, Command: helperbin.HostMigrationVZAdoptCommand,
+		TargetOS: "darwin", TargetArch: "arm64", Artifact: filepath.Base(hostMigrationBinaryRel),
+		SHA256: hex.EncodeToString(hostMigrationSum[:]), Builder: "go build -mod=readonly -trimpath",
+		BuiltAt:         "2026-01-01T00:00:00Z",
+		UpstreamModule:  helperbin.HostMigrationVZAdoptUpstreamModule,
+		UpstreamVersion: helperbin.HostMigrationVZAdoptUpstreamVersion,
+		License:         helperbin.HostMigrationVZAdoptLicense,
+		BuildMode:       helperbin.HostMigrationVZAdoptBuildMode, PackageOwned: true,
+	}, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	files[hostMigrationBinaryRel+".manifest.json"] = struct {
+		kind string
+		mode os.FileMode
+		data string
+	}{kind: "helper-manifest", mode: 0o644, data: string(hostMigrationManifest) + "\n"}
 	assets := packagekit.BrowserConsoleAssets()
 	for index := range assets {
 		assets[index].SHA256 = packagekit.BytesSHA256(
@@ -1898,6 +1945,8 @@ func writeTestPackageRoot(t *testing.T) string {
 		"bin/" + helperbin.LinuxObserverCommand + "-linux-" + runtime.GOARCH,
 		"bin/" + helperbin.LinuxWorkspacePortalCommand + "-linux-" + runtime.GOARCH,
 		"bin/" + helperbin.LinuxTun2SocksCommand + "-linux-" + runtime.GOARCH,
+		"bin/" + helperbin.LinuxMigrationAdoptCommand + "-linux-" + runtime.GOARCH,
+		hostMigrationBinaryRel,
 	}
 	manifest.Layout.Entrypoints = []string{"install.sh", "README.md", "README.zh-CN.md"}
 	manifest.Layout.Directories = []string{"schemas", "docs", "packaging", "runtime", "third_party"}
@@ -6137,7 +6186,7 @@ func TestTUIRendersTerminalDashboardWithoutStartingWebUI(t *testing.T) {
 		"Activity\nno activity yet",
 		"Details\nsession ses_20260704T010212Z_12 | profile default",
 		"coverage unavailable (no activity observed)",
-		"[1] Overview [2] Activity [3] Config [4] Operations [5] Help",
+		"[1] Overview [2] Activity [3] Config [4] Operations [5] Migration [6] Help",
 	} {
 		if !strings.Contains(out.String(), want) {
 			t.Fatalf("tui output missing %q:\n%s", want, out.String())

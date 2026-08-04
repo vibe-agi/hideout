@@ -923,3 +923,71 @@ Required non-claims:
   shared-kernel, guest-root, or backend isolation.
 - `--ephemeral` identity cleanup remains session-local and orthogonal to
   `--rm` environment disposal.
+
+## Portable Migration Boundary (046)
+
+A migration bundle is high-sensitivity recovery material, not shareable
+evidence. Full mode intentionally encrypts opaque VM disks and therefore may
+carry application credentials, private source, device identifiers, or any other
+byte written inside the guest. Configuration mode is narrower, but an explicitly
+selected managed-secret value is still secret payload. Neither mode includes
+ambient host workspaces, activity/audit history, caches, live process/RAM state,
+or installed host applications.
+
+The bundle reader treats every byte as attacker-controlled. It accepts only the
+canonical v1 prologue, bounded record sizes/counts, authenticated ordering,
+canonical manifest/profile encodings, exact decompression limits, verified
+checkpoints, and one sealed footer. Wrong keys, unknown versions/fields, nonce or
+record substitution, truncation, duplication, reordering, expansion abuse,
+traversal, special files, and trailing data fail closed before destination
+authority. Unpublished development formats have no compatibility reader.
+
+Export authority is bounded to selected environment declarations and the exact
+stopped persistent-disk graph. Manager revalidates the plan and provider
+capability before effects; full export snapshots only an exact stopped
+incarnation and never boots or writes the source. A retained partial is
+operation-owned, authenticated before resume, and never importable as a sealed
+bundle.
+
+Import first authenticates and inspects without creating a runnable environment.
+Names, destination paths, secret mappings, replacement, guest identity, and
+authority approvals are digest-bound plan decisions. Host paths are resolved
+under destination policy rather than copied by string substitution. HostFS,
+workspace, endpoint, network, script, pack, and host-app authority remains a
+disabled proposal unless the destination explicitly approves its typed effect.
+Name replacement is a separate destructive review; refusal is the default.
+
+Staged backend objects and provisional secrets remain operation-owned and
+unpublished until capacity, disk digests, adoption identity, configuration, and
+provider observations verify. The activation decision is durable and one-way;
+restart reconciliation finishes or rolls back proved effects without exposing a
+half-imported environment. The source bundle is never an import cleanup target.
+
+Every destination creates fresh Hideout environment/control, backend, operation,
+session, broker, workspace, and ephemeral credential identity. Safe Clone also
+regenerates the guest machine ID and SSH host keys independently on each import.
+Exact Guest Restore preserves those guest identities only after the exact
+collision acknowledgement; it does not preserve Hideout/backend identity and
+does not prove that a disconnected source was retired.
+
+Passphrases enter through a hidden terminal prompt or a bounded one-shot stdin
+handle, never argv, environment, plan, status, audit, or retained evidence.
+Selected secret values are encrypted as named records and written directly to a
+fresh destination secret-provider reference. Public inventory exposes reference
+and availability metadata, never the value. Credential-bearing URL userinfo and
+known secret assignments are redacted from projected text; arbitrary filesystem
+paths are not guessed to be secret.
+
+Required non-claims:
+
+- encryption does not defend against malware or another process with the same
+  local macOS account while the operator unlocks the bundle;
+- Hideout does not assess passphrase strength, prevent reuse, provide remote key
+  escrow, or securely erase every filesystem/backup copy;
+- Hideout does not provide or authenticate the operator's transfer transport;
+- full mode cannot selectively scrub secrets already stored inside a guest disk;
+- Exact Guest Restore cannot guarantee safe simultaneous source/destination use;
+- one-host independent-store Lima evidence is not yet broad physical
+  cross-computer proof; and
+- until the deferred quiet-host gate passes, migration has no CPU, I/O,
+  peak-memory, throughput, sparse-efficiency, or duration claim.

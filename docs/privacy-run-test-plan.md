@@ -1667,14 +1667,73 @@ scripts/test-shared-workspace-lima-e2e.sh \
   --out .hideout-release-evidence/035-shared-workspace
 ```
 
+Correctness and path identity are a separate retained stage and do not require
+a quiet host or any performance sample:
+
+```sh
+scripts/test-shared-workspace-lima-e2e.sh \
+  --require-real \
+  --non-performance \
+  --out .hideout-release-evidence/035-shared-workspace-path
+```
+
+This stage uses the installed candidate and packaged Portal helper. Two
+concurrent real sessions must prove that logical `/workspace` and the exact
+production-shaped physical attachment are the same device/inode; exercise
+bidirectional create/read/write/rename/chmod/fsync/delete through both aliases;
+retain stable same-root and distinct different-root representative agent state;
+deny a sibling physical root; reject shared preserve mode and external Git
+metadata before target start; keep Git safe-directory inputs bounded; and show
+logical file-path projection without leaking the physical root. It also records
+the honest partial-coverage boundaries: relative workspace paths from
+path-oriented file hooks are explicitly `aliased`, unavailable process cwd is
+tagged `cwd-unavailable`, and physical or sibling argv paths that exceed the
+kernel capture width fail closed to the
+fixed unbound placeholder with `argv-truncated`, or are omitted with explicit
+`argv-unavailable`. Its public summary contains booleans, tool classes, and
+fixed limitation identifiers, not the physical root. A retained
+divergent-inode negative fixture must fail for that exact expected check; an
+incomplete or ambiguously failing fixture is rejected. Passing this stage can
+satisfy only the registered 035
+behavior proof; it neither creates nor substitutes for the performance proof.
+The full wrapper writes and validates this behavior-only manifest before it
+starts performance work, so a later measurement or harness failure leaves the
+correctness checkpoint intact and the exact package archive can be reused.
+
+Resume only the independent performance stage with the same output directory:
+
+```sh
+scripts/test-shared-workspace-lima-e2e.sh \
+  --require-real \
+  --performance-only \
+  --samples 30 \
+  --out .hideout-release-evidence/035-shared-workspace-path
+```
+
+Resume first validates the retained manifest schema, every behavior artifact
+digest, source commit, and exact package identity. It may create a fresh
+isolated gate environment, so the environment ID can differ while the immutable
+runtime artifact binding must remain equal. A failed performance attempt is
+moved under `reports/failed-performance-*` and cannot overwrite the behavior
+checkpoint.
+
+The tool matrix records behavior instead of assuming every tool treats cwd the
+same way. Bash `pwd -P`, Git, Node and Python use the opaque physical cwd in the
+current session view. Go may trust the same-inode logical `$PWD`, so a logical
+`go env GOMOD` is classified as `logical-pwd-alias` and carries no fabricated
+distinct state claim. Claude and Codex are representative project-state
+fixtures unless an explicitly version-bound authenticated dogfood run is also
+retained.
+
 The retained behavior artifact must prove one automatic environment, one Lima
 instance, and one observed boot serving simultaneous disjoint projects through
 the packaged Workspace Portal. Each target sees only its own marker at logical
 `/workspace`; same/nested/disjoint roots match their declared relation; host and
-guest mutations, atomic save, watchers, lock/handle ownership, sibling detach,
-network/HostFS/terminal continuity, and attachment-bound `open .`/`code .`
-mapping all use the correct project. Shared Lima YAML and pre-attach mount state
-contain no project, parent, home, dummy mount, or hidden fallback transport.
+guest marker mutations, same-root lock ownership, sibling detach, lifecycle
+pins, preview-bridge continuity, and post-restart authority all use the correct
+project. Watcher health and performance distributions are not asserted by the
+behavior-only checkpoint. Shared Lima YAML and pre-attach mount state contain
+no project, parent, home, dummy mount, or hidden fallback transport.
 
 The same topology must prove provider/view lifecycle registration, a real
 bridge pin, exact 036 grace/stop, grace cancellation by a new project, daemon
@@ -2075,8 +2134,8 @@ Every authority, privacy, attribution, coverage, cleanup, help, UI, and
 recovery claim in `docs/release/045-claim-matrix.md` needs both a positive
 judge and a retained negative fixture that makes that judge fail.
 
-The formal lane reads `formal/inventory.json` and must run exactly 12
-configurations across 10 modules, all 76 inventoried safety invariants, all 19
+The formal lane reads `formal/inventory.json` and must run exactly 16
+configurations across 12 modules, all 122 inventoried safety invariants, all 28
 liveness properties, and all 12 named Go production-refinement/crash tests.
 The independent verifier rejects a missing result, counterexample, incomplete
 pass set, changed source/log digest, or stale inventory.
@@ -2223,3 +2282,85 @@ main-tree release candidate. The T163–T165 judges and negative preflights are
 implemented; their exact package-bound and installed-machine receipts plus
 the T171 final clean recollection remain mandatory before this gate may be
 promoted.
+
+## Gate 046: Portable Migration
+
+The source-bound non-performance gate is `scripts/gates/migration.sh`. Its
+checked-in `scripts/gates/migration-tests.txt` inventory is sorted, unique, and
+fail-on-drift: the gate discovers every top-level test containing `Migration`,
+`Migrate`, or `ConfigOnly` in the 13 declared packages and requires the exact
+191-test set to pass. The separate sorted
+`scripts/gates/migration-hostile-tests.txt` matrix requires exactly nine
+categories—wrong key, truncation, duplication, reordering, sparse abuse,
+traversal, special files, expansion, and trailing content—and records their
+exact test events. The sorted `scripts/gates/migration-crash-cuts.txt` inventory
+is independently fixed at 13 entries: source/import claims, provider snapshot,
+bundle header, payload checkpoint, manifest, sealed footer before publish,
+import disk checkpoint, provisional secret, adoption, verification, activation
+decision, and Manager visibility. Each selector must exist and its exact
+top-level or subtest event must pass; count-only or broad-package success is not
+accepted. The gate also runs six migration fuzz targets with checked-in hostile
+seeds, schema checks, all four migration TLC configurations, and their seven
+inventoried Go refinement traces. Release-candidate local evidence includes this
+as a separate required `migration` lane; a broad unit run cannot silently stand
+in for the explicit inventories.
+
+The full-state candidate gate is:
+
+```sh
+scripts/gates/migration-lima.sh \
+  --candidate-result .artifacts/045/package/result.json
+```
+
+It rejects dirty, unaccepted, rebuilt, or digest-mismatched candidates; installs
+the exact archive into a private prefix; and uses one isolated Lima home plus
+independent source/destination Manager stores. The source has a root-disk fixture,
+an attached-disk fixture, a host-workspace exclusion sentinel, recorded guest
+machine/SSH identity, and pre-export root/attached/record hashes. The gate then:
+
+- exports one encrypted owner-only sealed bundle and retains its terminal
+  receipt;
+- proves a wrong passphrase creates no destination environment;
+- authenticates an inventory containing exactly one environment and root plus
+  attached disks, with host workspace content excluded;
+- imports the same byte-identical bundle into three Safe Clone destinations and
+  one separately acknowledged Exact Guest Restore destination;
+- kills the exact third-destination daemon during durable materialization,
+  proves protected passphrase re-unlock and checkpoint resume, kills its fresh
+  daemon again during adoption, and proves startup recovery completes without
+  another bundle secret;
+- runs all four destinations and verifies both persistent fixtures;
+- proves all control and backend identities are fresh and pairwise distinct;
+- proves all three Safe Clone machine IDs and SSH host keys are fresh and pairwise
+  distinct, while Exact Guest Restore preserves both;
+- removes the package-owned zero-network executor only from an isolated copy of
+  the installed prefix and proves full import refuses with the stable capability
+  code before creating an operation or destination environment;
+- proves the source disk/record hashes and bundle hash did not change; and
+- writes only private digest-bound summaries and redacted terminal projections,
+  with an explicit no-performance limitation.
+
+`scripts/release/collect-evidence.sh` requires this as the distinct
+`migration-lima` candidate gate, binds its candidate-pointer/archive/installed
+binary hashes to the exact package, and now requires 12 unique release gates.
+Preflight validates the gate scripts and release evidence schema without
+starting a VM. It also runs one accepted and four rejected synthetic summary
+fixtures covering Safe Clone identity uniqueness, daemon-instance uniqueness,
+compatibility refusal before effects, and private artifact modes, so those
+judges fail before an expensive VM run when their semantics drift. A completed
+one-host run establishes provider mechanics across independent stores, not broad
+physical portability; the quickstart's source and two physical destination Macs
+remain the cross-computer acceptance requirement.
+
+Performance qualification is intentionally deferred while the operator host is
+unstable. This does not relax any correctness, encryption, identity,
+source-immutability, recovery, redaction, package, or real-backend gate. A
+release made before the deferred lane passes MUST state that migration CPU,
+I/O, peak memory, throughput, sparse-efficiency, and duration are unqualified;
+it MUST NOT reuse whole-host timing as evidence attributable to Hideout.
+
+The deferral closes only when `scripts/gates/migration-performance.sh` runs on a
+quiet host, records process-scoped Hideout/backend CPU and I/O alongside host
+contention diagnostics, retains the exact package/runtime/fixture identity, and
+passes the frozen limits without dropping events or discarding unfavorable
+samples. The trigger and non-claim are also recorded in `docs/DEBT.md`.

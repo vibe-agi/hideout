@@ -90,14 +90,15 @@ and evidence bind the eventual exact HEAD.
 T158 activates `scripts/release/build-candidate.sh` as the clean package
 judge. It derives `SOURCE_DATE_EPOCH` from the exact commit, rebuilds with two
 independent Go caches, and accepts only byte-identical ustar/gzip archives,
-package manifests, and file inventories. A disposable clean-snapshot
-validation passed the exact 140-file inventory, all 9 manifest-listed Go
-binaries, 6 helper manifests, 66 packaged schemas, 8 embedded browser assets,
-runtime catalog/contract/artifact binding, package verification, and
-symbol-level scans of every final binary. That disposable validation proves
-the judge implementation, not the current repository candidate: the main
-worktree is still dirty, no T158 candidate pointer was produced, and
-T163/T171 retain exact final-candidate binding.
+package manifests, and file inventories. The current dirty-aware component
+diagnostic validates a 157-file package contract with 11 manifest-listed Go
+binaries, 8 helper manifests, 75 packaged schemas, and 9 embedded browser
+assets, plus runtime catalog/contract/artifact binding, package verification,
+and final-binary scan wiring. That diagnostic proves the judge implementation,
+not the current repository candidate: the main worktree is still dirty, no
+T158 candidate pointer was produced, and T163/T171 retain exact
+final-candidate binding. The clean candidate receipt remains the authority for
+its eventual exact counts.
 
 T159 activates `scripts/release/test-package-lifecycle.sh` as the exact
 package lifecycle judge. A disposable clean-snapshot run consumed the

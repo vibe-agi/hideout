@@ -17,6 +17,7 @@ import (
 
 	"github.com/vibe-agi/hideout/internal/sessionwire"
 	workloadtypes "github.com/vibe-agi/hideout/internal/workloadobs/types"
+	"github.com/vibe-agi/hideout/internal/workspacepath"
 )
 
 func TestVerifiedObserverCommandExecutesOpenedInodeAfterPathReplacement(
@@ -412,6 +413,45 @@ func TestObservedTargetUsesPreparedBoundaryAndCompletesAfterObserverShutdown(t *
 	}
 }
 
+func TestObservedSessionPassesSupervisorResolvedWorkspaceBinding(t *testing.T) {
+	spec := observerSupervisorStart(t)
+	workspaceID := "wrk_" + strings.Repeat("a", 64)
+	binding, err := workspacepath.NewBinding(
+		workspaceID,
+		workspacepath.LogicalRoot,
+		workspacepath.PhysicalBase+"/"+workspaceID,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	helper := newFakeObserverHelper(t, observerUnavailableCapabilities())
+	session, err := prepareObserverSession(spec, observerSessionOptions{
+		Cgroup: sessionCgroupOptions{
+			Root: observerTestCgroupRoot(t), Backend: newFakeSessionCgroupBackend(),
+		},
+		ObserverPath:  "/test/fixed/hideout-observer",
+		Launch:        helper.Launch,
+		MonotonicNS:   func() (uint64, error) { return 101, nil },
+		HandshakeWait: time.Second,
+		ShutdownWait:  time.Second,
+		Relay:         observerRelayTestOptions(t),
+		ResolveWorkspace: func(logicalRoot string) (*workspacepath.Binding, error) {
+			if logicalRoot != workspacepath.LogicalRoot {
+				t.Fatalf("logical root = %q", logicalRoot)
+			}
+			return &binding, nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = session.Abort(time.Second) }()
+	got := helper.WorkspaceBinding()
+	if got == nil || *got != binding {
+		t.Fatalf("launched workspace binding = %#v, want %#v", got, binding)
+	}
+}
+
 func observerTestCgroupRoot(t *testing.T) string {
 	t.Helper()
 	return filepath.Join("/sys/fs/cgroup", "hideout-test-"+filepath.Base(t.TempDir()))
@@ -487,6 +527,7 @@ type fakeObserverHelper struct {
 	accepted   bool
 	heartbeats int
 	stopped    bool
+	workspace  *workspacepath.Binding
 }
 
 func newFakeObserverHelper(
@@ -500,6 +541,12 @@ func newFakeObserverHelper(
 func (helper *fakeObserverHelper) Launch(
 	spec observerLaunchSpec,
 ) (*observerHelperProcess, error) {
+	helper.mu.Lock()
+	if spec.Workspace != nil {
+		workspace := *spec.Workspace
+		helper.workspace = &workspace
+	}
+	helper.mu.Unlock()
 	helperInput, supervisorInput := io.Pipe()
 	supervisorOutput, helperOutput := io.Pipe()
 	done := make(chan error, 1)
@@ -573,6 +620,16 @@ func (helper *fakeObserverHelper) Launch(
 			return nil
 		},
 	}, nil
+}
+
+func (helper *fakeObserverHelper) WorkspaceBinding() *workspacepath.Binding {
+	helper.mu.Lock()
+	defer helper.mu.Unlock()
+	if helper.workspace == nil {
+		return nil
+	}
+	value := *helper.workspace
+	return &value
 }
 
 func (helper *fakeObserverHelper) State() (bool, int, bool) {

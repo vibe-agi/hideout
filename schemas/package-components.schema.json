@@ -9,10 +9,12 @@
     "schema": {"const": "hideout.package-components/v1"},
     "components": {
       "type": "array",
-      "minItems": 2,
-      "maxItems": 2,
+      "minItems": 4,
+      "maxItems": 4,
       "prefixItems": [
         {"$ref": "#/$defs/observer"},
+        {"$ref": "#/$defs/migrationAdopt"},
+        {"$ref": "#/$defs/migrationVZAdopt"},
         {"$ref": "#/$defs/browserConsole"}
       ],
       "items": false
@@ -51,6 +53,62 @@
         "packageOwned": {"const": true}
       }
     },
+    "migrationAdopt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "kind",
+        "artifactTemplate",
+        "manifestTemplate",
+        "license",
+        "buildMode",
+        "packageOwned"
+      ],
+      "properties": {
+        "id": {"const": "linux-migration-adopt"},
+        "kind": {"const": "linux-helper"},
+        "artifactTemplate": {
+          "const": "bin/hideout-migration-adopt-linux-{linuxGuestArch}"
+        },
+        "manifestTemplate": {
+          "const": "bin/hideout-migration-adopt-linux-{linuxGuestArch}.manifest.json"
+        },
+        "license": {"const": "Apache-2.0"},
+        "buildMode": {"const": "strict-data-only-adoption-v1"},
+        "packageOwned": {"const": true}
+      }
+    },
+    "migrationVZAdopt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "kind",
+        "artifactTemplate",
+        "manifestTemplate",
+        "license",
+        "buildMode",
+        "upstreamModule",
+        "upstreamVersion",
+        "packageOwned"
+      ],
+      "properties": {
+        "id": {"const": "host-migration-vz-adopt"},
+        "kind": {"const": "host-helper"},
+        "artifactTemplate": {
+          "const": "bin/hideout-migration-vz-adopt-{hostOS}-{hostArch}"
+        },
+        "manifestTemplate": {
+          "const": "bin/hideout-migration-vz-adopt-{hostOS}-{hostArch}.manifest.json"
+        },
+        "license": {"const": "Apache-2.0"},
+        "buildMode": {"const": "apple-vz-zero-network-adoption-v1"},
+        "upstreamModule": {"const": "github.com/Code-Hex/vz/v3"},
+        "upstreamVersion": {"const": "v3.7.1"},
+        "packageOwned": {"const": true}
+      }
+    },
     "browserConsole": {
       "type": "object",
       "additionalProperties": false,
@@ -72,8 +130,8 @@
         "packageOwned": {"const": true},
         "assets": {
           "type": "array",
-          "minItems": 8,
-          "maxItems": 8,
+          "minItems": 9,
+          "maxItems": 9,
           "prefixItems": [
             {"$ref": "#/$defs/index"},
             {"$ref": "#/$defs/style"},
@@ -81,6 +139,7 @@
             {"$ref": "#/$defs/client"},
             {"$ref": "#/$defs/activity"},
             {"$ref": "#/$defs/config"},
+            {"$ref": "#/$defs/migration"},
             {"$ref": "#/$defs/presentation"},
             {"$ref": "#/$defs/app"}
           ],
@@ -131,6 +190,12 @@
       "allOf": [
         {"$ref": "#/$defs/asset"},
         {"properties": {"path": {"const": "config.js"}, "mediaType": {"const": "text/javascript; charset=utf-8"}}}
+      ]
+    },
+    "migration": {
+      "allOf": [
+        {"$ref": "#/$defs/asset"},
+        {"properties": {"path": {"const": "migration.js"}, "mediaType": {"const": "text/javascript; charset=utf-8"}}}
       ]
     },
     "presentation": {

@@ -8,10 +8,10 @@ type pinnedWorkspaceBinding struct {
 }
 
 // pinnedEnvironmentWorkspace is the only manager boundary allowed to inspect
-// an environment-level workspace binding. Shared machines deliberately have
-// no such binding; their workspace authority belongs to session attachments.
+// an environment-level workspace binding. Workspace Portal machines
+// deliberately have no such binding; their authority belongs to sessions.
 func pinnedEnvironmentWorkspace(record environment.Record) (pinnedWorkspaceBinding, bool) {
-	if record.Mode == environment.ModeShared {
+	if environment.UsesWorkspacePortal(record.Mode) {
 		return pinnedWorkspaceBinding{}, false
 	}
 	hostRoot, guestRoot, ok := record.WorkspaceBinding()

@@ -207,6 +207,9 @@ func VerifyArtifact(root string, manifest Manifest) error {
 	if err := verifyRequiredLinuxSessionHelpers(root, manifest.Target.LinuxGuestArch, manifest.Files); err != nil {
 		return err
 	}
+	if err := verifyRequiredHostMigrationVZExecutor(root, manifest.Target, manifest.Files); err != nil {
+		return err
+	}
 	if err := verifyPackageComponentContract(root, manifest.Files, false); err != nil {
 		return err
 	}
@@ -230,6 +233,11 @@ func VerifyInstalled(prefix string, state InstallState) error {
 		return err
 	}
 	if err := verifyRequiredLinuxSessionHelpers(cleanPrefix, state.Package.Target.LinuxGuestArch, state.Files); err != nil {
+		return err
+	}
+	if err := verifyRequiredHostMigrationVZExecutor(
+		cleanPrefix, state.Package.Target, state.Files,
+	); err != nil {
 		return err
 	}
 	if err := verifyPackageComponentContract(cleanPrefix, state.Files, true); err != nil {
@@ -328,6 +336,37 @@ func verifyRequiredLinuxSessionHelpers(root, guestArch string, files []File) err
 			observerBinaryRel,
 		)
 	}
+	migrationBinaryRel := "bin/" + helperbin.LinuxMigrationAdoptCommand + "-linux-" + guestArch
+	migrationManifestRel := migrationBinaryRel + ".manifest.json"
+	migrationBinary, migrationBinaryOK := indexed[migrationBinaryRel]
+	migrationManifest, migrationManifestOK := indexed[migrationManifestRel]
+	if !migrationBinaryOK || migrationBinary.Kind != "linux-helper" ||
+		!migrationBinary.Executable {
+		return fmt.Errorf(
+			"package requires executable Linux helper %q",
+			migrationBinaryRel,
+		)
+	}
+	if !migrationManifestOK || migrationManifest.Kind != "helper-manifest" ||
+		migrationManifest.Executable {
+		return fmt.Errorf(
+			"package requires helper manifest %q",
+			migrationManifestRel,
+		)
+	}
+	migrationPath, err := JoinRelative(root, migrationBinaryRel)
+	if err != nil {
+		return err
+	}
+	if _, ok := helperbin.LinuxMigrationAdoptHelperCurrent(
+		migrationPath,
+		guestArch,
+	); !ok {
+		return fmt.Errorf(
+			"package Linux helper identity is invalid for %q",
+			migrationBinaryRel,
+		)
+	}
 	licenseFound := false
 	for _, rel := range []string{
 		"third_party/tun2socks/LICENSE",
@@ -351,6 +390,52 @@ func verifyRequiredLinuxSessionHelpers(root, guestArch string, files []File) err
 	}
 	if !observerLicenseFound {
 		return errors.New("package requires GPL-2.0-only text for embedded observer programs")
+	}
+	return nil
+}
+
+func verifyRequiredHostMigrationVZExecutor(
+	root string,
+	target Target,
+	files []File,
+) error {
+	if target.HostOS != "darwin" || target.HostArch != "arm64" {
+		return nil
+	}
+	indexed := make(map[string]File, len(files))
+	for _, file := range files {
+		indexed[file.Path] = file
+	}
+	binaryRel := "bin/" + helperbin.HostMigrationVZAdoptCommand + "-darwin-arm64"
+	manifestRel := binaryRel + ".manifest.json"
+	binary, binaryOK := indexed[binaryRel]
+	manifest, manifestOK := indexed[manifestRel]
+	if !binaryOK || binary.Kind != "binary" || !binary.Executable {
+		return fmt.Errorf("package requires executable host helper %q", binaryRel)
+	}
+	if !manifestOK || manifest.Kind != "helper-manifest" || manifest.Executable {
+		return fmt.Errorf("package requires host helper manifest %q", manifestRel)
+	}
+	binaryPath, err := JoinRelative(root, binaryRel)
+	if err != nil {
+		return err
+	}
+	if _, ok := helperbin.HostMigrationVZAdoptHelperCurrent(
+		binaryPath, target.HostOS, target.HostArch,
+	); !ok {
+		return fmt.Errorf("package host helper identity is invalid for %q", binaryRel)
+	}
+	licenseFound := false
+	for _, rel := range []string{
+		"third_party/vz/LICENSE",
+		"share/hideout/third_party/vz/LICENSE",
+	} {
+		if file, ok := indexed[rel]; ok && file.Kind == "doc" && !file.Executable {
+			licenseFound = true
+		}
+	}
+	if !licenseFound {
+		return errors.New("package requires third-party Code-Hex/vz license")
 	}
 	return nil
 }

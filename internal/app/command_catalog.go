@@ -63,6 +63,76 @@ func defaultCommandCatalog() commandCatalog {
 	return commandCatalog{entries: []commandCatalogEntry{
 		{
 			spec: commandSpec{
+				ID: "migrate", Name: "migrate", TaskGroup: commandGroupEnvironments,
+				SearchTerms: []string{"export", "import", "backup", "move", "clone", "vm"},
+				Purpose:     "Export, inspect, import, and recover an encrypted portable copy of selected Hideout configuration and stopped VM disks.",
+				Syntax: []string{
+					"hideout migrate capabilities [--json]",
+					"hideout migrate export (--environment <name>...|--all) --mode config --out <file> [--preview|--yes]",
+					"hideout migrate export (--environment <name>...|--all) --out <file> --ack-guest-content [--stop] [--preview|--yes]",
+					"hideout migrate inspect <bundle> [--passphrase-stdin] [--json]",
+					"hideout migrate import <bundle> [--environment <source-ref>...|--all] [mapping flags] [--passphrase-stdin] [--preview|--yes]",
+					"hideout migrate status [operation-id] [--json]",
+					"hideout migrate resume <operation-id> [--passphrase-stdin]",
+					"hideout migrate cancel <operation-id> (--retain-partial|--remove-partial) [--yes]",
+					"hideout migrate recover <operation-id> [--action <advertised-action>] [--yes]",
+				},
+				Flags: []commandFlag{
+					{Name: "--environment", Value: "<name-or-source-ref>", Help: "select one export name or authenticated import source ref; repeatable"},
+					{Name: "--all", Help: "explicitly expand every current export environment or every authenticated import environment before review"},
+					{Name: "--out", Value: "<file>", Help: "write one encrypted owner-only bundle"},
+					{Name: "--mode", Value: "<full|config>", Help: "copy stopped VM disks or portable configuration only"},
+					{Name: "--stop", Help: "authorize the separately reviewed stop plan for eligible selected VMs"},
+					{Name: "--ack-guest-content", Help: "acknowledge that opaque guest disks may contain credentials and device-bound identities"},
+					{Name: "--include-secret", Value: "<ref>", Help: "encrypt one explicitly selected managed secret value; repeatable"},
+					{Name: "--ack-secret-transfer", Help: "acknowledge the explicit export or import of selected secret values"},
+					{Name: "--name", Value: "<source-ref>=<destination>", Help: "map an imported environment name; repeatable"},
+					{Name: "--replace", Value: "<source-ref>", Help: "request a separate reviewed delete plan for one exact name conflict; repeatable"},
+					{Name: "--policy", Value: "<source-ref>=<safe-clone|exact-guest-restore>", Help: "select guest identity policy"},
+					{Name: "--workspace", Value: "<proposal-id>=<path|disabled>", Help: "map or disable one host workspace proposal"},
+					{Name: "--secret", Value: "<source-ref>=<existing-ref|import:new-ref>", Help: "resolve one authenticated secret proposal; repeatable"},
+					{Name: "--approve", Value: "<proposal-id>[=<destination-json>]", Help: "enable one authenticated authority proposal with an exact destination value"},
+					{Name: "--ack", Value: "<risk-code>", Help: "accept one exact advertised risk code; repeatable"},
+					{Name: "--passphrase-stdin", Help: "read the passphrase from stdin instead of a hidden terminal prompt"},
+					{Name: "--idempotency-key", Value: "<key>", Help: "retry one exact apply request without creating a second operation"},
+					{Name: "--preview", Help: "stop after rendering the immutable plan"},
+					{Name: "--yes", Help: "apply the exact displayed, unblocked plan non-interactively"},
+					{Name: "--retain-partial", Help: "cancel an export while retaining its operation-owned partial file"},
+					{Name: "--remove-partial", Help: "cancel an export and remove only its proved operation-owned partial file"},
+					{Name: "--action", Value: "<advertised-action>", Help: "run only the exact action currently advertised by Manager"},
+					{Name: "--json", Help: "write the shared Manager projection as JSON"},
+				},
+				Examples: []string{
+					"hideout migrate capabilities",
+					"hideout migrate export --environment dev --mode config --out ./dev-config.hideout-migration --preview",
+					"hideout migrate export --environment dev --out ./dev.hideout-migration --ack-guest-content --preview",
+					"hideout migrate export --environment dev --out ./dev.hideout-migration --ack-guest-content --stop --yes",
+					"hideout migrate inspect ./dev.hideout-migration",
+					"hideout migrate import ./dev.hideout-migration --preview",
+					"hideout migrate import ./dev.hideout-migration --name <source-ref>=dev-copy --policy <source-ref>=safe-clone --preview",
+					"hideout migrate status <operation-id>",
+					"hideout migrate resume <operation-id>",
+					"hideout migrate cancel <operation-id> --retain-partial",
+					"hideout migrate recover <operation-id>",
+				},
+				Prerequisites: []string{
+					"Full export requires every selected VM incarnation to be stopped and the Lima provider capability to be proved; preview prints a separate stop plan when needed.",
+					"Passphrases are entered through a hidden prompt or stdin; never put them in argv or environment variables.",
+				},
+				Effects: []string{"Preview never changes VM lifecycle. --stop applies only the separately confirmed stop operation. Confirmed export writes one encrypted bundle; confirmed import stages private objects and publishes only after verification."},
+				Safety: []string{
+					"Full bundles may contain every private byte stored inside a guest disk; audit history, host project contents, caches, live memory, and active sessions are always excluded.",
+					"Safe Clone is the default. Exact Guest Restore requires its exact risk acknowledgement and cannot prove the source VM stays retired.",
+					"Imported host paths and authority-bearing settings stay disabled until explicitly mapped and reviewed.",
+				},
+				Recovery: []string{"Use `hideout migrate status <operation-id>`; interrupted key-bearing work requires a new protected resume unlock."},
+				Next:     []string{"hideout migrate status <operation-id>", "hideout env list", "hideout doctor"},
+				Audience: commandAudienceNewUser, Stability: commandStabilityAdvanced,
+			},
+			handler: dispatchMigrate,
+		},
+		{
+			spec: commandSpec{
 				ID: "setup", Name: "setup", TaskGroup: commandGroupGetStarted,
 				Purpose:       "Create the supported default profile through a short, confirm-before-write first-run flow.",
 				Syntax:        []string{"hideout setup"},
@@ -1021,6 +1091,10 @@ func dispatchActivity(a app, args []string) error {
 
 func dispatchSecret(a app, args []string) error {
 	return a.secretCommand(args)
+}
+
+func dispatchMigrate(a app, args []string) error {
+	return a.migrateCommand(args)
 }
 
 func dispatchAdapterPack(a app, args []string) error {

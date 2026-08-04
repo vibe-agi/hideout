@@ -581,18 +581,20 @@ func TestSessionViewMasksSiblingRuntimeAndUsesPrivateProcAndMounts(t *testing.T)
 }
 
 func TestSessionViewConstructsPrivatePortalWorkspaceIdentity(t *testing.T) {
+	workspaceID := "wrk_" + strings.Repeat("a", 64)
+	physicalRoot := "/hideout/workspaces/" + workspaceID
 	workspace := backend.WorkspaceAttachmentSpec{
 		HostRoot: "/Users/alice/private/project", GuestRoot: "/workspace",
 		Transport: backend.WorkspaceTransportPortal,
 		Portal: &backend.WorkspacePortalBinding{
-			PhysicalGuestRoot:   "/hideout/workspaces/wrk_0123456789abcdef",
+			PhysicalGuestRoot:   physicalRoot,
 			Endpoint:            "host.lima.internal:43127",
 			CredentialGuestPath: "/hideout/session/workspace/credential.bin",
 		},
 	}
 	command, err := BuildSessionViewCommand(SessionViewSpec{
 		SessionID: "ses_20260716T120000Z_0123456789abcdef", TargetUser: "developer",
-		GuestWork: "/workspace", Env: []string{"PATH=/hideout/session/shims:/usr/bin"},
+		GuestWork: "/workspace", Env: []string{"PATH=/hideout/session/shims:/usr/bin", "PWD=/caller-controlled"},
 		Command: []string{"git", "status"}, Workspace: workspace,
 	})
 	if err != nil {
@@ -605,15 +607,18 @@ func TestSessionViewConstructsPrivatePortalWorkspaceIdentity(t *testing.T) {
 		"/hideout/session/shims/hideout-workspace-portal",
 		"'--endpoint' 'host.lima.internal:43127'",
 		"'--credential-file' '/hideout/session/workspace/credential.bin'",
-		"'--mount' '/hideout/workspaces/wrk_0123456789abcdef'",
-		"mount --rbind '/hideout/workspaces/wrk_0123456789abcdef' \"$workspace_root/workspace\"",
+		"'--mount' '" + physicalRoot + "'",
+		"workspace_physical=\"$workspace_root\"'" + physicalRoot + "'",
+		"mount --rbind '" + physicalRoot + "' \"$workspace_physical\"",
+		"ln -s '" + physicalRoot + "' \"$workspace_root/workspace\"",
+		"'PWD=/workspace'",
 		"for hostfs_root in Users Volumes private; do",
 		"ln -s \"/hideout/hostfs/$hostfs_root\" \"$workspace_root/$hostfs_root\"",
 		"'chroot' '/hideout/runtime/workspace-rootfs'",
 		`[ "$workspace_attempt" -lt 2000 ]`,
 		`[ "$workspace_stop_attempt" -lt 1000 ]`,
 		"umount -R '/hideout/runtime/workspace-rootfs'",
-		"umount '/hideout/workspaces/wrk_0123456789abcdef'",
+		"umount '" + physicalRoot + "'",
 	} {
 		if !strings.Contains(joined, required) {
 			t.Fatalf("Portal session view missing %q:\n%s", required, joined)
@@ -624,6 +629,9 @@ func TestSessionViewConstructsPrivatePortalWorkspaceIdentity(t *testing.T) {
 	}
 	if strings.Contains(joined, workspace.HostRoot) || strings.Contains(joined, "/Users/alice") {
 		t.Fatalf("Portal session command exposed host root: %s", joined)
+	}
+	if strings.Contains(joined, "PWD=/caller-controlled") {
+		t.Fatalf("Portal session retained a caller-controlled logical cwd: %s", joined)
 	}
 }
 

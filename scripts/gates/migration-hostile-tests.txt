@@ -1,0 +1,11 @@
+# Canonical hostile-input matrix.
+# Format: category, Go package, top-level test name.
+duplication ./internal/migration TestCanonicalJSONRejectsDuplicateUnknownAndNoncanonicalFields
+expansion ./internal/migration TestRecordCompressionRejectsExpansionBeyondAuthenticatedBound
+reordering ./internal/migration TestRecordOrderingAndAggregateLogicalLimitFailClosed
+sparse-abuse ./internal/migration TestLogicalDigesterDomainSeparatesSparseRepresentations
+special-files ./internal/manager TestBundleProbeRejectsSpecialFilesWithoutBlocking
+trailing-content ./internal/migration TestBundleReaderRejectsHostileLengthsTamperTruncationAndTrailingData
+traversal ./internal/migration TestInspectSealedBundleRejectsHostileManifestClosureAndRecordBindings
+truncation ./internal/migration TestBundleReaderRejectsHostileLengthsTamperTruncationAndTrailingData
+wrong-key ./internal/migration TestMasterKeyWrapRoundTripWrongKeyAndTamper

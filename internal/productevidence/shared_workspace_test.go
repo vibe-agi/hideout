@@ -94,8 +94,14 @@ func TestRetainedSharedWorkspaceEvidencePassesProductionEvaluator(t *testing.T) 
 		if runtimeBinding == nil {
 			copy := *proof.Runtime
 			runtimeBinding = &copy
-		} else if *runtimeBinding != *proof.Runtime {
-			t.Fatalf("real proofs carry different runtime bindings: %+v != %+v", *runtimeBinding, *proof.Runtime)
+		} else {
+			retained := *runtimeBinding
+			current := *proof.Runtime
+			retained.EnvironmentID = ""
+			current.EnvironmentID = ""
+			if retained != current {
+				t.Fatalf("real proofs carry different immutable runtime bindings: %+v != %+v", retained, current)
+			}
 		}
 	}
 	if runtimeBinding == nil {
@@ -186,6 +192,39 @@ func TestSharedWorkspaceBehaviorValidatorRejectsFalseGreenArtifacts(t *testing.T
 	}
 }
 
+func TestSharedWorkspaceBehaviorV2RequiresPathPositiveAndNegativeEvidence(t *testing.T) {
+	fixture := newSharedWorkspaceBehaviorV2Fixture(t)
+	if err := fixture.validate(); err != nil {
+		t.Fatalf("valid v2 behavior evidence: %v", err)
+	}
+
+	for name, mutate := range map[string]func(*sharedWorkspaceBehaviorTestFixture){
+		"positive check false": func(f *sharedWorkspaceBehaviorTestFixture) {
+			value := validSharedWorkspacePathCorrectness()
+			value.Checks["resolvedFileAuditLogical"] = false
+			f.artifacts["artifacts/behavior/path-correctness.json"] = mustMarshalSharedWorkspaceTest(t, value)
+		},
+		"undeclared limitation": func(f *sharedWorkspaceBehaviorTestFixture) {
+			value := validSharedWorkspacePathCorrectness()
+			value.Limitations = append(value.Limitations, "unknown-coverage-gap")
+			f.artifacts["artifacts/behavior/path-correctness.json"] = mustMarshalSharedWorkspaceTest(t, value)
+		},
+		"negative fixture accepted": func(f *sharedWorkspaceBehaviorTestFixture) {
+			value := validSharedWorkspacePathCorrectness()
+			f.artifacts["artifacts/behavior/path-negative-fixture.json"] = mustMarshalSharedWorkspaceTest(t, value)
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			current := newSharedWorkspaceBehaviorV2Fixture(t)
+			mutate(&current)
+			current.sync(t)
+			if err := current.validate(); err == nil {
+				t.Fatal("false-green v2 path evidence was accepted")
+			}
+		})
+	}
+}
+
 func TestSharedWorkspacePerformanceValidatorRecomputesRawSamplesAndThresholds(t *testing.T) {
 	fixture := newSharedWorkspacePerformanceFixture(t)
 	if err := fixture.validate(); err != nil {
@@ -257,6 +296,38 @@ func TestSharedWorkspacePerformanceValidatorRecomputesRawSamplesAndThresholds(t 
 			}
 		})
 	}
+}
+
+func TestSharedWorkspacePerformanceV2UsesIndependentPathEvidence(t *testing.T) {
+	fixture := newSharedWorkspacePerformanceV2Fixture(t)
+	if err := fixture.validate(); err != nil {
+		t.Fatalf("valid v2 performance evidence: %v", err)
+	}
+	fixture.evidence.PathCorrectness.Observation.Checks["physicalPathAbsentFromActivity"] = false
+	fixture.sync(t)
+	if err := fixture.validate(); err == nil || !strings.Contains(err.Error(), "not derived") {
+		t.Fatalf("altered v2 path summary error=%v", err)
+	}
+
+	t.Run("limitations summary must be derived", func(t *testing.T) {
+		current := newSharedWorkspacePerformanceV2Fixture(t)
+		current.evidence.PathCorrectness.Observation.Limitations[0] = "fabricated-coverage"
+		current.sync(t)
+		if err := current.validate(); err == nil || !strings.Contains(err.Error(), "not derived") {
+			t.Fatalf("altered v2 path limitations error=%v", err)
+		}
+	})
+
+	t.Run("legacy correctness is forbidden", func(t *testing.T) {
+		current := newSharedWorkspacePerformanceV2Fixture(t)
+		current.evidence.Correctness = &sharedWorkspaceCorrectnessSummary{
+			Passed: true, Observation: validSharedWorkspaceCorrectness(30),
+		}
+		current.sync(t)
+		if err := current.validate(); err == nil || !strings.Contains(err.Error(), "does not match its schema") {
+			t.Fatalf("ambiguous v2 correctness error=%v", err)
+		}
+	})
 }
 
 func TestSharedWorkspaceValidatorsRejectUnknownSummaryFields(t *testing.T) {
@@ -337,11 +408,18 @@ func newSharedWorkspaceBehaviorFixture(t *testing.T) sharedWorkspaceBehaviorTest
 
 func (f *sharedWorkspaceBehaviorTestFixture) sync(t *testing.T) {
 	t.Helper()
+	f.evidence.Artifacts = map[string]sharedWorkspaceArtifactDigest{}
 	paths := map[string]string{
 		"relations": "artifacts/behavior/relations.json", "lifecycle": "artifacts/behavior/lifecycle.json",
-		"correctness": "artifacts/behavior/correctness.json", "researchDecision": "artifacts/behavior/research-decision.json",
+		"researchDecision":              "artifacts/behavior/research-decision.json",
 		"packageManifest":               "artifacts/behavior/package-manifest.json",
 		"workspacePortalHelperManifest": "artifacts/behavior/workspace-portal-helper.manifest.json",
+	}
+	if f.evidence.Schema == "hideout.shared-workspace-real-gate2/v2" {
+		paths["pathCorrectness"] = "artifacts/behavior/path-correctness.json"
+		paths["pathNegativeFixture"] = "artifacts/behavior/path-negative-fixture.json"
+	} else {
+		paths["correctness"] = "artifacts/behavior/correctness.json"
 	}
 	for key, path := range paths {
 		if data, ok := f.artifacts[path]; ok {
@@ -350,6 +428,23 @@ func (f *sharedWorkspaceBehaviorTestFixture) sync(t *testing.T) {
 	}
 	f.artifacts["behavior.json"] = mustMarshalSharedWorkspaceTest(t, f.evidence)
 	f.refreshRefs()
+}
+
+func newSharedWorkspaceBehaviorV2Fixture(t *testing.T) sharedWorkspaceBehaviorTestFixture {
+	t.Helper()
+	fixture := newSharedWorkspaceBehaviorFixture(t)
+	delete(fixture.artifacts, "artifacts/behavior/correctness.json")
+	positive := validSharedWorkspacePathCorrectness()
+	negative := validSharedWorkspacePathNegativeFixture()
+	fixture.artifacts["artifacts/behavior/path-correctness.json"] = mustMarshalSharedWorkspaceTest(t, positive)
+	fixture.artifacts["artifacts/behavior/path-negative-fixture.json"] = mustMarshalSharedWorkspaceTest(t, negative)
+	fixture.evidence.Schema = "hideout.shared-workspace-real-gate2/v2"
+	fixture.evidence.Checks = map[string]bool{}
+	for _, check := range requiredSharedWorkspaceBehaviorV2Checks {
+		fixture.evidence.Checks[check] = true
+	}
+	fixture.sync(t)
+	return fixture
 }
 
 func (f *sharedWorkspaceBehaviorTestFixture) refreshRefs() {
@@ -434,8 +529,9 @@ func newSharedWorkspacePerformanceFixture(t *testing.T) sharedWorkspacePerforman
 		}
 		fixture.evidence.Metrics = append(fixture.evidence.Metrics, metric)
 	}
-	fixture.evidence.Correctness.Passed = true
-	fixture.evidence.Correctness.Observation = validSharedWorkspaceCorrectness(30)
+	fixture.evidence.Correctness = &sharedWorkspaceCorrectnessSummary{
+		Passed: true, Observation: validSharedWorkspaceCorrectness(30),
+	}
 	fixture.evidence.Saturation.Passed = true
 	fixture.evidence.Saturation.Observation.TeardownMS = 100
 	fixture.evidence.Saturation.Metadata = sharedWorkspaceSampleSummary{Samples: 100, MedianMS: 100, P95MS: 100}
@@ -468,13 +564,26 @@ func (f *sharedWorkspacePerformanceTestFixture) sync(t *testing.T) {
 			f.evidence.Artifacts.ResearchBaseline[id] = sharedWorkspaceTestDigest(path, data)
 		}
 	}
-	for path, target := range map[string]*sharedWorkspaceArtifactDigest{
+	f.evidence.Artifacts.Correctness = nil
+	f.evidence.Artifacts.PathCorrectness = nil
+	descriptors := map[string]*sharedWorkspaceArtifactDigest{
 		"artifacts/performance/research-baseline/fixture.sha256": &f.evidence.Artifacts.Fixture,
 		sharedWorkspacePairedSamplesPath:                         &f.evidence.Artifacts.PairedSamples,
-		"artifacts/performance/correctness.json":                 &f.evidence.Artifacts.Correctness,
 		"artifacts/performance/saturation.json":                  &f.evidence.Artifacts.Saturation,
 		"artifacts/performance/research-decision.json":           &f.evidence.Artifacts.ResearchDecision,
-	} {
+	}
+	if f.evidence.Schema == "hideout.shared-workspace-gate2-evaluation/v2" {
+		if data, ok := f.artifacts["artifacts/performance/path-correctness.json"]; ok {
+			digest := sharedWorkspaceTestDigest("artifacts/performance/path-correctness.json", data)
+			f.evidence.Artifacts.PathCorrectness = &digest
+		}
+	} else {
+		if data, ok := f.artifacts["artifacts/performance/correctness.json"]; ok {
+			digest := sharedWorkspaceTestDigest("artifacts/performance/correctness.json", data)
+			f.evidence.Artifacts.Correctness = &digest
+		}
+	}
+	for path, target := range descriptors {
 		if data, ok := f.artifacts[path]; ok {
 			*target = sharedWorkspaceTestDigest(path, data)
 		}
@@ -490,6 +599,21 @@ func (f *sharedWorkspacePerformanceTestFixture) sync(t *testing.T) {
 	}
 	f.artifacts["performance.json"] = mustMarshalSharedWorkspaceTest(t, f.evidence)
 	f.refreshRefs()
+}
+
+func newSharedWorkspacePerformanceV2Fixture(t *testing.T) sharedWorkspacePerformanceTestFixture {
+	t.Helper()
+	fixture := newSharedWorkspacePerformanceFixture(t)
+	delete(fixture.artifacts, "artifacts/performance/correctness.json")
+	pathCorrectness := validSharedWorkspacePathCorrectness()
+	fixture.artifacts["artifacts/performance/path-correctness.json"] = mustMarshalSharedWorkspaceTest(t, pathCorrectness)
+	fixture.evidence.Schema = "hideout.shared-workspace-gate2-evaluation/v2"
+	fixture.evidence.Correctness = nil
+	fixture.evidence.PathCorrectness = &sharedWorkspacePathCorrectnessSummary{
+		Passed: true, Observation: pathCorrectness,
+	}
+	fixture.sync(t)
+	return fixture
 }
 
 func (f *sharedWorkspacePerformanceTestFixture) refreshRefs() {
@@ -509,6 +633,27 @@ func validSharedWorkspaceCorrectness(samples int) sharedWorkspaceCorrectnessEvid
 		SameRootLocksConflict: true, RootEscapeRejected: true, SymlinkEscapeRejected: true,
 		WatcherStreamHealthy: true, HostWatcherSamples: samples, TargetWatcherSamples: samples,
 	}
+}
+
+func validSharedWorkspacePathCorrectness() sharedWorkspacePathCorrectnessEvidence {
+	value := sharedWorkspacePathCorrectnessEvidence{
+		Schema: "hideout.shared-workspace-path-correctness/v1", Status: "passed",
+		Tools:                append([]string(nil), sharedWorkspacePathTools...),
+		RepresentativeAgents: []string{"claude", "codex"},
+		Limitations:          append([]string(nil), sharedWorkspacePathLimitations...),
+		Checks:               map[string]bool{},
+	}
+	for _, check := range requiredSharedWorkspacePathChecks {
+		value.Checks[check] = true
+	}
+	return value
+}
+
+func validSharedWorkspacePathNegativeFixture() sharedWorkspacePathCorrectnessEvidence {
+	value := validSharedWorkspacePathCorrectness()
+	value.Status = "failed"
+	value.Checks["logicalPhysicalSameObject"] = false
+	return value
 }
 
 func readSharedWorkspaceResearchDecision(t *testing.T) []byte {

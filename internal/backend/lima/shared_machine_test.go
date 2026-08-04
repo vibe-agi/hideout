@@ -5,6 +5,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/vibe-agi/hideout/internal/backend"
@@ -45,6 +46,33 @@ func TestSharedMachineConfigContainsNoSelectedWorkspace(t *testing.T) {
 	}
 }
 
+func TestDedicatedPortalMachineConfigContainsNoSelectedWorkspace(t *testing.T) {
+	root := t.TempDir()
+	project := filepath.Join(root, "source-host-path-must-not-return")
+	machine := backend.MachineActivationSpec{
+		EnvironmentID: "env_imported", ImageRef: environment.BuiltinBaseImage,
+		Profile: profile.Default("imported"), ProfileDir: filepath.Join(root, "profile"),
+		IdentityRoot: filepath.Join(root, "profile"), RuntimeRoot: filepath.Join(root, "runtime"),
+		InstanceName: "hideout-imported", PreserveInstance: true, Mode: environment.ModeDedicatedPortal,
+	}
+	cfg, err := ConfigForMachineSpec(machine, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded := configYAML(t, cfg)
+	if bytes.Contains(encoded, []byte(project)) || bytes.Contains(encoded, []byte("/workspace")) {
+		t.Fatalf("dedicated Portal machine config contains static workspace authority:\n%s", encoded)
+	}
+	if _, err := ConfigForMachineSpec(machine, &StaticRunMounts{
+		Workspace: backend.WorkspaceAttachmentSpec{
+			HostRoot: project, GuestRoot: "/workspace", Transport: backend.WorkspaceTransportStatic,
+		},
+		SessionDir: filepath.Join(root, "session"),
+	}); err == nil {
+		t.Fatal("dedicated Portal machine accepted a static project mount")
+	}
+}
+
 func TestSharedPrepareKeepsWorkspaceOutOfRetainedLimaYAML(t *testing.T) {
 	root := t.TempDir()
 	project := filepath.Join(root, "project")
@@ -58,7 +86,7 @@ func TestSharedPrepareKeepsWorkspaceOutOfRetainedLimaYAML(t *testing.T) {
 	spec.Workspace = backend.WorkspaceAttachmentSpec{
 		HostRoot: project, GuestRoot: "/workspace", Transport: backend.WorkspaceTransportPortal,
 		Portal: &backend.WorkspacePortalBinding{
-			PhysicalGuestRoot: "/hideout/workspaces/wrk_fixture",
+			PhysicalGuestRoot: "/hideout/workspaces/wrk_" + strings.Repeat("a", 64),
 			Endpoint:          "host.lima.internal:43127", CredentialGuestPath: "/hideout/session/workspace/credential.bin",
 		},
 	}
@@ -129,7 +157,7 @@ func TestSharedRuntimeVerificationPrepareRejectsWorkspaceAuthority(t *testing.T)
 	spec.Workspace = backend.WorkspaceAttachmentSpec{
 		HostRoot: filepath.Join(root, "project"), GuestRoot: "/workspace", Transport: backend.WorkspaceTransportPortal,
 		Portal: &backend.WorkspacePortalBinding{
-			PhysicalGuestRoot: "/hideout/workspaces/wrk_fixture",
+			PhysicalGuestRoot: "/hideout/workspaces/wrk_" + strings.Repeat("a", 64),
 			Endpoint:          "host.lima.internal:43127", CredentialGuestPath: "/hideout/session/workspace/credential.bin",
 		},
 	}

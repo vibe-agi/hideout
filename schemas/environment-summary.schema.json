@@ -22,7 +22,7 @@
     "id": { "type": "string", "pattern": "^env_[A-Za-z0-9_-]{1,124}$" },
     "name": { "type": "string", "minLength": 1, "maxLength": 128 },
     "autoNamed": { "type": "boolean" },
-    "mode": { "enum": ["shared", "dedicated", "workspace-bound"] },
+    "mode": { "enum": ["shared", "dedicated", "dedicated-portal", "workspace-bound"] },
     "sharedSlot": { "type": "string", "minLength": 1, "maxLength": 128 },
     "machineIdentityId": {
       "type": "string",
@@ -90,8 +90,24 @@
         }
       },
       "else": {
-        "required": ["workspace", "guestWorkspace", "workspaceLabel"],
-        "not": { "required": ["sharedSlot"] }
+        "if": {
+          "properties": { "mode": { "const": "dedicated-portal" } },
+          "required": ["mode"]
+        },
+        "then": {
+          "not": {
+            "anyOf": [
+              { "required": ["sharedSlot"] },
+              { "required": ["workspace"] },
+              { "required": ["guestWorkspace"] },
+              { "required": ["workspaceLabel"] }
+            ]
+          }
+        },
+        "else": {
+          "required": ["workspace", "guestWorkspace", "workspaceLabel"],
+          "not": { "required": ["sharedSlot"] }
+        }
       }
     }
   ],

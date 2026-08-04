@@ -22,6 +22,7 @@ import (
 	overlaypkg "github.com/vibe-agi/hideout/internal/hostfs/overlay"
 	"github.com/vibe-agi/hideout/internal/policy"
 	"github.com/vibe-agi/hideout/internal/profile"
+	"github.com/vibe-agi/hideout/internal/workspacepath"
 )
 
 func TestServerRequestTimeoutIsExtendedOnlyForHostAppOpen(t *testing.T) {
@@ -1582,6 +1583,81 @@ func TestNormalizeBrokerRequestCWDDoesNotAcceptHostWorkspaceForGuestBackend(t *t
 	req := Request{Args: map[string]any{"cwd": hostRoot}}
 	if err := server.normalizeBrokerRequestCWD(&req); err == nil || !strings.Contains(err.Error(), "outside workspace") {
 		t.Fatalf("expected guest backend to reject host cwd, got %v", err)
+	}
+}
+
+func TestMapGuestPathUsesExactWorkspaceAttachmentAliases(t *testing.T) {
+	hostRoot := t.TempDir()
+	hostTarget := filepath.Join(hostRoot, "src", "main.go")
+	if err := os.MkdirAll(filepath.Dir(hostTarget), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(hostTarget, []byte("package main\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	workspaceID := "wrk_" + strings.Repeat("a", 64)
+	physicalRoot := "/hideout/workspaces/" + workspaceID
+	server := Server{
+		HostRoot: hostRoot, GuestRoot: "/workspace", WorkspaceID: workspaceID,
+		PhysicalGuestRoot: physicalRoot,
+	}
+
+	logical, err := server.mapGuestPath("/workspace/src/main.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	physical, err := server.mapGuestPath(physicalRoot + "/src/main.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantTarget, err := filepath.EvalSymlinks(hostTarget)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if logical != wantTarget || physical != wantTarget {
+		t.Fatalf("attachment aliases mapped to %q and %q, want %q", logical, physical, wantTarget)
+	}
+
+	sibling := "/hideout/workspaces/wrk_" + strings.Repeat("b", 64) + "/src/main.go"
+	if _, err := server.mapGuestPath(sibling); err == nil {
+		t.Fatal("guessed sibling physical root was accepted")
+	} else if strings.Contains(err.Error(), workspacepath.PhysicalBase) {
+		t.Fatalf("physical implementation path leaked through error: %v", err)
+	}
+	server.PhysicalGuestRoot = "/hideout/workspaces/wrk_" + strings.Repeat("b", 64)
+	if _, err := server.mapGuestPath("/workspace/src/main.go"); err == nil {
+		t.Fatal("mismatched physical attachment binding was accepted")
+	}
+}
+
+func TestNormalizeBrokerRequestCWDCanonicalizesAliasesAndRejectsTraversal(t *testing.T) {
+	hostRoot := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(hostRoot, "src"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	workspaceID := "wrk_" + strings.Repeat("a", 64)
+	physicalRoot := workspacepath.PhysicalBase + "/" + workspaceID
+	server := Server{
+		Backend: "lima", HostRoot: hostRoot, GuestRoot: workspacepath.LogicalRoot,
+		WorkspaceID: workspaceID, PhysicalGuestRoot: physicalRoot,
+	}
+	for _, cwd := range []string{"/workspace/src", physicalRoot + "/src"} {
+		req := Request{Args: map[string]any{"cwd": cwd}}
+		if err := server.normalizeBrokerRequestCWD(&req); err != nil {
+			t.Fatalf("normalize %q: %v", cwd, err)
+		}
+		if got := req.Args["cwd"]; got != "/workspace/src" {
+			t.Fatalf("normalized cwd=%v, want /workspace/src", got)
+		}
+	}
+	for _, cwd := range []string{
+		"/workspace/src/../src",
+		physicalRoot + "/src/../src",
+	} {
+		req := Request{Args: map[string]any{"cwd": cwd}}
+		if err := server.normalizeBrokerRequestCWD(&req); err == nil {
+			t.Fatalf("parent traversal %q was accepted", cwd)
+		}
 	}
 }
 

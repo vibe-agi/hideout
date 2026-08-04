@@ -609,6 +609,28 @@ func dedicatedRunEnvironmentSpec(p profile.Profile, backendName, workspace, gues
 	return spec
 }
 
+func dedicatedPortalRunEnvironmentSpec(p profile.Profile, backendName, name string) environment.Spec {
+	var runtimeProvenance *environment.RuntimeProvenance
+	if p.Environment.Runtime != nil {
+		copy := *p.Environment.Runtime
+		runtimeProvenance = &copy
+	}
+	spec := environment.Spec{
+		Name:       name,
+		AutoNamed:  false,
+		ImageRef:   p.BaseImageOrBuiltin(),
+		Runtime:    runtimeProvenance,
+		Profile:    p.Name,
+		Backend:    backendName,
+		Mode:       environment.ModeDedicatedPortal,
+		User:       p.Identity.User,
+		Hostname:   p.Identity.Hostname,
+		Disposable: false,
+	}
+	setConfigurationIDs(&spec, p, backendName, environment.ModeDedicatedPortal)
+	return spec
+}
+
 func runEnvironmentSpecForRecord(
 	record environment.Record,
 	p profile.Profile,
@@ -626,6 +648,11 @@ func runEnvironmentSpecForRecord(
 		pinned.Environment.Runtime = cloneRuntimeProvenance(record.Runtime)
 		setConfigurationIDs(&spec, pinned, backendName, environment.ModeDedicated)
 		return spec, nil
+	case environment.ModeDedicatedPortal:
+		pinned := p
+		pinned.Environment.BaseImage = record.ImageRef
+		pinned.Environment.Runtime = cloneRuntimeProvenance(record.Runtime)
+		return dedicatedPortalRunEnvironmentSpec(pinned, backendName, record.Name), nil
 	case environment.ModeWorkspaceBound:
 		return workspaceBoundRunEnvironmentSpec(p, backendName, workspace, guestWorkspace), nil
 	default:

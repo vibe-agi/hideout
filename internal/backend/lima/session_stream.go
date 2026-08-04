@@ -922,8 +922,12 @@ func supervisorStartControl(
 			terminal.Term = sessionwire.DefaultTERM
 		}
 	}
-	values := make(map[string]string, len(env))
-	for _, assignment := range env {
+	targetEnv := env
+	if prepared.Workspace.Transport == backend.WorkspaceTransportPortal {
+		targetEnv = sessionViewTargetEnv(env, prepared.GuestWork)
+	}
+	values := make(map[string]string, len(targetEnv))
+	for _, assignment := range targetEnv {
 		name, value, ok := strings.Cut(assignment, "=")
 		if !ok || name == "" {
 			return nil, errors.New("supervisor environment contains an invalid assignment")

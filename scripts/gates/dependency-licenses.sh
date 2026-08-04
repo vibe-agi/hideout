@@ -87,6 +87,7 @@ for feature_module in \
   charm.land/bubbles/v2 \
   charm.land/bubbletea/v2 \
   charm.land/lipgloss/v2 \
+  github.com/Code-Hex/vz/v3 \
   github.com/cilium/ebpf; do
   if ! awk -F '\t' -v module="$feature_module" '
     $1 == module && $3 != "" { found = 1 }
@@ -114,6 +115,13 @@ fi
 if [[ ! -f third_party/tun2socks/LICENSE ]] ||
   [[ -L third_party/tun2socks/LICENSE ]]; then
   echo "dependency-licenses: tun2socks redistributed license is missing" >&2
+  failed=1
+fi
+if [[ ! -f third_party/vz/LICENSE ]] ||
+  [[ -L third_party/vz/LICENSE ]] ||
+  ! grep -F 'MIT License' third_party/vz/LICENSE >/dev/null ||
+  ! grep -F 'Copyright (c) 2025 codehex' third_party/vz/LICENSE >/dev/null; then
+  echo "dependency-licenses: Code-Hex/vz redistributed license is missing or invalid" >&2
   failed=1
 fi
 for manifest_path in \
@@ -217,4 +225,4 @@ if [[ "$failed" -ne 0 ]]; then
 fi
 
 gate_completed=1
-echo "dependency-licenses: root modules, isolated helper, and generated BPF licenses/digests are accounted for"
+echo "dependency-licenses: root modules, isolated helpers, and generated BPF licenses/digests are accounted for"

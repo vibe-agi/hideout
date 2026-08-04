@@ -24,6 +24,7 @@ import (
 
 	"github.com/vibe-agi/hideout/internal/sessionwire"
 	workloadtypes "github.com/vibe-agi/hideout/internal/workloadobs/types"
+	"github.com/vibe-agi/hideout/internal/workspacepath"
 	"golang.org/x/sys/unix"
 )
 
@@ -34,6 +35,7 @@ type observerConfig struct {
 	CgroupPath     string
 	ExpectedDigest string
 	Heartbeat      time.Duration
+	Workspace      *workspacepath.Binding
 }
 
 type observerDependencies struct {
@@ -49,6 +51,7 @@ type observerCollectorConfig struct {
 	Binding    sessionwire.ObserverBinding
 	CgroupPath string
 	Anchor     observerClockAnchor
+	Workspace  *workspacepath.Binding
 }
 
 type observerClockAnchor struct {
@@ -128,6 +131,9 @@ func parseObserverConfig(args []string) (observerConfig, error) {
 	generation := flags.Uint64("generation", 0, "observer generation")
 	digest := flags.String("helper-digest", "", "expected packaged helper digest")
 	heartbeat := flags.Duration("heartbeat", defaultObserverHeartbeat, "heartbeat interval")
+	workspaceID := flags.String("workspace-id", "", "trusted workspace identity")
+	workspaceLogicalRoot := flags.String("workspace-logical-root", "", "trusted logical workspace root")
+	workspacePhysicalRoot := flags.String("workspace-physical-root", "", "trusted physical workspace root")
 	if err := flags.Parse(args); err != nil {
 		return observerConfig{}, err
 	}
@@ -148,6 +154,17 @@ func parseObserverConfig(args []string) (observerConfig, error) {
 		ExpectedDigest: *digest,
 		Heartbeat:      *heartbeat,
 	}
+	if *workspaceID != "" || *workspaceLogicalRoot != "" || *workspacePhysicalRoot != "" {
+		binding, bindingErr := workspacepath.NewBinding(
+			*workspaceID,
+			*workspaceLogicalRoot,
+			*workspacePhysicalRoot,
+		)
+		if bindingErr != nil {
+			return observerConfig{}, errors.New("observer workspace identity is invalid")
+		}
+		config.Workspace = &binding
+	}
 	if err := config.Validate(); err != nil {
 		return observerConfig{}, err
 	}
@@ -167,6 +184,9 @@ func (config observerConfig) Validate() error {
 	}
 	if config.Heartbeat < 100*time.Millisecond || config.Heartbeat > time.Minute {
 		return errors.New("observer heartbeat interval is outside the supported bound")
+	}
+	if config.Workspace != nil && config.Workspace.Validate() != nil {
+		return errors.New("observer workspace identity is invalid")
 	}
 	return nil
 }
@@ -217,7 +237,7 @@ func runObserver(
 	}
 	collectors, err := dependencies.OpenCollectors(observerCollectorConfig{
 		Binding: config.Binding, CgroupPath: config.CgroupPath,
-		Anchor: anchor,
+		Anchor: anchor, Workspace: config.Workspace,
 	})
 	if err != nil {
 		return fmt.Errorf("open observer collectors: %w", err)

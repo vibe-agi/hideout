@@ -54,20 +54,36 @@ current = {
     "first-byte": summary(candidate, "first-byte", 30),
     "saturation-metadata": summary(candidate, "saturation-metadata", 100),
 }
-correctness = load(candidate / "correctness.json")
-if correctness.get("schema") != "hideout.shared-workspace-correctness/v1":
-    raise SystemExit("shared-workspace correctness schema is invalid")
-required_truths = (
-    "hostCreateVisible", "targetCreateVisible", "hostAtomicReplaceVisible",
-    "targetAtomicReplaceVisible", "renameVisible", "deleteVisible",
-    "modeVisible", "flushDurable", "sameRootLocksConflict",
-    "rootEscapeRejected", "symlinkEscapeRejected", "watcherStreamHealthy",
+path_correctness = load(candidate / "path-correctness.json")
+required_path_checks = {
+    "productionWorkspaceIdentity", "logicalPhysicalSameObject",
+    "logicalWritePhysicalRead", "physicalWriteLogicalRead",
+    "atomicRenameAcrossAliases", "modeAcrossAliases", "flushAcrossAliases",
+    "deleteAcrossAliases", "repeatedDeleteAcrossAliases",
+    "logicalPwdStable", "physicalCwdOpaque",
+    "nestedCdStable", "subprocessCwdOpaque", "distinctRootProjectState",
+    "sameRootProjectStateStable", "siblingPhysicalRootDenied",
+    "goLogicalPwdAliasClassified", "boundedGitSafeDirectories",
+    "preserveModeSharedRejected", "externalGitMetadataRejected",
+    "resolvedFileAuditLogical", "relativeFileAliasExplicit", "processAuditLogical",
+    "processCwdUnavailableExplicit", "physicalArgvCaptureLimitationExplicit",
+    "siblingArgvFailClosed",
+    "physicalPathAbsentFromActivity",
+}
+required_path_limitations = [
+    "process-cwd-unavailable",
+    "physical-workspace-argv-exceeds-kernel-capture-width",
+    "relative-workspace-file-path-alias",
+]
+path_correctness_passed = (
+    path_correctness.get("schema") == "hideout.shared-workspace-path-correctness/v1"
+    and path_correctness.get("status") == "passed"
+    and path_correctness.get("tools") == ["bash", "claude", "codex", "git", "go", "node", "python"]
+    and path_correctness.get("representativeAgents") == ["claude", "codex"]
+    and path_correctness.get("limitations") == required_path_limitations
+    and set(path_correctness.get("checks", {})) == required_path_checks
+    and all(path_correctness.get("checks", {}).values())
 )
-correctness_passed = all(correctness.get(field) is True for field in required_truths)
-if correctness.get("silentShortWrites") != 0 or correctness.get("falseSuccesses") != 0:
-    correctness_passed = False
-if correctness.get("hostWatcherSamples", 0) < 30 or correctness.get("targetWatcherSamples", 0) < 30:
-    correctness_passed = False
 
 saturation = load(candidate / "saturation.json")
 if not isinstance(saturation.get("teardownMs"), (int, float)) or saturation["teardownMs"] < 0:
@@ -82,7 +98,7 @@ passed = {
     "mount-ready": current["mount-ready"]["p95Ms"] <= 1000,
     "first-byte": current["first-byte"]["p95Ms"]
         <= reference["first-byte"]["p95Ms"] + max(500, .15 * reference["first-byte"]["p95Ms"]),
-    "correctness": correctness_passed,
+    "path-correctness": path_correctness_passed,
     "saturation-teardown": saturation["teardownMs"] <= 5000,
 }
 metrics = []
@@ -98,12 +114,12 @@ for name in ("git-status", "package-scan", "atomic-host-to-guest", "atomic-guest
     metrics.append(metric)
 
 result = {
-    "schema": "hideout.shared-workspace-gate2-evaluation/v1",
+    "schema": "hideout.shared-workspace-gate2-evaluation/v2",
     "result": "passed" if all(passed.values()) else "failed",
     "thresholdsPassed": all(passed.values()),
     "fixtureSHA256": candidate_digest,
     "metrics": metrics,
-    "correctness": {"passed": correctness_passed, "observation": correctness},
+    "pathCorrectness": {"passed": path_correctness_passed, "observation": path_correctness},
     "saturation": {"passed": passed["saturation-teardown"], "observation": saturation,
                    "metadata": current["saturation-metadata"]},
 }

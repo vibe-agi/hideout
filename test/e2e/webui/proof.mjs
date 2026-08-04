@@ -36,6 +36,19 @@ const from = arg("--from");
 const to = arg("--to");
 const recordCount = Number(arg("--record-count", "0"));
 const outDir = arg("--out");
+const expectedPanels = Object.freeze([
+  "Overview",
+  "Timeline",
+  "Executions",
+  "Files",
+  "Network & DNS",
+  "Coverage",
+  "Risks",
+  "Operations",
+  "Migration",
+  "Configuration",
+  "Help"
+]);
 
 if (!chromePath || !uiURL || !baseURL || !currentToken ||
     !fixtureURL || !fixtureKey || !sessionID || !executionID ||
@@ -338,7 +351,9 @@ function auditExpression() {
     const selected = tabs.filter(
       (tab) => tab.getAttribute("aria-selected") === "true"
     );
-    if (tabs.length !== 10) violations.push("tab-count:" + tabs.length);
+    if (tabs.length !== ${expectedPanels.length}) {
+      violations.push("tab-count:" + tabs.length);
+    }
     if (selected.length !== 1) {
       violations.push("selected-tab-count:" + selected.length);
     }
@@ -546,18 +561,6 @@ async function main() {
       );
     }
 
-    const expectedPanels = [
-      "Overview",
-      "Timeline",
-      "Executions",
-      "Files",
-      "Network & DNS",
-      "Coverage",
-      "Risks",
-      "Operations",
-      "Configuration",
-      "Help"
-    ];
     const panelsVisible = await evalValue(cdp, `Array.from(
       document.querySelectorAll('[role="tab"]')
     ).map((tab) => tab.textContent.trim())`);

@@ -9,6 +9,6 @@
 │ file write · 3 events · exact attribution
 │ session ses_alpha · profile default
 │ coverage file Partial (fanotify-fallback)
-├ [1] Overview [2] Activity [3] Config [4] Operations [5] Help
+├ [1] Overview [2] Activity [3] Config [4] Operations [5] Migration [6] Help
 │ j/k select · Enter inspect · e environments · ? keys · q quit
 └

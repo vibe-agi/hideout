@@ -27,16 +27,25 @@ func TestMachineActivationContractCannotCarryWorkspaceOrExecutionFacts(t *testin
 
 func TestWorkspaceAttachmentContractIsModeSpecific(t *testing.T) {
 	root := t.TempDir()
+	workspaceID := "wrk_" + strings.Repeat("a", 64)
 	attachment := WorkspaceAttachmentSpec{
 		HostRoot: root, GuestRoot: "/workspace", Transport: WorkspaceTransportPortal,
 		Portal: &WorkspacePortalBinding{
-			PhysicalGuestRoot: "/hideout/workspaces/wrk_fixture",
+			PhysicalGuestRoot: "/hideout/workspaces/" + workspaceID,
 			Endpoint:          "host.lima.internal:43127", CredentialGuestPath: "/hideout/session/workspace/credential.bin",
 		},
 	}
 	if err := attachment.Validate(environment.ModeShared); err != nil {
 		t.Fatalf("shared portal attachment: %v", err)
 	}
+	if err := attachment.Validate(environment.ModeDedicatedPortal); err != nil {
+		t.Fatalf("dedicated Portal attachment: %v", err)
+	}
+	attachment.Portal.PhysicalGuestRoot = "/hideout/workspaces/wrk_fixture"
+	if err := attachment.Validate(environment.ModeShared); err == nil {
+		t.Fatal("shared portal attachment accepted a non-production workspace identity")
+	}
+	attachment.Portal.PhysicalGuestRoot = "/hideout/workspaces/" + workspaceID
 	if err := attachment.Validate(environment.ModeWorkspaceBound); err == nil {
 		t.Fatal("workspace-bound mode accepted a dynamic shared attachment")
 	}
@@ -47,6 +56,9 @@ func TestWorkspaceAttachmentContractIsModeSpecific(t *testing.T) {
 	}
 	if err := attachment.Validate(environment.ModeShared); err == nil {
 		t.Fatal("shared mode accepted a static project mapping")
+	}
+	if err := attachment.Validate(environment.ModeDedicatedPortal); err == nil {
+		t.Fatal("dedicated Portal mode accepted a static project mapping")
 	}
 }
 
@@ -63,6 +75,22 @@ func TestMachineActivationValidationRequiresSharedMachineStateWithoutProject(t *
 	spec.RuntimeRoot = ""
 	if err := spec.Validate(); err == nil {
 		t.Fatal("shared activation without retained machine state must fail")
+	}
+}
+
+func TestMachineActivationValidationRequiresDedicatedPortalStateWithoutProject(t *testing.T) {
+	root := t.TempDir()
+	spec := MachineActivationSpec{
+		EnvironmentID: "env_imported", ImageRef: environment.BuiltinBaseImage,
+		Profile: profile.Default("imported"), ProfileDir: root, RuntimeRoot: root,
+		Mode: environment.ModeDedicatedPortal,
+	}
+	if err := spec.Validate(); err != nil {
+		t.Fatalf("dedicated Portal machine activation: %v", err)
+	}
+	spec.EnvironmentID = ""
+	if err := spec.Validate(); err == nil {
+		t.Fatal("dedicated Portal activation without retained environment identity must fail")
 	}
 }
 

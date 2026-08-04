@@ -26,6 +26,7 @@ mkdir -p "$workspace"
 scripts/install-local.sh --prefix "$prefix" --store "$store" --backend native --network direct >"$tmp/install.out"
 
 arch="$(go env GOARCH)"
+host_os="$(go env GOOS)"
 for path in \
   "$prefix/bin/hideout" \
   "$prefix/bin/hideout-shim" \
@@ -33,6 +34,8 @@ for path in \
   "$prefix/bin/hideout-hostfsd-linux-$arch" \
   "$prefix/bin/hideout-session-supervisor-linux-$arch" \
   "$prefix/bin/hideout-observer-linux-$arch" \
+  "$prefix/bin/hideout-migration-adopt-linux-$arch" \
+  "$prefix/bin/hideout-migration-vz-adopt-$host_os-$arch" \
   "$prefix/bin/hideout-workspace-portal-linux-$arch"
 do
   if [ ! -x "$path" ]; then
@@ -46,7 +49,12 @@ test -f "$prefix/bin/hideout-shim-linux-$arch.manifest.json"
 test -f "$prefix/bin/hideout-hostfsd-linux-$arch.manifest.json"
 test -f "$prefix/bin/hideout-session-supervisor-linux-$arch.manifest.json"
 test -f "$prefix/bin/hideout-observer-linux-$arch.manifest.json"
+test -f "$prefix/bin/hideout-migration-adopt-linux-$arch.manifest.json"
+test -f "$prefix/bin/hideout-migration-vz-adopt-$host_os-$arch.manifest.json"
 test -f "$prefix/bin/hideout-workspace-portal-linux-$arch.manifest.json"
+"$prefix/bin/hideout-migration-vz-adopt-$host_os-$arch" --probe |
+  jq -e '.networkDeviceCount == 0 and .controlChannel == "virtiofs-private"' \
+    >/dev/null
 test -f "$store/install-state.json"
 test -f "$store/logs/init-audit.jsonl"
 test -f "$store/profiles/default/profile.json"
@@ -147,10 +155,38 @@ fi
 grep -q 'required Linux helper hideout-observer is missing' \
   "$tmp/missing-observer-stage.err"
 
+missing_adoption_stage="$tmp/package-stage-missing-migration-adopt"
+cp -R "$package_stage" "$missing_adoption_stage"
+rm "$missing_adoption_stage/hideout/bin/hideout-migration-adopt-linux-$arch"
+if scripts/package-local.sh --finalize "$missing_adoption_stage" \
+  --out "$tmp/missing-migration-adopt.tar.gz" \
+  >"$tmp/missing-migration-adopt-stage.out" \
+  2>"$tmp/missing-migration-adopt-stage.err"; then
+  echo "install-smoke: package finalization accepted a missing migration adoption helper" >&2
+  exit 1
+fi
+grep -q 'required Linux helper hideout-migration-adopt is missing' \
+  "$tmp/missing-migration-adopt-stage.err"
+
+missing_host_adoption_stage="$tmp/package-stage-missing-migration-vz-adopt"
+cp -R "$package_stage" "$missing_host_adoption_stage"
+rm "$missing_host_adoption_stage/hideout/bin/hideout-migration-vz-adopt-$host_os-$arch"
+if scripts/package-local.sh --finalize "$missing_host_adoption_stage" \
+  --out "$tmp/missing-migration-vz-adopt.tar.gz" \
+  >"$tmp/missing-migration-vz-adopt-stage.out" \
+  2>"$tmp/missing-migration-vz-adopt-stage.err"; then
+  echo "install-smoke: package finalization accepted a missing host migration executor" >&2
+  exit 1
+fi
+grep -q 'required host helper hideout-migration-vz-adopt is missing' \
+  "$tmp/missing-migration-vz-adopt-stage.err"
+
 scripts/package-local.sh --finalize "$package_stage" --out "$package_archive" >/dev/null
-jq -e --arg arch "$arch" '
+jq -e --arg arch "$arch" --arg host_os "$host_os" '
   (.layout.binaries | index("bin/hideout-session-supervisor-linux-" + $arch)) and
   (.layout.binaries | index("bin/hideout-observer-linux-" + $arch)) and
+  (.layout.binaries | index("bin/hideout-migration-adopt-linux-" + $arch)) and
+  (.layout.binaries | index("bin/hideout-migration-vz-adopt-" + $host_os + "-" + $arch)) and
   (.layout.binaries | index("bin/hideout-workspace-portal-linux-" + $arch)) and
   any(.files[];
     .path == "bin/hideout-session-supervisor-linux-" + $arch and
@@ -164,6 +200,20 @@ jq -e --arg arch "$arch" '
   any(.files[];
     .path == "bin/hideout-observer-linux-" + $arch + ".manifest.json" and
     .kind == "helper-manifest") and
+  any(.files[];
+    .path == "bin/hideout-migration-adopt-linux-" + $arch and
+    .kind == "linux-helper" and .executable == true) and
+  any(.files[];
+    .path == "bin/hideout-migration-adopt-linux-" + $arch + ".manifest.json" and
+    .kind == "helper-manifest") and
+  any(.files[];
+    .path == "bin/hideout-migration-vz-adopt-" + $host_os + "-" + $arch and
+    .kind == "binary" and .executable == true) and
+  any(.files[];
+    .path == "bin/hideout-migration-vz-adopt-" + $host_os + "-" + $arch + ".manifest.json" and
+    .kind == "helper-manifest") and
+  any(.files[];
+    .path == "third_party/vz/LICENSE" and .kind == "doc") and
   any(.files[];
     .path == "bin/hideout-workspace-portal-linux-" + $arch and
     .kind == "linux-helper" and .executable == true) and
@@ -196,6 +246,16 @@ if "$prefix/bin/hideout" package verify "$corrupt_helper" >"$tmp/corrupt-helper.
   exit 1
 fi
 grep -q 'package checksum mismatch for bin/hideout-session-supervisor-linux-' "$tmp/corrupt-helper.err"
+
+missing_host_helper="$tmp/package-missing-migration-vz-adopt"
+cp -R "$package_stage/hideout" "$missing_host_helper"
+rm "$missing_host_helper/bin/hideout-migration-vz-adopt-$host_os-$arch"
+if "$prefix/bin/hideout" package verify "$missing_host_helper" \
+  >"$tmp/missing-host-helper.out" 2>"$tmp/missing-host-helper.err"; then
+  echo "install-smoke: package verification accepted a missing host migration executor" >&2
+  exit 1
+fi
+grep -q 'hideout-migration-vz-adopt-' "$tmp/missing-host-helper.err"
 
 gate_completed=1
 echo "install-smoke: passed"

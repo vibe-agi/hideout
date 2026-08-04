@@ -12,6 +12,8 @@ import (
 
 	"github.com/vibe-agi/hideout/internal/daemon"
 	"github.com/vibe-agi/hideout/internal/manager"
+	"github.com/vibe-agi/hideout/internal/migration"
+	tuimodal "github.com/vibe-agi/hideout/internal/tui/modal"
 )
 
 const tuiConfigurationResponseMaxBytes = 2 << 20
@@ -252,6 +254,371 @@ func (client *tuiConfigurationClient) ApplySecret(
 			manager.ErrSecretProviderUnavailable
 	}
 	return client.secrets.Apply(ctx, request)
+}
+
+func (client *tuiConfigurationClient) ApplyMigrationAction(
+	ctx context.Context,
+	request tuimodal.MigrationActionRequest,
+) (manager.MigrationOperationProjection, error) {
+	operation := request.Operation
+	if operation.Validate() != nil || operation.TerminalReceipt != nil ||
+		ctx == nil {
+		return manager.MigrationOperationProjection{},
+			errors.New("migration action request is invalid")
+	}
+	actionRequest := manager.MigrationOperationActionAPIRequest{
+		Revision: operation.Revision,
+	}
+	action := string(request.Action)
+	switch request.Action {
+	case tuimodal.MigrationActionResume:
+		if len(request.Passphrase) == 0 || !operation.Recovery.Required ||
+			len(operation.Recovery.AllowedActions) != 1 ||
+			operation.Recovery.AllowedActions[0] != manager.MigrationRecoveryResume {
+			return manager.MigrationOperationProjection{},
+				errors.New("migration resume request is invalid")
+		}
+		handle, err := client.createMigrationResumeSecretInput(
+			ctx, operation, request.Passphrase,
+		)
+		if err != nil {
+			return manager.MigrationOperationProjection{}, err
+		}
+		actionRequest.SecretInputHandle = handle.Handle
+	case tuimodal.MigrationActionCancel:
+		if len(request.Passphrase) != 0 || operation.Recovery.Required {
+			return manager.MigrationOperationProjection{},
+				errors.New("migration cancellation request is invalid")
+		}
+		if operation.Kind == manager.MigrationOperationExport {
+			retain := request.RetainPartial
+			actionRequest.RetainPartial = &retain
+		}
+	case tuimodal.MigrationActionRecover:
+		if len(request.Passphrase) != 0 || !operation.Recovery.Required ||
+			len(operation.Recovery.AllowedActions) != 1 ||
+			operation.Recovery.AllowedActions[0] == manager.MigrationRecoveryResume ||
+			operation.Recovery.AllowedActions[0] == manager.MigrationRecoveryManual {
+			return manager.MigrationOperationProjection{},
+				errors.New("migration recovery request is invalid")
+		}
+		actionRequest.Action = operation.Recovery.AllowedActions[0]
+	default:
+		return manager.MigrationOperationProjection{},
+			errors.New("migration action is invalid")
+	}
+	payload, err := json.Marshal(actionRequest)
+	if err != nil {
+		return manager.MigrationOperationProjection{},
+			errors.New("encode migration action")
+	}
+	defer clear(payload)
+	var projection manager.MigrationOperationProjection
+	if err := client.request(
+		ctx,
+		"/api/v1/migration/operations/"+operation.OperationID+"/"+action,
+		payload,
+		"migration/operation",
+		false,
+		&projection,
+	); err != nil {
+		return manager.MigrationOperationProjection{}, err
+	}
+	if projection.Validate() != nil ||
+		projection.OperationID != operation.OperationID ||
+		projection.BundleID != operation.BundleID ||
+		projection.Kind != operation.Kind ||
+		projection.Revision < operation.Revision {
+		return manager.MigrationOperationProjection{},
+			errors.New("Hideout returned a migration result for a different operation")
+	}
+	return projection, nil
+}
+
+func (client *tuiConfigurationClient) createMigrationResumeSecretInput(
+	ctx context.Context,
+	operation manager.MigrationOperationProjection,
+	passphrase []byte,
+) (manager.MigrationSecretInputHandle, error) {
+	purpose := manager.MigrationSecretPurposeImport
+	if operation.Kind == manager.MigrationOperationExport {
+		purpose = manager.MigrationSecretPurposeExportResume
+	}
+	return client.createTUIMigrationSecretInput(ctx, manager.MigrationSecretInputAPIRequest{
+		Purpose: purpose, OperationID: operation.OperationID,
+		Passphrase: string(passphrase),
+	}, purpose, operation.BundleID)
+}
+
+func (client *tuiConfigurationClient) PlanMigrationExport(
+	ctx context.Context,
+	request migration.ExportRequest,
+	passphrase []byte,
+) (tuimodal.MigrationExportSession, error) {
+	if ctx == nil || len(passphrase) == 0 ||
+		len(passphrase) > migration.MaxPassphraseBytes {
+		return tuimodal.MigrationExportSession{},
+			errors.New("migration export passphrase is invalid")
+	}
+	handle, err := client.createTUIMigrationSecretInput(
+		ctx,
+		manager.MigrationSecretInputAPIRequest{
+			Purpose:    manager.MigrationSecretPurposeExportCreate,
+			BundlePath: request.OutputPath,
+			Passphrase: string(passphrase), Confirmation: string(passphrase),
+		},
+		manager.MigrationSecretPurposeExportCreate,
+		"",
+	)
+	if err != nil {
+		return tuimodal.MigrationExportSession{}, err
+	}
+	payload, err := json.Marshal(request)
+	if err != nil {
+		return tuimodal.MigrationExportSession{},
+			errors.New("encode migration export plan request")
+	}
+	defer clear(payload)
+	var plan migration.ExportPlan
+	if err := client.request(
+		ctx, "/api/v1/migration/export/plan", payload,
+		"migration/export/plan", false, &plan,
+	); err != nil {
+		return tuimodal.MigrationExportSession{}, err
+	}
+	if manager.VerifyMigrationExportPlan(plan) != nil ||
+		plan.Mode != request.Mode || plan.OutputPath != request.OutputPath {
+		return tuimodal.MigrationExportSession{},
+			errors.New("Hideout returned an export plan for different input")
+	}
+	return tuimodal.MigrationExportSession{
+		Plan: plan, SecretInputHandle: handle.Handle,
+	}, nil
+}
+
+func (client *tuiConfigurationClient) ApplyMigrationExport(
+	ctx context.Context,
+	session tuimodal.MigrationExportSession,
+) (manager.MigrationApplyResult, error) {
+	if ctx == nil || manager.VerifyMigrationExportPlan(session.Plan) != nil ||
+		session.SecretInputHandle == "" {
+		return manager.MigrationApplyResult{},
+			errors.New("migration export apply request is invalid")
+	}
+	idempotencyKey, err := newMigrationCLIIdempotencyKey()
+	if err != nil {
+		return manager.MigrationApplyResult{}, err
+	}
+	request := manager.MigrationExportApplyRequest{
+		Schema: manager.MigrationExportApplySchema, Plan: session.Plan,
+		Confirmation: manager.MigrationPlanConfirmation{
+			PlanDigest: session.Plan.PlanDigest,
+			AcceptedRiskAcknowledgements: append(
+				[]string(nil), session.Plan.RiskAcknowledgements...,
+			),
+		},
+		SecretInputHandle: session.SecretInputHandle,
+		IdempotencyKey:    idempotencyKey,
+	}
+	payload, err := json.Marshal(request)
+	if err != nil {
+		return manager.MigrationApplyResult{},
+			errors.New("encode migration export apply request")
+	}
+	defer clear(payload)
+	var result manager.MigrationApplyResult
+	if err := client.request(
+		ctx, "/api/v1/migration/export/apply", payload,
+		"migration/export/apply", false, &result,
+	); err != nil {
+		return manager.MigrationApplyResult{}, err
+	}
+	if !validTUIMigrationApplyResult(result) {
+		return manager.MigrationApplyResult{},
+			errors.New("Hideout returned an invalid migration export result")
+	}
+	return result, nil
+}
+
+func (client *tuiConfigurationClient) UnlockMigrationImport(
+	ctx context.Context,
+	bundlePath string,
+	passphrase []byte,
+) (tuimodal.MigrationImportSession, error) {
+	if ctx == nil || bundlePath == "" || len(passphrase) == 0 ||
+		len(passphrase) > migration.MaxPassphraseBytes {
+		return tuimodal.MigrationImportSession{},
+			errors.New("migration import unlock request is invalid")
+	}
+	inspectHandle, err := client.createTUIMigrationSecretInput(
+		ctx,
+		manager.MigrationSecretInputAPIRequest{
+			Purpose:    manager.MigrationSecretPurposeInspect,
+			BundlePath: bundlePath, Passphrase: string(passphrase),
+		},
+		manager.MigrationSecretPurposeInspect,
+		"",
+	)
+	if err != nil {
+		return tuimodal.MigrationImportSession{}, err
+	}
+	inspectRequest := manager.MigrationInspectAPIRequest{
+		BundlePath: bundlePath, SecretInputHandle: inspectHandle.Handle,
+	}
+	payload, err := json.Marshal(inspectRequest)
+	if err != nil {
+		return tuimodal.MigrationImportSession{},
+			errors.New("encode migration inspection request")
+	}
+	var inspection manager.MigrationReadOnlyInspection
+	requestErr := client.request(
+		ctx, "/api/v1/migration/import/inspect", payload,
+		"migration/import/inspect", false, &inspection,
+	)
+	clear(payload)
+	if requestErr != nil {
+		return tuimodal.MigrationImportSession{}, requestErr
+	}
+	if inspection.Inventory.Validate() != nil ||
+		inspection.Binding.BundleID != inspection.Inventory.BundleID {
+		return tuimodal.MigrationImportSession{},
+			errors.New("Hideout returned an invalid migration inventory")
+	}
+	importHandle, err := client.createTUIMigrationSecretInput(
+		ctx,
+		manager.MigrationSecretInputAPIRequest{
+			Purpose:    manager.MigrationSecretPurposeImport,
+			BundlePath: bundlePath, Passphrase: string(passphrase),
+		},
+		manager.MigrationSecretPurposeImport,
+		inspection.Binding.BundleID,
+	)
+	if err != nil {
+		return tuimodal.MigrationImportSession{}, err
+	}
+	return tuimodal.MigrationImportSession{
+		Inspection: inspection, SecretInputHandle: importHandle.Handle,
+	}, nil
+}
+
+func (client *tuiConfigurationClient) PlanMigrationImport(
+	ctx context.Context,
+	draft migration.ImportDraft,
+	secretInputHandle string,
+) (migration.ImportPlan, error) {
+	if ctx == nil || secretInputHandle == "" {
+		return migration.ImportPlan{},
+			errors.New("migration import plan request is invalid")
+	}
+	request := manager.MigrationImportPlanAPIRequest{
+		ImportDraft: draft, SecretInputHandle: secretInputHandle,
+	}
+	payload, err := json.Marshal(request)
+	if err != nil {
+		return migration.ImportPlan{},
+			errors.New("encode migration import plan request")
+	}
+	defer clear(payload)
+	var plan migration.ImportPlan
+	if err := client.request(
+		ctx, "/api/v1/migration/import/plan", payload,
+		"migration/import/plan", false, &plan,
+	); err != nil {
+		return migration.ImportPlan{}, err
+	}
+	if manager.VerifyMigrationImportPlan(plan) != nil ||
+		plan.BundlePath != draft.BundlePath || plan.BundleBinding != draft.BundleBinding {
+		return migration.ImportPlan{},
+			errors.New("Hideout returned an import plan for different input")
+	}
+	return plan, nil
+}
+
+func (client *tuiConfigurationClient) ApplyMigrationImport(
+	ctx context.Context,
+	plan migration.ImportPlan,
+	secretInputHandle string,
+) (manager.MigrationApplyResult, error) {
+	if ctx == nil || manager.VerifyMigrationImportPlan(plan) != nil ||
+		secretInputHandle == "" || len(plan.Blockers) != 0 ||
+		!plan.Compatibility.Available {
+		return manager.MigrationApplyResult{},
+			errors.New("migration import apply request is invalid")
+	}
+	idempotencyKey, err := newMigrationCLIIdempotencyKey()
+	if err != nil {
+		return manager.MigrationApplyResult{}, err
+	}
+	request := manager.MigrationImportApplyRequest{
+		Schema: manager.MigrationImportApplySchema, Plan: plan,
+		Confirmation: manager.MigrationPlanConfirmation{
+			PlanDigest: plan.PlanDigest,
+			AcceptedRiskAcknowledgements: append(
+				[]string(nil), plan.RiskAcknowledgements...,
+			),
+			ApprovedAuthorityProposalIDs: migrationApprovedAuthorityProposalIDsForCLI(
+				plan.AuthorityActions,
+			),
+		},
+		SecretInputHandle: secretInputHandle,
+		IdempotencyKey:    idempotencyKey,
+	}
+	payload, err := json.Marshal(request)
+	if err != nil {
+		return manager.MigrationApplyResult{},
+			errors.New("encode migration import apply request")
+	}
+	defer clear(payload)
+	var result manager.MigrationApplyResult
+	if err := client.request(
+		ctx, "/api/v1/migration/import/apply", payload,
+		"migration/import/apply", false, &result,
+	); err != nil {
+		return manager.MigrationApplyResult{}, err
+	}
+	if !validTUIMigrationApplyResult(result) {
+		return manager.MigrationApplyResult{},
+			errors.New("Hideout returned an invalid migration import result")
+	}
+	return result, nil
+}
+
+func (client *tuiConfigurationClient) createTUIMigrationSecretInput(
+	ctx context.Context,
+	request manager.MigrationSecretInputAPIRequest,
+	expectedPurpose manager.MigrationSecretPurpose,
+	expectedBundleID migration.BundleID,
+) (manager.MigrationSecretInputHandle, error) {
+	payload, err := json.Marshal(request)
+	request.Passphrase = ""
+	request.Confirmation = ""
+	if err != nil {
+		return manager.MigrationSecretInputHandle{},
+			errors.New("encode protected migration input")
+	}
+	defer clear(payload)
+	var handle manager.MigrationSecretInputHandle
+	if err := client.request(
+		ctx,
+		"/api/v1/migration/secret-input",
+		payload,
+		"migration/secret-input",
+		false,
+		&handle,
+	); err != nil {
+		return manager.MigrationSecretInputHandle{}, err
+	}
+	if handle.Validate() != nil || handle.Purpose != expectedPurpose ||
+		(expectedBundleID != "" && handle.BundleID != expectedBundleID) {
+		return manager.MigrationSecretInputHandle{},
+			errors.New("Hideout returned an invalid protected migration handle")
+	}
+	return handle, nil
+}
+
+func validTUIMigrationApplyResult(result manager.MigrationApplyResult) bool {
+	return strings.HasPrefix(result.OperationID, "op_") &&
+		len(result.OperationID) >= 12 && result.State != "" && result.Next != ""
 }
 
 func (client *tuiConfigurationClient) PlanEnvironment(

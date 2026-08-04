@@ -114,11 +114,11 @@ func TestBrowserConsoleHasKeyboardAccessibleBoundedPresentation(t *testing.T) {
 			t.Fatalf("browser console shell missing accessibility marker %q", marker)
 		}
 	}
-	if got := strings.Count(html, `role="tab"`); got != 10 {
-		t.Fatalf("tab count=%d want=10", got)
+	if got := strings.Count(html, `role="tab"`); got != 11 {
+		t.Fatalf("tab count=%d want=11", got)
 	}
-	if got := strings.Count(html, `role="tabpanel"`); got != 10 {
-		t.Fatalf("tabpanel count=%d want=10", got)
+	if got := strings.Count(html, `role="tabpanel"`); got != 11 {
+		t.Fatalf("tabpanel count=%d want=11", got)
 	}
 	for _, marker := range []string{
 		`case "ArrowRight":`,
@@ -152,6 +152,7 @@ func TestBrowserConsoleHasKeyboardAccessibleBoundedPresentation(t *testing.T) {
 		"client.js",
 		"activity.js",
 		"config.js",
+		"migration.js",
 		"presentation.js",
 		"app.js",
 	} {

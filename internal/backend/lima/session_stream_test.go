@@ -40,6 +40,30 @@ func TestSupervisorStartControlBindsProjectionExpectation(t *testing.T) {
 	}
 }
 
+func TestSupervisorStartControlBindsPortalTargetPWDToLogicalAlias(t *testing.T) {
+	session := projectionReadySessionFixture()
+	workspaceID := "wrk_" + strings.Repeat("a", 64)
+	session.Workspace = backend.WorkspaceAttachmentSpec{
+		GuestRoot: "/workspace", Transport: backend.WorkspaceTransportPortal,
+		Portal: &backend.WorkspacePortalBinding{
+			PhysicalGuestRoot: "/hideout/workspaces/" + workspaceID,
+		},
+	}
+	start, err := supervisorStartControl(
+		session,
+		[]string{"bash", "--noprofile", "--norc", "-c", "pwd -L"},
+		[]string{"PATH=/usr/bin:/bin", "PWD=/caller-controlled"},
+		backend.RunStreams{},
+		nil,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := start.Env["PWD"]; got != "/workspace" {
+		t.Fatalf("Portal target PWD=%q want logical attachment alias", got)
+	}
+}
+
 func TestApplySupervisorProjectionReadinessRejectsForeignOrIncompleteProof(t *testing.T) {
 	session := projectionReadySessionFixture()
 	valid := &sessionwire.SupervisorProjectionReadinessReady{

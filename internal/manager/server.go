@@ -1838,7 +1838,7 @@ function recomputeWorkspaceMachine(environmentId) {
   });
   const active = views.filter(function(row) { return workspaceViewActive(row.workspaceViewState); }).length;
   overview.environments = (overview.environments || []).map(function(row) {
-    if (!row || row.id !== environmentId || row.mode !== "shared") return row;
+    if (!row || row.id !== environmentId || (row.mode !== "shared" && row.mode !== "dedicated-portal")) return row;
     return Object.assign({}, row, {
       activeSessions: active,
       activeWorkspaceViews: active,

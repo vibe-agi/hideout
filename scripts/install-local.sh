@@ -86,6 +86,7 @@ source="$(cd "$source" && pwd -P)"
 hideout="$prefix/bin/hideout"
 shim="$prefix/bin/hideout-shim"
 arch="$(go env GOARCH)"
+host_os="$(go env GOOS)"
 build_version="${HIDEOUT_VERSION:-dev}"
 git_commit="$(git -C "$source" rev-parse HEAD 2>/dev/null || printf 'unknown')"
 built_at="$(hideout_build_timestamp)"
@@ -101,6 +102,15 @@ go -C "$source" build -trimpath -ldflags "${ldflags[*]}" \
 
 echo "install-local: building host command shim into $shim"
 go -C "$source" build -trimpath -o "$shim" ./cmd/hideout-shim
+
+if [ "$host_os" = "darwin" ] && [ "$arch" = "arm64" ]; then
+  migration_vz="$prefix/bin/hideout-migration-vz-adopt-$host_os-$arch"
+  echo "install-local: building zero-network VZ migration adoption executor into $migration_vz"
+  go -C "$source" run ./internal/helperbin/cmd/build-migration-vz-adopt \
+    --out "$migration_vz" \
+    --goarch "$arch" \
+    --source "$source" >/dev/null
+fi
 
 echo "install-local: building linux guest shim for $arch"
 "$hideout" shim build-linux \
@@ -123,6 +133,12 @@ go -C "$source" run ./internal/helperbin/cmd/build-session-supervisor \
 echo "install-local: building linux workload observer for $arch"
 go -C "$source" run ./internal/helperbin/cmd/build-observer \
   --out "$prefix/bin/hideout-observer-linux-$arch" \
+  --goarch "$arch" \
+  --source "$source" >/dev/null
+
+echo "install-local: building linux migration adoption helper for $arch"
+go -C "$source" run ./internal/helperbin/cmd/build-migration-adopt \
+  --out "$prefix/bin/hideout-migration-adopt-linux-$arch" \
   --goarch "$arch" \
   --source "$source" >/dev/null
 

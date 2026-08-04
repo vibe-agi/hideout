@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
+ROOT="$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)"
 cd "$ROOT"
 . "$ROOT/scripts/lib/homebrew-formula.sh"
 
@@ -14,9 +14,11 @@ grep -q 'docs/first-run-alpha.md' README.md
 grep -q 'first-run-alpha.md' docs/README.md
 
 grep -q 'brew install vibe-agi/tap/hideout' "$doc"
+# The command substitution is intentionally matched as documentation text.
+# shellcheck disable=SC2016
 grep -q 'hideout package verify "$(brew --prefix hideout)"' "$doc"
 grep -q '^hideout setup$' "$doc"
-grep -q 'hideout init \\' "$doc"
+grep -Fq "hideout init \\" "$doc"
 grep -q -- '--profile default' "$doc"
 grep -q -- '--network direct' "$doc"
 grep -q -- '--template privacy' "$doc"
@@ -104,6 +106,7 @@ fi
 for helper in \
   hideout-dns-stub-linux-arm64 \
   hideout-hostfsd-linux-arm64 \
+  hideout-migration-adopt-linux-arm64 \
   hideout-observer-linux-arm64 \
   hideout-session-supervisor-linux-arm64 \
   hideout-workspace-portal-linux-arm64 \

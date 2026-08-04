@@ -68,8 +68,27 @@ func TestOperatorSnapshotStateStartsOnNewestSessionAndPreservesReadOnlyHealth(t 
 			ActiveSegmentBytes:     8 << 20,
 			Owners:                 1, Segments: 1,
 		},
-		Risks:        []manager.RiskFinding{},
-		Operations:   []manager.Operation{},
+		Risks:      []manager.RiskFinding{},
+		Operations: []manager.Operation{},
+		Migrations: []manager.MigrationOperationProjection{{
+			Schema:      manager.MigrationOperationProjectionSchema,
+			OperationID: "op_migrationconsole1", Revision: 1,
+			BundleID: "migb_console1234", Kind: manager.MigrationOperationImport,
+			State:      manager.MigrationPhaseMaterializing,
+			PhaseLabel: "Copying persistent data",
+			Progress: manager.MigrationProgressProjection{
+				LogicalTotalKnown: true, CompletedLogicalBytes: 1,
+				TotalLogicalBytes: 2, ComponentsComplete: 1, ComponentsTotal: 2,
+				PhaseStartedAt: now, CheckpointAt: now,
+				ElapsedSeconds: 1, RemainingKnown: true, RemainingSeconds: 1,
+			},
+			Recovery: manager.MigrationRecoveryProjection{
+				Code:           "migration.operation.none",
+				AllowedActions: []manager.MigrationRecoveryAction{},
+			},
+			Warnings: []manager.MigrationNotice{},
+			Effects:  []manager.MigrationEffectProjection{},
+		}},
 		Capabilities: []manager.OperatorCapabilityProjection{},
 		NextActions:  []string{"activity.inspect"},
 	}
@@ -98,6 +117,10 @@ func TestOperatorSnapshotStateStartsOnNewestSessionAndPreservesReadOnlyHealth(t 
 	}
 	if !state.ReadOnly || state.StreamHealth.State != HealthDaemonless {
 		t.Fatalf("daemon-less state must be explicit and read-only: %+v", state)
+	}
+	if len(state.Migrations) != 1 ||
+		state.Migrations[0].OperationID != "op_migrationconsole1" {
+		t.Fatalf("migration projection was not preserved: %+v", state.Migrations)
 	}
 	if len(state.ActivityRetention) != 1 ||
 		state.ActivityRetention[0].MaxAgeSeconds != 3600 ||

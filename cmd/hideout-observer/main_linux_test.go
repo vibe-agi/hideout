@@ -19,6 +19,8 @@ import (
 
 func TestObserverRegistersHeartbeatsAndStopsOnSupervisorEOF(t *testing.T) {
 	config := observerTestConfig(t)
+	workspace := observerWorkspaceBinding(t, "a")
+	config.Workspace = &workspace
 	collectors := newObserverTestCollectors()
 	collectors.stop = func() {
 		collectors.counters = observerDropCounters{
@@ -64,8 +66,12 @@ func TestObserverRegistersHeartbeatsAndStopsOnSupervisorEOF(t *testing.T) {
 				return nil
 			},
 			OpenCollectors: func(
-				config observerCollectorConfig,
+				collectorConfig observerCollectorConfig,
 			) (observerCollectorRuntime, error) {
+				if collectorConfig.Workspace == nil ||
+					collectorConfig.Workspace.WorkspaceID != workspace.WorkspaceID {
+					t.Fatalf("collector workspace = %#v", collectorConfig.Workspace)
+				}
 				return collectors, nil
 			},
 			Now:         func() time.Time { return time.Unix(1, 0).UTC() },
@@ -371,16 +377,24 @@ func TestObserverConfigIsStrictAndBounded(t *testing.T) {
 		"--generation", "2",
 		"--helper-digest", config.ExpectedDigest,
 		"--heartbeat", "250ms",
+		"--workspace-id", "wrk_" + strings.Repeat("a", 64),
+		"--workspace-logical-root", "/workspace",
+		"--workspace-physical-root", "/hideout/workspaces/wrk_" + strings.Repeat("a", 64),
 	}
 	parsed, err := parseObserverConfig(args)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if parsed.Binding.CgroupID != 3141 || parsed.Heartbeat != 250*time.Millisecond {
+	if parsed.Binding.CgroupID != 3141 || parsed.Heartbeat != 250*time.Millisecond ||
+		parsed.Workspace == nil || parsed.Workspace.WorkspaceID != "wrk_"+strings.Repeat("a", 64) {
 		t.Fatalf("parsed=%+v", parsed)
 	}
 	if _, err := parseObserverConfig(append(args, "target-controlled")); err == nil {
 		t.Fatal("observer accepted a positional argument")
+	}
+	partial := append([]string(nil), args[:len(args)-4]...)
+	if _, err := parseObserverConfig(partial); err == nil {
+		t.Fatal("observer accepted a partial workspace identity")
 	}
 }
 

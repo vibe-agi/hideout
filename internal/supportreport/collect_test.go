@@ -212,6 +212,49 @@ func writeVerifiedInstalledPackage(t *testing.T) (string, string) {
 		"GPL-2.0-only\n",
 		false,
 	)
+	migrationRel := "bin/" + helperbin.LinuxMigrationAdoptCommand + "-linux-" + runtime.GOARCH
+	writeFile(migrationRel, "linux-helper", "#!/bin/sh\n", true)
+	migrationSum := files[len(files)-1].SHA256
+	migrationManifest, err := json.Marshal(helperbin.Manifest{
+		Version: helperbin.ManifestVersion, Command: helperbin.LinuxMigrationAdoptCommand,
+		TargetOS: "linux", TargetArch: runtime.GOARCH,
+		Artifact: filepath.Base(migrationRel), SHA256: migrationSum,
+		Builder: "go build -trimpath", BuiltAt: "2026-07-26T00:00:00Z",
+		License:   helperbin.LinuxMigrationAdoptLicense,
+		BuildMode: helperbin.LinuxMigrationAdoptBuildMode, PackageOwned: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeFile(
+		migrationRel+".manifest.json",
+		"helper-manifest",
+		string(migrationManifest)+"\n",
+		false,
+	)
+	hostMigrationRel := "bin/" + helperbin.HostMigrationVZAdoptCommand + "-darwin-arm64"
+	writeFile(hostMigrationRel, "binary", "#!/bin/sh\n", true)
+	hostMigrationSum := files[len(files)-1].SHA256
+	hostMigrationManifest, err := json.Marshal(helperbin.Manifest{
+		Version: helperbin.ManifestVersion, Command: helperbin.HostMigrationVZAdoptCommand,
+		TargetOS: "darwin", TargetArch: "arm64", Artifact: filepath.Base(hostMigrationRel),
+		SHA256: hostMigrationSum, Builder: "go build -mod=readonly -trimpath",
+		BuiltAt:         "2026-07-26T00:00:00Z",
+		UpstreamModule:  helperbin.HostMigrationVZAdoptUpstreamModule,
+		UpstreamVersion: helperbin.HostMigrationVZAdoptUpstreamVersion,
+		License:         helperbin.HostMigrationVZAdoptLicense,
+		BuildMode:       helperbin.HostMigrationVZAdoptBuildMode, PackageOwned: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeFile(
+		hostMigrationRel+".manifest.json", "helper-manifest",
+		string(hostMigrationManifest)+"\n", false,
+	)
+	writeFile(
+		"share/hideout/third_party/vz/LICENSE", "doc", "Apache-2.0 license\n", false,
+	)
 	componentContract, err := json.Marshal(
 		packagekit.ExpectedPackageComponentContract(),
 	)

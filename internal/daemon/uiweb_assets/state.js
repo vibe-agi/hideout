@@ -59,6 +59,7 @@
    *   coverage:Array<Object>,
    *   risks:Array<Object>,
    *   operations:Array<Object>,
+   *   migrations:Array<Object>,
    *   capabilities:Array<Object>,
    *   nextActions:Array<string>,
    *   transitions?:Array<Object>,
@@ -144,7 +145,7 @@
     }
     for (const name of [
       "profiles", "sessions", "environments", "activity", "coverage", "risks",
-      "operations", "capabilities", "nextActions"
+      "operations", "migrations", "capabilities", "nextActions"
     ]) {
       if (!Array.isArray(snapshot[name])) {
         throw new Error(`snapshot ${name} is invalid`);
@@ -576,6 +577,7 @@
       coverage: [],
       risks: [],
       operations: [],
+      migrations: [],
       capabilities: [],
       nextActions: []
     };

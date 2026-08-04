@@ -95,12 +95,12 @@ func JoinFields(unicode bool, values ...string) string {
 }
 
 func Tabs(unicode bool, limit int) string {
-	first := "[1] Overview [2] Activity [3] Config [4] Operations [5] Help"
+	first := "[1] Overview [2] Activity [3] Config [4] Operations [5] Migration [6] Help"
 	if unicode {
-		first = "[1] Overview [2] Activity [3] Config [4] Operations [5] Help"
+		first = "[1] Overview [2] Activity [3] Config [4] Operations [5] Migration [6] Help"
 	}
-	if limit > 0 && limit < 72 {
-		return "[1] Overview [2] Activity [3] Config\n[4] Operations [5] Help"
+	if limit > 0 && limit < 88 {
+		return "[1] Overview [2] Activity [3] Config\n[4] Operations [5] Migration [6] Help"
 	}
 	return first
 }

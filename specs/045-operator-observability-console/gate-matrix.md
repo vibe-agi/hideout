@@ -31,9 +31,10 @@ or implicitly passing check.
 | Package component inventory | `scripts/gates/package-components.sh` | `.artifacts/045/package-components/` | Active |
 | Mutation proofs and local static/race gates | `scripts/mutation/045/run-negative-fixtures.sh` then `scripts/gates/release-candidate.sh` | `.artifacts/045/local/` | Active and passing locally (T152): 46 source-overlay production mutants and 46 judge-negative fixtures; exact clean-candidate binding remains T163 |
 | Performance/quota | `HIDEOUT_PERFORMANCE_QUIET_HOST_CONFIRMED=1 scripts/gates/release-candidate-performance.sh`; evidence-only follow-up: `scripts/release/revalidate-performance-evidence.sh` | `.artifacts/045/performance/run-20260801T151445Z-10802/summary.json` (`sha256:50b2d6769126e46f2302b6b4f059919beda60658626154bceefd2e83dd58904b`) plus an exact-candidate reuse receipt when applicable | Active and passing for clean source commit `01e018723ad83ec6f1d3a2e4378eb6c8a08faee2`: thirty real-Lima samples plus two warmups produced 4.605% target-workload CPU median overhead with a 4.884% one-sided 95% upper bound, and 4.474% paired elapsed median overhead with a 4.841% upper bound. All attach, observer CPU/RSS, loss, quota, query/render, daemon/TUI, and browser budgets passed; 802 continuous samples found no blocking contention. The run binds a stable 1,754-file source manifest and 545 private artifacts. Reuse is permitted only through the versioned evidence-only impact receipt; any product or normalized measurement change requires a fresh run. |
-| Package build | `scripts/release/build-candidate.sh` | `.artifacts/045/package/` | Active (T158): fail-closed clean-tree gate, two independent Go caches, byte-identical archive/manifest/tree proof, exact manifest-derived package inventory, all 9 Go binaries and 6 helper manifests, every repository schema, 8 embedded browser assets, runtime catalog/contract/artifact binding, and final-binary advisory scans. The exact current counts are taken only from the final clean candidate receipt. |
+| Package build | `scripts/release/build-candidate.sh` | `.artifacts/045/package/` | Active (T158): fail-closed clean-tree gate, two independent Go caches, byte-identical archive/manifest/tree proof, exact manifest-derived package inventory, every manifest-listed Go binary, helper manifest, schema, and embedded browser asset, runtime catalog/contract/artifact binding, and final-binary advisory scans. Exact counts are taken only from the final clean candidate receipt. |
+| Portable migration, exact package | `scripts/gates/migration-lima.sh --candidate-result .artifacts/045/package/result.json --out .artifacts/045/migration-lima` | `.artifacts/045/migration-lima/` | Active implementation and semantic preflight; the exact clean candidate must still produce the three-Safe-Clone/one-Exact real-Lima evidence required by Feature 046 before collection. |
 | Install/upgrade/uninstall/reinstall | `scripts/release/test-package-lifecycle.sh` | `.artifacts/045/package-lifecycle/` | Active (T159): consumes the exact T158 archive without rebuilding; verifies the checked-in immutable `v0.1.0-alpha.3` receipt/download, clean install, macOS Keychain and legacy-export guidance, same-candidate reinstall, exact temporary legacy-store discard, old-version upgrade, normal uninstall absence, durable-state/unrelated-file preservation, source stability, private evidence modes/digests, and local-only status. A disposable exact-clean implementation validation passed all 11 lifecycle checks with 23 retained artifacts; accepted main-candidate evidence remains intentionally absent until T163/T171. |
-| Evidence binding | `scripts/release/collect-evidence.sh` | `.artifacts/045/evidence.json` and `.artifacts/045/evidence.json.sha256` | Active (T163 implementation): independently resolves every private pointer and digest, extracts and verifies the exact package, validates all 11 required gate identities, and emits package-bound/installed-local/final-ready stages. Final acceptance still requires one clean T171 run. |
+| Evidence binding | `scripts/release/collect-evidence.sh` | `.artifacts/045/evidence.json` and `.artifacts/045/evidence.json.sha256` | Active (T163 implementation): independently resolves every private pointer and digest, extracts and verifies the exact package, validates all 12 required gate identities, and emits package-bound/installed-local/final-ready stages. Final acceptance still requires one clean T171 run. |
 | Installed-machine closure | `scripts/release/install-local-candidate.sh --yes-discard-legacy-data` | `.artifacts/045/local-install/` | Active (T164 implementation): consumes the accepted archive without rebuilding, constrains destructive scope to the recognized install and exact current-user store, exercises setup/secret/connect/proxied run/Help/TUI/WebUI/clean/update/uninstall/reinstall, scans retained state for transient secrets, and leaves the exact candidate installed with a fresh direct profile, no environment, and a stopped daemon. Final acceptance requires the exact clean candidate run. |
 | Publication absence | `scripts/release/verify-publication-absence.sh` | `.artifacts/045/publication-absence/` | Active (T165 implementation): read-only double observations require tag absence, an exact GitHub Release 404, stable remote formula bytes without candidate material, and an unchanged clean local tap. This gate has no publication authority and its point-in-time receipt must match the exact candidate archive. |
 | Final closure | `scripts/release/collect-evidence.sh --require-closure` | `.artifacts/045/evidence.json`, detached digest, and both closure receipts | Active: exits zero only when source, candidate, installed binary, all gates, local-install receipt, and publication-absence receipt are fresh, exact, private, schema-valid, digest-valid, and passing. |
@@ -51,6 +52,9 @@ HIDEOUT_PERFORMANCE_QUIET_HOST_CONFIRMED=1 \
   scripts/gates/release-candidate-performance.sh
 scripts/gates/release-candidate-lima.sh
 scripts/release/build-candidate.sh
+scripts/gates/migration-lima.sh \
+  --candidate-result .artifacts/045/package/result.json \
+  --out .artifacts/045/migration-lima
 scripts/release/test-package-lifecycle.sh
 scripts/release/collect-evidence.sh
 scripts/release/install-local-candidate.sh --yes-discard-legacy-data
@@ -58,10 +62,10 @@ scripts/release/verify-publication-absence.sh
 scripts/release/collect-evidence.sh --require-closure
 ```
 
-The package is built only after source-level gates pass. Package lifecycle
-tests and installed-machine closure consume that exact artifact; they do not
-rebuild it. Evidence collection rejects a commit, package digest, helper
-digest, runtime digest, closure schema, closure artifact, or timestamp that
+The package is built only after source-level gates pass. Portable migration,
+package lifecycle tests, and installed-machine closure consume that exact
+artifact; they do not rebuild it. Evidence collection rejects a commit,
+package digest, helper digest, runtime digest, closure schema, closure artifact, or timestamp that
 differs from the preceding lanes. The first collection records the
 package-bound stage; only the final `--require-closure` collection may record
 `final-ready`.

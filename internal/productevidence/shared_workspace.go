@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"maps"
 	"math"
 	"slices"
 	"strconv"
@@ -38,6 +39,54 @@ var requiredSharedWorkspaceBehaviorChecks = []string{
 	"restartNoReadoption",
 	"packagedHelperVerified",
 	"hostPathRedacted",
+}
+
+var requiredSharedWorkspaceBehaviorV2Checks = append(
+	append([]string(nil), requiredSharedWorkspaceBehaviorChecks...),
+	"logicalPhysicalAlias",
+	"projectStateSeparated",
+	"siblingPhysicalRootDenied",
+	"pathJudgeNegativeFixture",
+)
+
+var requiredSharedWorkspacePathChecks = []string{
+	"productionWorkspaceIdentity",
+	"logicalPhysicalSameObject",
+	"logicalWritePhysicalRead",
+	"physicalWriteLogicalRead",
+	"atomicRenameAcrossAliases",
+	"modeAcrossAliases",
+	"flushAcrossAliases",
+	"deleteAcrossAliases",
+	"repeatedDeleteAcrossAliases",
+	"logicalPwdStable",
+	"physicalCwdOpaque",
+	"nestedCdStable",
+	"subprocessCwdOpaque",
+	"distinctRootProjectState",
+	"sameRootProjectStateStable",
+	"siblingPhysicalRootDenied",
+	"goLogicalPwdAliasClassified",
+	"boundedGitSafeDirectories",
+	"preserveModeSharedRejected",
+	"externalGitMetadataRejected",
+	"resolvedFileAuditLogical",
+	"relativeFileAliasExplicit",
+	"processAuditLogical",
+	"processCwdUnavailableExplicit",
+	"physicalArgvCaptureLimitationExplicit",
+	"siblingArgvFailClosed",
+	"physicalPathAbsentFromActivity",
+}
+
+var sharedWorkspacePathLimitations = []string{
+	"process-cwd-unavailable",
+	"physical-workspace-argv-exceeds-kernel-capture-width",
+	"relative-workspace-file-path-alias",
+}
+
+var sharedWorkspacePathTools = []string{
+	"bash", "claude", "codex", "git", "go", "node", "python",
 }
 
 var requiredSharedWorkspaceRelationChecks = []string{
@@ -157,6 +206,25 @@ type sharedWorkspaceCorrectnessEvidence struct {
 	TargetWatcherSamples       int    `json:"targetWatcherSamples"`
 }
 
+type sharedWorkspacePathCorrectnessEvidence struct {
+	Schema               string          `json:"schema"`
+	Status               string          `json:"status"`
+	Tools                []string        `json:"tools"`
+	RepresentativeAgents []string        `json:"representativeAgents"`
+	Limitations          []string        `json:"limitations"`
+	Checks               map[string]bool `json:"checks"`
+}
+
+type sharedWorkspaceCorrectnessSummary struct {
+	Passed      bool                               `json:"passed"`
+	Observation sharedWorkspaceCorrectnessEvidence `json:"observation"`
+}
+
+type sharedWorkspacePathCorrectnessSummary struct {
+	Passed      bool                                   `json:"passed"`
+	Observation sharedWorkspacePathCorrectnessEvidence `json:"observation"`
+}
+
 type sharedWorkspaceSampleSummary struct {
 	Samples  int     `json:"samples"`
 	MedianMS float64 `json:"medianMs"`
@@ -222,12 +290,10 @@ type sharedWorkspacePerformanceEvidence struct {
 		FirstByteBaselineAllowance   float64 `json:"firstByteBaselineAllowance"`
 		SaturationTeardownMS         float64 `json:"saturationTeardownMs"`
 	} `json:"methodology"`
-	Metrics     []sharedWorkspacePerformanceMetric `json:"metrics"`
-	Correctness struct {
-		Passed      bool                               `json:"passed"`
-		Observation sharedWorkspaceCorrectnessEvidence `json:"observation"`
-	} `json:"correctness"`
-	Saturation struct {
+	Metrics         []sharedWorkspacePerformanceMetric     `json:"metrics"`
+	Correctness     *sharedWorkspaceCorrectnessSummary     `json:"correctness,omitempty"`
+	PathCorrectness *sharedWorkspacePathCorrectnessSummary `json:"pathCorrectness,omitempty"`
+	Saturation      struct {
 		Passed      bool `json:"passed"`
 		Observation struct {
 			TeardownMS float64 `json:"teardownMs"`
@@ -241,7 +307,8 @@ type sharedWorkspacePerformanceEvidence struct {
 		Fixture                   sharedWorkspaceArtifactDigest            `json:"fixture"`
 		FilesystemControlManifest sharedWorkspaceArtifactDigest            `json:"filesystemControlManifest"`
 		PairedSamples             sharedWorkspaceArtifactDigest            `json:"pairedSamples"`
-		Correctness               sharedWorkspaceArtifactDigest            `json:"correctness"`
+		Correctness               *sharedWorkspaceArtifactDigest           `json:"correctness,omitempty"`
+		PathCorrectness           *sharedWorkspaceArtifactDigest           `json:"pathCorrectness,omitempty"`
 		Saturation                sharedWorkspaceArtifactDigest            `json:"saturation"`
 		ResearchDecision          sharedWorkspaceArtifactDigest            `json:"researchDecision"`
 	} `json:"artifacts"`
@@ -256,7 +323,8 @@ func validateSharedWorkspaceBehaviorArtifact(refs []ArtifactRef, artifacts map[s
 	if err := decodeStrictEvidence(data, &evidence); err != nil {
 		return fmt.Errorf("shared-workspace behavior evidence: %w", err)
 	}
-	if evidence.Schema != "hideout.shared-workspace-real-gate2/v1" || evidence.Status != "passed" ||
+	if (evidence.Schema != "hideout.shared-workspace-real-gate2/v1" &&
+		evidence.Schema != "hideout.shared-workspace-real-gate2/v2") || evidence.Status != "passed" ||
 		evidence.Backend != "lima" || evidence.HostOS != "darwin" || evidence.HostArch != "arm64" ||
 		evidence.Transport != "workspace-portal" {
 		return errors.New("shared-workspace behavior identity, platform, or transport is invalid")
@@ -267,16 +335,25 @@ func validateSharedWorkspaceBehaviorArtifact(refs []ArtifactRef, artifacts map[s
 	if err := validateSharedWorkspacePackageAndRuntime(evidence.PackageIdentity, evidence.Runtime, expectedCommit, expectedPackage, expectedRuntime); err != nil {
 		return err
 	}
-	if err := validateExactBooleanChecks("shared-workspace behavior", evidence.Checks, requiredSharedWorkspaceBehaviorChecks); err != nil {
+	requiredChecks := requiredSharedWorkspaceBehaviorChecks
+	if evidence.Schema == "hideout.shared-workspace-real-gate2/v2" {
+		requiredChecks = requiredSharedWorkspaceBehaviorV2Checks
+	}
+	if err := validateExactBooleanChecks("shared-workspace behavior", evidence.Checks, requiredChecks); err != nil {
 		return err
 	}
 	wantPaths := map[string]string{
 		"relations":                     "artifacts/behavior/relations.json",
 		"lifecycle":                     "artifacts/behavior/lifecycle.json",
-		"correctness":                   "artifacts/behavior/correctness.json",
 		"researchDecision":              "artifacts/behavior/research-decision.json",
 		"packageManifest":               "artifacts/behavior/package-manifest.json",
 		"workspacePortalHelperManifest": "artifacts/behavior/workspace-portal-helper.manifest.json",
+	}
+	if evidence.Schema == "hideout.shared-workspace-real-gate2/v1" {
+		wantPaths["correctness"] = "artifacts/behavior/correctness.json"
+	} else {
+		wantPaths["pathCorrectness"] = "artifacts/behavior/path-correctness.json"
+		wantPaths["pathNegativeFixture"] = "artifacts/behavior/path-negative-fixture.json"
 	}
 	if err := validateSharedWorkspaceDigestMap("shared-workspace behavior", evidence.Artifacts, wantPaths); err != nil {
 		return err
@@ -314,12 +391,28 @@ func validateSharedWorkspaceBehaviorArtifact(refs []ArtifactRef, artifacts map[s
 		return err
 	}
 
-	var correctness sharedWorkspaceCorrectnessEvidence
-	if err := decodeStrictEvidence(artifacts[evidence.Artifacts["correctness"].Path], &correctness); err != nil {
-		return fmt.Errorf("shared-workspace correctness artifact: %w", err)
-	}
-	if err := validateSharedWorkspaceCorrectness(correctness, 30); err != nil {
-		return err
+	if evidence.Schema == "hideout.shared-workspace-real-gate2/v1" {
+		var correctness sharedWorkspaceCorrectnessEvidence
+		if err := decodeStrictEvidence(artifacts[evidence.Artifacts["correctness"].Path], &correctness); err != nil {
+			return fmt.Errorf("shared-workspace correctness artifact: %w", err)
+		}
+		if err := validateSharedWorkspaceCorrectness(correctness, 30); err != nil {
+			return err
+		}
+	} else {
+		var positive, negative sharedWorkspacePathCorrectnessEvidence
+		if err := decodeStrictEvidence(artifacts[evidence.Artifacts["pathCorrectness"].Path], &positive); err != nil {
+			return fmt.Errorf("shared-workspace path correctness artifact: %w", err)
+		}
+		if err := validateSharedWorkspacePathCorrectness(positive); err != nil {
+			return err
+		}
+		if err := decodeStrictEvidence(artifacts[evidence.Artifacts["pathNegativeFixture"].Path], &negative); err != nil {
+			return fmt.Errorf("shared-workspace path negative fixture: %w", err)
+		}
+		if err := validateSharedWorkspacePathNegativeFixture(negative); err != nil {
+			return err
+		}
 	}
 	if err := validateSharedWorkspaceResearchDecision(artifacts[evidence.Artifacts["researchDecision"].Path]); err != nil {
 		return err
@@ -343,8 +436,16 @@ func validateSharedWorkspacePerformanceArtifact(refs []ArtifactRef, artifacts ma
 	if err := decodeStrictEvidence(data, &evidence); err != nil {
 		return fmt.Errorf("shared-workspace performance evidence: %w", err)
 	}
-	if evidence.Schema != "hideout.shared-workspace-gate2-evaluation/v1" || evidence.Result != "passed" || !evidence.ThresholdsPassed {
+	performanceV2 := evidence.Schema == "hideout.shared-workspace-gate2-evaluation/v2"
+	if (evidence.Schema != "hideout.shared-workspace-gate2-evaluation/v1" && !performanceV2) ||
+		evidence.Result != "passed" || !evidence.ThresholdsPassed {
 		return errors.New("shared-workspace performance result is not passed")
+	}
+	if (performanceV2 && (evidence.Correctness != nil || evidence.PathCorrectness == nil ||
+		evidence.Artifacts.Correctness != nil || evidence.Artifacts.PathCorrectness == nil)) ||
+		(!performanceV2 && (evidence.Correctness == nil || evidence.PathCorrectness != nil ||
+			evidence.Artifacts.Correctness == nil || evidence.Artifacts.PathCorrectness != nil)) {
+		return errors.New("shared-workspace performance correctness evidence does not match its schema")
 	}
 	if !IsCanonicalCommit(evidence.Candidate.Commit) || evidence.Candidate.Dirty ||
 		(expectedCommit != "" && evidence.Candidate.Commit != expectedCommit) {
@@ -391,10 +492,13 @@ func validateSharedWorkspacePerformanceArtifact(refs []ArtifactRef, artifacts ma
 	if evidence.Artifacts.Fixture.Path != "artifacts/performance/research-baseline/fixture.sha256" ||
 		evidence.Artifacts.FilesystemControlManifest.Path != "artifacts/performance/filesystem-control/manifest.json" ||
 		evidence.Artifacts.PairedSamples.Path != sharedWorkspacePairedSamplesPath ||
-		evidence.Artifacts.Correctness.Path != "artifacts/performance/correctness.json" ||
 		evidence.Artifacts.Saturation.Path != "artifacts/performance/saturation.json" ||
 		evidence.Artifacts.ResearchDecision.Path != "artifacts/performance/research-decision.json" {
 		return errors.New("shared-workspace performance artifact paths drifted")
+	}
+	if (!performanceV2 && evidence.Artifacts.Correctness.Path != "artifacts/performance/correctness.json") ||
+		(performanceV2 && evidence.Artifacts.PathCorrectness.Path != "artifacts/performance/path-correctness.json") {
+		return errors.New("shared-workspace performance correctness artifact path drifted")
 	}
 	digests := make(map[string]sharedWorkspaceArtifactDigest, len(evidence.Artifacts.Candidate)+len(evidence.Artifacts.FilesystemControl)+len(evidence.Artifacts.ResearchBaseline)+6)
 	for key, value := range evidence.Artifacts.Candidate {
@@ -409,18 +513,27 @@ func validateSharedWorkspacePerformanceArtifact(refs []ArtifactRef, artifacts ma
 	digests["fixture"] = evidence.Artifacts.Fixture
 	digests["filesystemControlManifest"] = evidence.Artifacts.FilesystemControlManifest
 	digests["pairedSamples"] = evidence.Artifacts.PairedSamples
-	digests["correctness"] = evidence.Artifacts.Correctness
+	if performanceV2 {
+		digests["pathCorrectness"] = *evidence.Artifacts.PathCorrectness
+	} else {
+		digests["correctness"] = *evidence.Artifacts.Correctness
+	}
 	digests["saturation"] = evidence.Artifacts.Saturation
 	digests["researchDecision"] = evidence.Artifacts.ResearchDecision
 	kinds := map[string]string{"performance.json": "manifest"}
 	for _, descriptor := range digests {
 		kinds[descriptor.Path] = "log"
 	}
-	for _, descriptor := range []sharedWorkspaceArtifactDigest{
+	manifestDescriptors := []sharedWorkspaceArtifactDigest{
 		evidence.Artifacts.Fixture, evidence.Artifacts.FilesystemControlManifest,
-		evidence.Artifacts.Correctness,
 		evidence.Artifacts.Saturation, evidence.Artifacts.ResearchDecision,
-	} {
+	}
+	if performanceV2 {
+		manifestDescriptors = append(manifestDescriptors, *evidence.Artifacts.PathCorrectness)
+	} else {
+		manifestDescriptors = append(manifestDescriptors, *evidence.Artifacts.Correctness)
+	}
+	for _, descriptor := range manifestDescriptors {
 		kinds[descriptor.Path] = "manifest"
 	}
 	if err := validateSharedWorkspaceArtifactInventory(refs, artifacts, kinds, digests); err != nil {
@@ -506,15 +619,34 @@ func validateSharedWorkspacePerformanceArtifact(refs []ArtifactRef, artifacts ma
 		math.IsNaN(saturation.TeardownMS) || math.IsInf(saturation.TeardownMS, 0) || saturation.TeardownMS < 0 {
 		return errors.New("shared-workspace saturation observation is invalid or not derived")
 	}
-	var correctness sharedWorkspaceCorrectnessEvidence
-	if err := decodeStrictEvidence(artifacts[evidence.Artifacts.Correctness.Path], &correctness); err != nil {
-		return fmt.Errorf("shared-workspace correctness artifact: %w", err)
-	}
-	if correctness != evidence.Correctness.Observation || !evidence.Correctness.Passed {
-		return errors.New("shared-workspace correctness summary is not derived from its artifact")
-	}
-	if err := validateSharedWorkspaceCorrectness(correctness, evidence.Methodology.Samples); err != nil {
-		return err
+	if performanceV2 {
+		var pathCorrectness sharedWorkspacePathCorrectnessEvidence
+		if err := decodeStrictEvidence(artifacts[evidence.Artifacts.PathCorrectness.Path], &pathCorrectness); err != nil {
+			return fmt.Errorf("shared-workspace path correctness artifact: %w", err)
+		}
+		if !slices.Equal(pathCorrectness.Tools, evidence.PathCorrectness.Observation.Tools) ||
+			!slices.Equal(pathCorrectness.RepresentativeAgents, evidence.PathCorrectness.Observation.RepresentativeAgents) ||
+			!slices.Equal(pathCorrectness.Limitations, evidence.PathCorrectness.Observation.Limitations) ||
+			pathCorrectness.Schema != evidence.PathCorrectness.Observation.Schema ||
+			pathCorrectness.Status != evidence.PathCorrectness.Observation.Status ||
+			!maps.Equal(pathCorrectness.Checks, evidence.PathCorrectness.Observation.Checks) ||
+			!evidence.PathCorrectness.Passed {
+			return errors.New("shared-workspace path correctness summary is not derived from its artifact")
+		}
+		if err := validateSharedWorkspacePathCorrectness(pathCorrectness); err != nil {
+			return err
+		}
+	} else {
+		var correctness sharedWorkspaceCorrectnessEvidence
+		if err := decodeStrictEvidence(artifacts[evidence.Artifacts.Correctness.Path], &correctness); err != nil {
+			return fmt.Errorf("shared-workspace correctness artifact: %w", err)
+		}
+		if correctness != evidence.Correctness.Observation || !evidence.Correctness.Passed {
+			return errors.New("shared-workspace correctness summary is not derived from its artifact")
+		}
+		if err := validateSharedWorkspaceCorrectness(correctness, evidence.Methodology.Samples); err != nil {
+			return err
+		}
 	}
 	var decision workspaceattach.ResearchDecision
 	if err := decodeStrictEvidence(artifacts[evidence.Artifacts.ResearchDecision.Path], &decision); err != nil {
@@ -727,6 +859,40 @@ func validateSharedWorkspaceCorrectness(value sharedWorkspaceCorrectnessEvidence
 		value.SilentShortWrites != 0 || value.FalseSuccesses != 0 ||
 		value.HostWatcherSamples < samples || value.TargetWatcherSamples < samples {
 		return errors.New("shared-workspace correctness artifact contains a failed or incomplete observation")
+	}
+	return nil
+}
+
+func validateSharedWorkspacePathCorrectness(value sharedWorkspacePathCorrectnessEvidence) error {
+	if value.Schema != "hideout.shared-workspace-path-correctness/v1" ||
+		value.Status != "passed" ||
+		!slices.Equal(value.Tools, sharedWorkspacePathTools) ||
+		!slices.Equal(value.RepresentativeAgents, []string{"claude", "codex"}) ||
+		!slices.Equal(value.Limitations, sharedWorkspacePathLimitations) {
+		return errors.New("shared-workspace path correctness identity is invalid")
+	}
+	return validateExactBooleanChecks(
+		"shared-workspace path correctness",
+		value.Checks,
+		requiredSharedWorkspacePathChecks,
+	)
+}
+
+func validateSharedWorkspacePathNegativeFixture(value sharedWorkspacePathCorrectnessEvidence) error {
+	if value.Schema != "hideout.shared-workspace-path-correctness/v1" ||
+		value.Status != "failed" ||
+		!slices.Equal(value.Tools, sharedWorkspacePathTools) ||
+		!slices.Equal(value.RepresentativeAgents, []string{"claude", "codex"}) ||
+		!slices.Equal(value.Limitations, sharedWorkspacePathLimitations) ||
+		len(value.Checks) != len(requiredSharedWorkspacePathChecks) {
+		return errors.New("shared-workspace path negative fixture identity is invalid")
+	}
+	for _, check := range requiredSharedWorkspacePathChecks {
+		observed, ok := value.Checks[check]
+		want := check != "logicalPhysicalSameObject"
+		if !ok || observed != want {
+			return fmt.Errorf("shared-workspace path negative fixture check %q is invalid", check)
+		}
 	}
 	return nil
 }

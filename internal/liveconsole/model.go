@@ -289,6 +289,7 @@ type Seed struct {
 	Profiles               []manager.ProfileProjection                       `json:"profiles,omitempty"`
 	Transitions            []TransitionProjection                            `json:"transitions,omitempty"`
 	Operations             []manager.Operation                               `json:"operations,omitempty"`
+	Migrations             []manager.MigrationOperationProjection            `json:"migrations,omitempty"`
 	Activity               ActivityProjection                                `json:"activity,omitzero"`
 	Coverage               []workloadtypes.CoverageInterval                  `json:"coverage,omitempty"`
 	ActivityRetention      []manager.OperatorActivityRetentionProjection     `json:"activityRetention,omitempty"`
@@ -317,6 +318,7 @@ type SeedInput struct {
 	Profiles               []manager.ProfileProjection
 	Transitions            []TransitionProjection
 	Operations             []manager.Operation
+	Migrations             []manager.MigrationOperationProjection
 	Activity               ActivityProjection
 	Coverage               []workloadtypes.CoverageInterval
 	ActivityRetention      []manager.OperatorActivityRetentionProjection
@@ -344,6 +346,7 @@ type State struct {
 	Profiles               []manager.ProfileProjection                       `json:"profiles,omitempty"`
 	Transitions            []TransitionProjection                            `json:"transitions,omitempty"`
 	Operations             []manager.Operation                               `json:"operations,omitempty"`
+	Migrations             []manager.MigrationOperationProjection            `json:"migrations,omitempty"`
 	Activity               ActivityProjection                                `json:"activity"`
 	Coverage               []workloadtypes.CoverageInterval                  `json:"coverage,omitempty"`
 	ActivityRetention      []manager.OperatorActivityRetentionProjection     `json:"activityRetention,omitempty"`

@@ -22,6 +22,7 @@ import (
 	networkcollector "github.com/vibe-agi/hideout/internal/workloadobs/collector/network"
 	processcollector "github.com/vibe-agi/hideout/internal/workloadobs/collector/process"
 	workloadtypes "github.com/vibe-agi/hideout/internal/workloadobs/types"
+	"github.com/vibe-agi/hideout/internal/workspacepath"
 )
 
 const (
@@ -45,6 +46,7 @@ type linuxObserverCollectors struct {
 	fileNormalizer    *filecollector.Normalizer
 	networkCorrelator *networkcollector.Correlator
 	dnsParser         *dnscollector.Parser
+	workspace         *workspacepath.Binding
 
 	processBoundary processcollector.Boundary
 	fileBoundary    filecollector.Boundary
@@ -83,7 +85,8 @@ func openObserverCollectors(
 ) (observerCollectorRuntime, error) {
 	if err := config.Binding.Validate(); err != nil ||
 		config.Anchor.WallTime.IsZero() ||
-		config.Anchor.MonotonicNS == 0 {
+		config.Anchor.MonotonicNS == 0 ||
+		(config.Workspace != nil && config.Workspace.Validate() != nil) {
 		return nil, errors.New("observer collector configuration is invalid")
 	}
 	if _, err := observerbpf.VerifyEmbeddedArtifacts(); err != nil {
@@ -116,6 +119,7 @@ func openObserverCollectors(
 				baseEvidence,
 			),
 		},
+		workspace: config.Workspace,
 		processBoundary: processcollector.Boundary{
 			Owner:              config.Binding.Owner,
 			SessionID:          config.Binding.SessionID,
@@ -430,6 +434,11 @@ func (collectors *linuxObserverCollectors) readProcess(
 			collectors.noteDrop("process")
 			continue
 		}
+		event, err = normalizeObservedWorkspaceProcessEvent(event, collectors.workspace)
+		if err != nil {
+			collectors.noteDrop("process")
+			continue
+		}
 		var previous workloadtypes.Execution
 		previousPresent := false
 		if event.Kind == processcollector.EventExec {
@@ -593,6 +602,11 @@ func (collectors *linuxObserverCollectors) readFile(
 			lookup,
 			nil,
 		)
+		if err != nil {
+			collectors.noteDrop("file")
+			continue
+		}
+		event, err = normalizeObservedWorkspaceFileEvent(event, collectors.workspace)
 		if err != nil {
 			collectors.noteDrop("file")
 			continue

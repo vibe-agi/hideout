@@ -12,9 +12,10 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"strings"
 	"syscall"
 	"time"
+
+	"github.com/vibe-agi/hideout/internal/workspacepath"
 )
 
 const (
@@ -195,5 +196,5 @@ func DeriveWorkspaceID(key []byte, canonicalRoot string, identity RootFileIdenti
 }
 
 func validWorkspaceID(id string) bool {
-	return strings.HasPrefix(id, "wrk_") && len(id) == 4+64 && strings.Trim(strings.TrimPrefix(id, "wrk_"), "0123456789abcdef") == ""
+	return workspacepath.ValidWorkspaceID(id)
 }

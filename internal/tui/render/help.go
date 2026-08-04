@@ -29,7 +29,7 @@ func Help(input HelpInput, options Options) string {
 		"Documentation only · actions still use their normal review and confirmation.",
 		"",
 		"Keys",
-		"  1-5 views · Tab focus · ? help · q quit",
+		"  1-6 views · Tab focus · ? help · q quit",
 		"  " + helpContextKeys(contextName),
 		"",
 		"CLI equivalents",

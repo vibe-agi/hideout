@@ -83,6 +83,14 @@ func TestPinnedEnvironmentWorkspaceRejectsSharedRecords(t *testing.T) {
 	if binding, ok := pinnedEnvironmentWorkspace(shared); ok || binding != (pinnedWorkspaceBinding{}) {
 		t.Fatalf("shared environment exposed a pinned workspace binding: %#v, ok=%v", binding, ok)
 	}
+	portal := environment.Record{
+		Mode:               environment.ModeDedicatedPortal,
+		DedicatedWorkspace: "/must/not/be-read",
+		DedicatedGuestRoot: "/must/not-be-read",
+	}
+	if binding, ok := pinnedEnvironmentWorkspace(portal); ok || binding != (pinnedWorkspaceBinding{}) {
+		t.Fatalf("dedicated Portal environment exposed a pinned workspace binding: %#v, ok=%v", binding, ok)
+	}
 
 	dedicated := environment.Record{
 		Mode:               environment.ModeDedicated,

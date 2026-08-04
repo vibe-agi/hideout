@@ -66,8 +66,8 @@ fails closed and requires a new performance run.
 
 ## Closure sequence
 
-Run the source, model, privacy, UI, performance, real-Lima, package, and
-lifecycle lanes in the order fixed by
+Run the source, model, privacy, UI, performance, real-Lima, package,
+package-bound migration, and lifecycle lanes in the order fixed by
 `specs/045-operator-observability-console/gate-matrix.md`. Then consume the
 same package bytes on this machine:
 

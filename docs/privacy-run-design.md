@@ -5043,3 +5043,97 @@ backend fallback, implicit environment selection, generic garbage collector,
 non-disposable crash recovery, or guest-root/shared-VM isolation claim. Native
 and local model tests establish mechanics only. Product support requires the
 clean exact-package macOS arm64 Lima Gate 042 proof described in the test plan.
+
+## Portable Hideout Migration (046)
+
+Portable migration is a Manager-owned copy protocol, not filesystem backup,
+continuous synchronization, or evidence export. CLI, TUI, WebUI, and automation
+submit typed drafts to the same authenticated Manager routes and receive the same
+inventory, immutable plan digest, blockers, effects, risk acknowledgements,
+progress, recovery actions, and terminal receipt. Presentation code owns no
+backend, path, Keychain, or lifecycle authority.
+
+The v1 bundle is one owner-only append-only file. Its public prologue contains
+only bounded format facts needed to request a protected unlock. Authenticated
+records carry normalized portable configuration, selected encrypted secret
+values, sparse disk extents, checkpoints, one manifest, and one sealed footer.
+Argon2id wraps the random bundle key; HKDF domain-separates record keys; each
+record uses XChaCha20-Poly1305 with ordering and bundle identity in associated
+data. Reader limits cover header, manifest, metadata, chunk, record count,
+logical bytes, decompression, and working memory before allocation or effect.
+
+The export protocol is:
+
+```text
+explicit selection
+  -> authenticated inventory and immutable plan
+  -> exact environment/disk claims
+  -> optional separately planned coordinated stop
+  -> re-prove stopped incarnation and disk graph
+  -> operation-owned provider snapshots
+  -> bounded encrypted records and authenticated checkpoints
+  -> manifest/footer verification
+  -> atomic final publication
+  -> release claims and snapshots
+```
+
+Once provider-owned immutable snapshots are proved, the source claims may be
+released; export never writes or deletes the source environment or disks. A
+crash may leave an operation-owned partial. Resume reopens the exact file,
+authenticates completed checkpoints, truncates only an unverified tail, and
+continues. Cancellation explicitly retains or removes that proved partial. A
+partial never passes sealed inspection.
+
+Config-only mode uses the same bundle and operation contracts without requiring
+persistent-disk capability. Full mode requires a runtime-proved typed Lima
+migration capability and includes every reachable root/attached disk for the
+selected stopped closure. Selected secret values require named refs plus the
+separate transfer acknowledgement; default export carries references only.
+
+The import protocol is:
+
+```text
+authenticate and inspect without mutation
+  -> explicit source scope and destination mappings
+  -> compatibility/capacity/conflict/authority plan
+  -> deterministic claims
+  -> private disk/config/secret staging
+  -> isolated no-network guest adoption
+  -> provider and identity verification
+  -> durable one-way activation decision
+  -> atomic Manager visibility commit
+  -> terminal receipt and claim release
+```
+
+Staged objects are not addressable by ordinary run/attach paths. A restart
+reconciles the durable effect set and advertises only a revision-valid finish,
+rollback, resume, cancel, or partial-removal action. Compensation runs in reverse
+ownership order and never treats the immutable input bundle or pre-existing
+destination objects as cleanup targets.
+
+Hideout control, environment, backend, operation, session, broker, workspace,
+and ephemeral credential identity is always fresh per import. Guest identity is
+the only import policy: Safe Clone regenerates machine ID and SSH host keys on
+the staged copy; Exact Guest Restore preserves them after the exact collision
+acknowledgement. Export remains destination-neutral so the same unchanged bundle
+can be imported repeatedly under different policies.
+
+Host workspace contents and ambient host authority are excluded. Paths,
+HostFS/workspace access, endpoints, network settings, scripts, packs, and host
+applications arrive only as disabled proposals and must pass destination policy
+and real-identity path checks. Name conflicts refuse by default; rename is
+non-destructive; replace is a separately confirmed destructive plan followed by
+fresh revalidation.
+
+The initial supported contract deliberately has no unpublished-format
+compatibility layer. Bundle format v1, portable profile v1, current environment
+records, and current operation schemas are canonical. Unknown, old, future,
+noncanonical, or trailing data fails closed with re-export/recreate guidance.
+This clean boundary is possible because no user installation depends on a
+development format.
+
+Source mechanics are gated by the explicit 13-package/191-test inventory in
+`scripts/gates/migration.sh`. A full-state release additionally requires
+`scripts/gates/migration-lima.sh` against the exact clean package candidate and
+the physical cross-computer acceptance described in the test plan. Performance
+remains a separate deferred, process-scoped claim.

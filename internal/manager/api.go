@@ -56,6 +56,11 @@ type API struct {
 	// Tests and daemon-less adapters may omit it and receive the historical
 	// Core-backed service.
 	ProfileTransactions *ProfileTransactionService
+	// Migrations is the daemon-owned migration control plane. It is optional for
+	// daemon-less tests and older embedding clients; production injects one
+	// shared instance so secret handles, inspection cache, workers, and routes
+	// observe the same authority.
+	Migrations *MigrationAPIService
 }
 
 // EnvironmentStopApplyFunc lets a hosting control plane serialize backend
@@ -282,6 +287,10 @@ func (api API) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if !prepareManagerRequestBody(w, r, spec) {
 			return
 		}
+		if strings.HasPrefix(resource, "migration/") {
+			api.serveMigrationPost(w, r, resource)
+			return
+		}
 		api.servePostResource(w, r, spec, resource)
 		return
 	}
@@ -291,6 +300,10 @@ func (api API) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	if _, ok := RecognizeManagerResource(http.MethodGet, resource); !ok {
 		writeAPIError(w, http.StatusNotFound, "unknown manager API resource")
+		return
+	}
+	if strings.HasPrefix(resource, "migration/") {
+		api.serveMigrationGet(w, r, resource)
 		return
 	}
 	if strings.HasPrefix(resource, "activity/") {

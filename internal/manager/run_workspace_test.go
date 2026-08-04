@@ -227,7 +227,8 @@ func TestSharedRunSessionWorkspaceAuthorityUsesOnlyImmutableAttachment(t *testin
 		t.Fatal(err)
 	}
 	if authority.WorkspaceID != plan.Attachment.WorkspaceID || authority.HostRoot != plan.Attachment.CanonicalHostRoot ||
-		authority.GuestRoot != plan.Attachment.LogicalGuestRoot {
+		authority.GuestRoot != plan.Attachment.LogicalGuestRoot ||
+		authority.PhysicalGuestRoot != plan.Attachment.PhysicalGuestRoot {
 		t.Fatalf("workspace authority=%+v attachment=%+v", authority, plan.Attachment)
 	}
 	if _, err := workspaceAuthorityForDataPlane(bound); err == nil || !strings.Contains(err.Error(), "does not match") {
@@ -271,7 +272,11 @@ func TestWorkspaceAttachApplyRejectsRootReplacement(t *testing.T) {
 
 func TestWorkspaceAttachPlanRequiresSharedDaemonIncarnation(t *testing.T) {
 	workspace := t.TempDir()
-	core := Core{Store: profile.Store{Root: t.TempDir()}}
+	storeRoot := t.TempDir()
+	if err := os.Chmod(storeRoot, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	core := Core{Store: profile.Store{Root: storeRoot}}
 	runSession := workspaceRunSessionFixture(workspace, "ses_workspace_requirements")
 	if _, err := core.PlanRunWorkspaceAttachment(runSession, nil, WorkspaceAttachPlanOptions{}); err == nil || !strings.Contains(err.Error(), "daemon lifecycle") {
 		t.Fatalf("nil daemon lifecycle registration was accepted: %v", err)
@@ -280,8 +285,12 @@ func TestWorkspaceAttachPlanRequiresSharedDaemonIncarnation(t *testing.T) {
 	registration := workspacePlanRegistration{incarnation: lifecycle.EnvironmentRef{
 		EnvironmentID: "env_sharedfixture", StartGeneration: 1, InstanceName: "hideout-default-env-fixture",
 	}}
-	if _, err := core.PlanRunWorkspaceAttachment(runSession, registration, WorkspaceAttachPlanOptions{}); err == nil || !strings.Contains(err.Error(), "shared environment") {
+	if _, err := core.PlanRunWorkspaceAttachment(runSession, registration, WorkspaceAttachPlanOptions{}); err == nil || !strings.Contains(err.Error(), "Portal-backed environment") {
 		t.Fatalf("workspace-bound environment was accepted as portal attachment: %v", err)
+	}
+	runSession.Environment.Record.Mode = environment.ModeDedicatedPortal
+	if _, err := core.PlanRunWorkspaceAttachment(runSession, registration, WorkspaceAttachPlanOptions{}); err != nil {
+		t.Fatalf("dedicated Portal environment was rejected: %v", err)
 	}
 }
 

@@ -134,6 +134,8 @@ type PackageComponent struct {
 	KernelProgramLicense string                  `json:"kernelProgramLicense,omitempty"`
 	LicenseText          string                  `json:"licenseText,omitempty"`
 	BuildMode            string                  `json:"buildMode,omitempty"`
+	UpstreamModule       string                  `json:"upstreamModule,omitempty"`
+	UpstreamVersion      string                  `json:"upstreamVersion,omitempty"`
 	PackageOwned         bool                    `json:"packageOwned"`
 	Assets               []PackageComponentAsset `json:"assets,omitempty"`
 }

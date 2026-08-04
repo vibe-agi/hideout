@@ -618,15 +618,15 @@ func TestFormalReleaseGateEnumeratesEveryTLAConfiguration(t *testing.T) {
 	if inventory.Schema != "hideout.formal-inventory/v1" {
 		t.Fatalf("formal inventory schema=%q", inventory.Schema)
 	}
-	if len(inventory.Configurations) != 12 {
+	if len(inventory.Configurations) != 16 {
 		t.Fatalf(
-			"formal inventory configurations=%d want 12",
+			"formal inventory configurations=%d want 16",
 			len(inventory.Configurations),
 		)
 	}
-	if len(inventory.GoRefinement.Tests) != 12 {
+	if len(inventory.GoRefinement.Tests) != 27 {
 		t.Fatalf(
-			"formal inventory Go tests=%d want 12",
+			"formal inventory Go tests=%d want 27",
 			len(inventory.GoRefinement.Tests),
 		)
 	}
@@ -676,8 +676,8 @@ func TestFormalReleaseGateEnumeratesEveryTLAConfiguration(t *testing.T) {
 			}
 		}
 	}
-	if len(inventoriedModules) != 10 {
-		t.Fatalf("formal inventory modules=%d want 10", len(inventoriedModules))
+	if len(inventoriedModules) != 12 {
+		t.Fatalf("formal inventory modules=%d want 12", len(inventoriedModules))
 	}
 	if len(repositoryConfigurations) != len(inventoriedConfigs) {
 		t.Fatalf(

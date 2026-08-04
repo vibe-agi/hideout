@@ -52,6 +52,14 @@ func (r RouteSpec) ResponseResource() string {
 		return "notice/ack"
 	case "operations/{operation}":
 		return "operation/inspect"
+	case "migration/operations/{id}":
+		return "migration/operation"
+	case "migration/operations/{id}/resume":
+		return "migration/operation/resume"
+	case "migration/operations/{id}/cancel":
+		return "migration/operation/cancel"
+	case "migration/operations/{id}/recover":
+		return "migration/operation/recover"
 	case "profiles/{profile}/projection":
 		return "profile/projection"
 	default:
@@ -221,6 +229,9 @@ var managerRouteSpecs = []RouteSpec{
 	routeSpec(http.MethodGet, "app/list", "list host application packs"),
 	routeSpec(http.MethodGet, "app/inspect", "inspect one host application pack"),
 	routeSpec(http.MethodGet, "init", "init summary"),
+	routeSpec(http.MethodGet, "migration/capabilities", "migration capability summary"),
+	routeSpec(http.MethodGet, "migration/operations", "list migration operations"),
+	routeSpec(http.MethodGet, "migration/operations/{id}", "inspect one migration operation"),
 	routeSpec(http.MethodGet, "network", "network summary"),
 	routeSpec(http.MethodGet, "notice/inspect", "inspect notice by query"),
 	routeSpec(http.MethodGet, "notices", "notice summary"),
@@ -270,6 +281,15 @@ var managerRouteSpecs = []RouteSpec{
 	routeSpec(http.MethodPost, "app/plan", "plan host application pack action"),
 	routeSpec(http.MethodPost, "init/apply", "apply init"),
 	routeSpec(http.MethodPost, "init/plan", "plan init"),
+	sensitiveRouteSpec(http.MethodPost, "migration/secret-input", "create one protected migration secret-input handle", SecretRequestBodyLimit),
+	sensitiveRouteSpec(http.MethodPost, "migration/export/plan", "plan a private migration export", DefaultRequestBodyLimit),
+	sensitiveRouteSpec(http.MethodPost, "migration/export/apply", "apply a reviewed migration export", DefaultRequestBodyLimit),
+	sensitiveRouteSpec(http.MethodPost, "migration/import/inspect", "inspect an authenticated migration bundle", DefaultRequestBodyLimit),
+	sensitiveRouteSpec(http.MethodPost, "migration/import/plan", "plan a migration import", DefaultRequestBodyLimit),
+	sensitiveRouteSpec(http.MethodPost, "migration/import/apply", "apply a reviewed migration import", DefaultRequestBodyLimit),
+	sensitiveRouteSpec(http.MethodPost, "migration/operations/{id}/resume", "resume a migration operation", DefaultRequestBodyLimit),
+	sensitiveRouteSpec(http.MethodPost, "migration/operations/{id}/cancel", "cancel a migration operation", DefaultRequestBodyLimit),
+	sensitiveRouteSpec(http.MethodPost, "migration/operations/{id}/recover", "recover a migration operation", DefaultRequestBodyLimit),
 	routeSpec(http.MethodPost, "notice/ack", "ack notice"),
 	routeSpec(http.MethodPost, "notices/{id}/ack", "ack notice by path"),
 	routeSpec(http.MethodPost, "profile/command-proxy/apply", "apply command proxy profile change"),

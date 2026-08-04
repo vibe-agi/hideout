@@ -172,6 +172,77 @@ verify_observer_helper() {
   fi
 }
 
+verify_migration_adopt_helper() {
+  local root="$1" arch="$2"
+  verify_linux_helper "$root" "$arch" "hideout-migration-adopt"
+  local manifest="$root/bin/hideout-migration-adopt-linux-$arch.manifest.json"
+  if ! jq -e '
+    .builder == "go build -trimpath" and
+    (.builtAt | fromdateiso8601 | type == "number") and
+    .license == "Apache-2.0" and
+    .buildMode == "strict-data-only-adoption-v1" and
+    .packageOwned == true and
+    (.upstreamModule == null) and
+    (.upstreamVersion == null)
+  ' "$manifest" >/dev/null; then
+    echo "package-local: migration adoption helper provenance manifest is invalid: $manifest" >&2
+    return 1
+  fi
+}
+
+verify_migration_vz_adopt_helper() {
+  local root="$1" host_os="$2" host_arch="$3"
+  if [ "$host_os" != "darwin" ] || [ "$host_arch" != "arm64" ]; then
+    return 0
+  fi
+  local binary="$root/bin/hideout-migration-vz-adopt-$host_os-$host_arch"
+  local manifest="$binary.manifest.json"
+  if [ ! -f "$binary" ] || [ -L "$binary" ] || [ ! -x "$binary" ]; then
+    echo "package-local: required host helper hideout-migration-vz-adopt is missing or not executable: $binary" >&2
+    return 1
+  fi
+  if [ ! -f "$manifest" ] || [ -L "$manifest" ]; then
+    echo "package-local: required host helper manifest is missing: $manifest" >&2
+    return 1
+  fi
+  if ! jq -e \
+    --arg os "$host_os" --arg arch "$host_arch" --arg artifact "$(basename "$binary")" '
+    .version == "hideout.helper-manifest/v1" and
+    .command == "hideout-migration-vz-adopt" and
+    .targetOS == $os and
+    .targetArch == $arch and
+    .artifact == $artifact and
+    .builder == "go build -mod=readonly -trimpath" and
+    .upstreamModule == "github.com/Code-Hex/vz/v3" and
+    .upstreamVersion == "v3.7.1" and
+    .license == "Apache-2.0" and
+    .buildMode == "apple-vz-zero-network-adoption-v1" and
+    .packageOwned == true and
+    (.sha256 | test("^[a-f0-9]{64}$"))
+  ' "$manifest" >/dev/null; then
+    echo "package-local: VZ migration adoption executor provenance is invalid: $manifest" >&2
+    return 1
+  fi
+  local want got
+  want="$(jq -er '.sha256' "$manifest")"
+  got="$(sha256_file "$binary")"
+  if [ "$want" != "$got" ]; then
+    echo "package-local: VZ migration adoption executor checksum mismatch: want $want got $got" >&2
+    return 1
+  fi
+  "$binary" --probe | jq -e \
+    --arg os "$host_os" --arg arch "$host_arch" '
+    .schema == "hideout.migration-vz-adopt-probe/v1" and
+    .protocol == "hideout.migration-vz-adopt/v1" and
+    .version == "1.0.0" and
+    .hostOS == $os and .hostArch == $arch and
+    .hypervisor == "apple-virtualization-framework" and
+    .networkDeviceCount == 0 and
+    .controlChannel == "virtiofs-private" and
+    .bootTrigger == "nocloud-fixed-cloud-boothook"
+  ' >/dev/null
+}
+
 write_and_verify_embedded_asset_manifest() {
   local root="$1"
   local manifest="$root/runtime/browser-console.assets.json"
@@ -191,6 +262,7 @@ write_and_verify_embedded_asset_manifest() {
       {path:"client.js",mediaType:"text/javascript; charset=utf-8"},
       {path:"activity.js",mediaType:"text/javascript; charset=utf-8"},
       {path:"config.js",mediaType:"text/javascript; charset=utf-8"},
+      {path:"migration.js",mediaType:"text/javascript; charset=utf-8"},
       {path:"presentation.js",mediaType:"text/javascript; charset=utf-8"},
       {path:"app.js",mediaType:"text/javascript; charset=utf-8"}
     ]) and
@@ -212,8 +284,8 @@ absolute_path() {
 
 package_kind() {
   case "$1" in
-    bin/hideout|bin/hideout-shim) echo binary ;;
     bin/*.manifest.json) echo helper-manifest ;;
+    bin/hideout|bin/hideout-shim|bin/hideout-migration-vz-adopt-*) echo binary ;;
     bin/*-linux-*) echo linux-helper ;;
     install.sh) echo installer ;;
     README.md|README.zh-CN.md|CHANGELOG.md|RELEASE_NOTES.md) echo entrypoint ;;
@@ -301,9 +373,11 @@ stage_package() {
   mkdir -p "$prefix/LICENSES"
   install -m 0644 "$source/LICENSES/GPL-2.0-only.txt" \
     "$prefix/LICENSES/GPL-2.0-only.txt"
-  mkdir -p "$prefix/third_party/tun2socks"
+  mkdir -p "$prefix/third_party/tun2socks" "$prefix/third_party/vz"
   install -m 0644 "$source/third_party/tun2socks/LICENSE" \
     "$prefix/third_party/tun2socks/LICENSE"
+  install -m 0644 "$source/third_party/vz/LICENSE" \
+    "$prefix/third_party/vz/LICENSE"
   cp -R "$source/schemas" "$prefix/schemas"
   cp -R "$source/docs" "$prefix/docs"
   mkdir -p "$prefix/host-app" "$prefix/examples" "$prefix/packaging" "$prefix/runtime"
@@ -340,10 +414,14 @@ finalize_package() {
     exit 1
   fi
 
-  local guest_arch
+  local guest_arch host_os host_arch
   guest_arch="$(jq -er '.guestArch' "$metadata")"
+  host_os="$(jq -er '.hostOS' "$metadata")"
+  host_arch="$(jq -er '.hostArch' "$metadata")"
   verify_linux_helper "$prefix" "$guest_arch" "hideout-session-supervisor"
   verify_observer_helper "$prefix" "$guest_arch"
+  verify_migration_adopt_helper "$prefix" "$guest_arch"
+  verify_migration_vz_adopt_helper "$prefix" "$host_os" "$host_arch"
   verify_linux_helper "$prefix" "$guest_arch" "hideout-workspace-portal"
   verify_tun2socks_helper "$prefix" "$guest_arch"
   write_and_verify_embedded_asset_manifest "$prefix"

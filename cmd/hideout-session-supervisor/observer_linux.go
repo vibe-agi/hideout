@@ -23,6 +23,7 @@ import (
 
 	"github.com/vibe-agi/hideout/internal/sessionwire"
 	workloadtypes "github.com/vibe-agi/hideout/internal/workloadobs/types"
+	"github.com/vibe-agi/hideout/internal/workspacepath"
 	"golang.org/x/sys/unix"
 )
 
@@ -41,6 +42,7 @@ type observerLaunchSpec struct {
 	CgroupPath   string
 	Heartbeat    time.Duration
 	ExpectedRoot bool
+	Workspace    *workspacepath.Binding
 }
 
 type observerHelperProcess struct {
@@ -56,14 +58,15 @@ type verifiedObserverHelper struct {
 }
 
 type observerSessionOptions struct {
-	Cgroup          sessionCgroupOptions
-	ObserverPath    string
-	Launch          func(observerLaunchSpec) (*observerHelperProcess, error)
-	MonotonicNS     func() (uint64, error)
-	HandshakeWait   time.Duration
-	ShutdownWait    time.Duration
-	ObserverPeerUID uint32
-	Relay           observerRelayOptions
+	Cgroup           sessionCgroupOptions
+	ObserverPath     string
+	Launch           func(observerLaunchSpec) (*observerHelperProcess, error)
+	MonotonicNS      func() (uint64, error)
+	HandshakeWait    time.Duration
+	ShutdownWait     time.Duration
+	ObserverPeerUID  uint32
+	Relay            observerRelayOptions
+	ResolveWorkspace func(string) (*workspacepath.Binding, error)
 }
 
 type observerSession struct {
@@ -92,12 +95,13 @@ func prepareSupervisorActivity(spec startSpec) (*observerSession, error) {
 		Cgroup: sessionCgroupOptions{
 			Root: defaultSessionCgroupRoot, SessionID: spec.SessionID,
 		},
-		ObserverPath:    fixedGuestObserverPath,
-		Launch:          launchObserverHelper,
-		MonotonicNS:     supervisorMonotonicNS,
-		HandshakeWait:   observerHandshakeWait,
-		ShutdownWait:    observerShutdownWait,
-		ObserverPeerUID: 0,
+		ObserverPath:     fixedGuestObserverPath,
+		Launch:           launchObserverHelper,
+		MonotonicNS:      supervisorMonotonicNS,
+		HandshakeWait:    observerHandshakeWait,
+		ShutdownWait:     observerShutdownWait,
+		ObserverPeerUID:  0,
+		ResolveWorkspace: resolveSupervisorWorkspaceBinding,
 	})
 }
 
@@ -113,6 +117,14 @@ func prepareObserverSession(
 	}
 	if spec.ProjectionReadiness == nil {
 		return nil, errors.New("activity observation requires an exact environment")
+	}
+	var workspaceBinding *workspacepath.Binding
+	if options.ResolveWorkspace != nil {
+		var err error
+		workspaceBinding, err = options.ResolveWorkspace(spec.GuestWork)
+		if err != nil {
+			return nil, fmt.Errorf("resolve observed workspace identity: %w", err)
+		}
 	}
 	if options.Cgroup.Root == "" {
 		options.Cgroup.Root = defaultSessionCgroupRoot
@@ -161,7 +173,7 @@ func prepareObserverSession(
 	process, err := options.Launch(observerLaunchSpec{
 		Path: options.ObserverPath, Digest: spec.Activity.ObserverHelperDigest,
 		Binding: binding, CgroupPath: group.Path(), Heartbeat: time.Second,
-		ExpectedRoot: true,
+		ExpectedRoot: true, Workspace: workspaceBinding,
 	})
 	if err != nil {
 		cleanupGroup()
@@ -592,6 +604,11 @@ func launchObserverHelper(spec observerLaunchSpec) (*observerHelperProcess, erro
 	if spec.Path != fixedGuestObserverPath || !spec.ExpectedRoot {
 		return nil, errors.New("observer helper path or authority is not fixed")
 	}
+	if spec.Workspace != nil {
+		if err := spec.Workspace.Validate(); err != nil {
+			return nil, errors.New("observer workspace identity is invalid")
+		}
+	}
 	helper, err := openFixedObserverHelper(spec.Path, spec.Digest)
 	if err != nil {
 		return nil, err
@@ -612,6 +629,13 @@ func launchObserverHelper(spec observerLaunchSpec) (*observerHelperProcess, erro
 		"--generation", strconv.FormatUint(spec.Binding.ObserverGeneration, 10),
 		"--helper-digest", spec.Digest,
 		"--heartbeat", spec.Heartbeat.String(),
+	}
+	if spec.Workspace != nil {
+		args = append(args,
+			"--workspace-id", spec.Workspace.WorkspaceID,
+			"--workspace-logical-root", spec.Workspace.LogicalRoot,
+			"--workspace-physical-root", spec.Workspace.PhysicalRoot,
+		)
 	}
 	command := helper.Command(args...)
 	command.Dir = "/"
@@ -649,6 +673,29 @@ func launchObserverHelper(spec observerLaunchSpec) (*observerHelperProcess, erro
 			return err
 		},
 	}, nil
+}
+
+func resolveSupervisorWorkspaceBinding(logicalRoot string) (*workspacepath.Binding, error) {
+	info, err := os.Lstat(logicalRoot)
+	if err != nil {
+		return nil, err
+	}
+	if info.Mode()&os.ModeSymlink == 0 {
+		return nil, nil
+	}
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	if !ok || stat.Uid != 0 {
+		return nil, errors.New("workspace alias is not root-owned")
+	}
+	physicalRoot, err := os.Readlink(logicalRoot)
+	if err != nil {
+		return nil, err
+	}
+	binding, err := workspacepath.BindingFromPhysicalRoot(logicalRoot, physicalRoot)
+	if err != nil {
+		return nil, err
+	}
+	return &binding, nil
 }
 
 func openFixedObserverHelper(

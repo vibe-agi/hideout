@@ -22,12 +22,12 @@ type brokerResourceResolver struct {
 
 func (r *brokerResourceResolver) ResolveResource(guestPath string) (hostcap.ResolvedResource, error) {
 	clean := filepath.Clean(guestPath)
-	if hostPath, err := r.s.mapGuestPath(clean); err == nil {
+	canonicalGuest, rel, identityErr := r.s.resolveGuestWorkspacePath(guestPath)
+	if hostPath, err := r.s.mapGuestPath(guestPath); identityErr == nil && err == nil {
 		if strings.TrimSpace(r.s.WorkspaceID) == "" {
 			return hostcap.ResolvedResource{}, &hostcap.Error{Code: hostcap.CodePathNoHostMapping, Reason: "workspace attachment authority is unavailable"}
 		}
-		rel := r.s.workspaceRelative(clean)
-		r.resolved = hostcap.ResourceRef{Kind: hostcap.KindWorkspace, GuestPath: clean, RelativePath: rel}
+		r.resolved = hostcap.ResourceRef{Kind: hostcap.KindWorkspace, GuestPath: canonicalGuest, RelativePath: rel}
 		return hostcap.ResolvedResource{Ref: r.resolved, HostPath: hostPath, AuthorityID: r.s.WorkspaceID}, nil
 	}
 	const portal = "/hideout/hostfs"
@@ -206,8 +206,8 @@ func (s *Server) auditResourceFromGuestPath(guestPath string) hostcap.ResourceRe
 	if strings.HasPrefix(clean, portal+"/") {
 		return hostcap.ResourceRef{Kind: hostcap.KindHostFS, GuestPath: clean, RelativePath: filepath.Base(clean)}
 	}
-	if rel := s.workspaceRelative(clean); rel != "" {
-		return hostcap.ResourceRef{Kind: hostcap.KindWorkspace, GuestPath: clean, RelativePath: rel}
+	if canonical, rel, err := s.resolveGuestWorkspacePath(guestPath); err == nil {
+		return hostcap.ResourceRef{Kind: hostcap.KindWorkspace, GuestPath: canonical, RelativePath: rel}
 	}
 	return hostcap.ResourceRef{}
 }
@@ -218,8 +218,8 @@ func (s *Server) workspaceRelative(guestPath string) string {
 	if s.GuestRoot == "" || guestPath == "" {
 		return ""
 	}
-	rel, err := relInsideRoot(s.GuestRoot, filepath.Clean(guestPath))
-	if err != nil || pathEscapesRoot(rel) {
+	_, rel, err := s.resolveGuestWorkspacePath(guestPath)
+	if err != nil {
 		return filepath.Base(guestPath)
 	}
 	return rel

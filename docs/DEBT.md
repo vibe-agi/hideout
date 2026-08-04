@@ -54,6 +54,13 @@ Rules:
 | One guest write stages two `hostfs.write` decisions (per-op granularity: create + write); operator-facing count reads noisy | Decision-center UX iteration | 2026-07-20 first-run walkthrough |
 | Repeated write to a path with an undecided pending decision surfaces as a bare guest `EIO` with no typed explanation | HostFS write-overlay UX iteration | 2026-07-20 first-run walkthrough |
 
+## Feature 035 follow-on work
+
+| Deferred item | Owner | User risk while deferred | Trigger (when it becomes due) | Current non-claim |
+| --- | --- | --- | --- | --- |
+| Version-bound authenticated Claude and Codex project-memory dogfood across two real workspace roots | Runtime and shared-workspace release evidence | A future agent release could change how it derives project history/cache/socket identity even though the generic cwd and representative-state contract still passes | Before documentation names a specific Claude/Codex version as proven compatible, or before agent-owned history continuity/isolation becomes a release claim | The real product gate proves the session path contract with representative Claude/Codex project-state fixtures; it does not authenticate to external agent services or claim their private storage formats |
+| Complete workspace-path fields in process/file activity | Workload observation and shared-workspace evidence | Operators see honest Partial coverage rather than a fabricated normalized value when process cwd is unavailable, a production physical argv exceeds the 64-byte kernel slot, or a path-oriented file hook supplies only a relative alias | Before path observation becomes `Available`, before UI claims every process cwd/argv is recoverable, or before relative file paths are presented as canonical workspace paths | Current evidence requires `cwd-unavailable`; long physical/sibling argv is a fixed unbound placeholder with `argv-truncated` or is omitted with `argv-unavailable`; relative workspace file paths remain explicitly `aliased` |
+
 ## Feature 045 follow-on work
 
 These items are not part of the current product claim. The owner, user risk,
@@ -64,6 +71,12 @@ promote an observation into a protection promise.
 | --- | --- | --- | --- | --- |
 | Optional policy that prevents an action because an explainable activity-risk rule matched | Policy and Manager | A user could mistake a detective risk finding for a firewall or execution block | Before any UI, documentation, or package claims that activity risks prevent commands, file actions, or network access | Risk findings explain observed behavior and policy status; they do not block it |
 | Tamper-resistant observation against a workload with effective guest-root control | Runtime isolation and workload observer | Guest root can stop or confuse collectors, reducing confidence if the reduction is ignored | Before supporting hostile guest root or claiming complete observation despite guest-root tampering | Guest-root tampering is outside the trusted observation boundary and must reduce coverage to Partial or Unavailable |
+
+## Feature 046 follow-on work
+
+| Deferred item | Owner | User risk while deferred | Trigger (when it becomes due) | Current non-claim |
+| --- | --- | --- | --- | --- |
+| Quiet-host migration performance qualification for CPU, I/O, peak memory, throughput, and sparse preservation | Migration release evidence | A large migration may use more host resources or take longer than the streaming design target, and unrelated host load can invalidate a measurement | Before claiming migration performance, removing the experimental/supervised qualification, or promoting full-environment migration beyond an explicitly performance-unqualified release | Migration correctness and bounded parsing may be released and tested independently, but Hideout makes no migration throughput, CPU-overhead, peak-memory, or quiet-host performance claim until `scripts/gates/migration-performance.sh` passes on a stable host with migration-process-scoped evidence |
 
 ## Resolved ledger decisions
 

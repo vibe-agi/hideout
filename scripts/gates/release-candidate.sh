@@ -15,7 +15,7 @@ usage() {
     "Usage: scripts/gates/release-candidate.sh [--out DIR]" \
     "" \
     "Runs the complete local unit, race, fuzz/property, schema, generated," \
-    "static, dependency/advisory, and mutation aggregate. Every lane runs and" \
+    "static, dependency/advisory, migration, and mutation aggregate. Every lane runs and" \
     "writes private digest-bound evidence even when another lane fails." \
     "This command never publishes or accepts an exact release candidate."
 }
@@ -112,7 +112,7 @@ cp "$inventory" "$run_dir/inventory.json"
 if ! jq -e '
   .schema == "hideout.local-release-candidate-inventory/v1" and
   .requiredGoVersion == "go1.25.12" and
-  (.requiredLanes | length) == 9 and
+  (.requiredLanes | length) == 10 and
   (.requiredLanes | length) == (.requiredLanes | unique | length) and
   (.shellLint | length) >= 30 and
   (.shellLint | length) == (.shellLint | unique | length) and
@@ -240,7 +240,7 @@ fuzz_property_lane() {
       -run '^$' \
       -fuzz "^${name}$" \
       -fuzztime="$fuzz_time" \
-      -parallel=4 ||
+      -parallel=2 ||
       return
   done < <(jq -c '.fuzzTests[]' "$inventory")
 }
@@ -845,6 +845,8 @@ scripts/gates/release-candidate-lima.sh
 scripts/gates/dependency-licenses.sh
 scripts/gates/formal-verify.sh
 scripts/gates/formal.sh
+scripts/gates/migration-lima.sh
+scripts/gates/migration.sh
 scripts/gates/network-rotation-lima.sh
 scripts/gates/package-components.sh
 scripts/gates/workload-observation-lima.sh
@@ -863,6 +865,8 @@ scripts/test-package-smoke.sh
 scripts/test-vulnerability-gate.sh
 EOF
   scripts/release/build-candidate.sh --preflight
+  scripts/gates/migration.sh --preflight
+  scripts/gates/migration-lima.sh --preflight
   scripts/release/test-package-lifecycle.sh --preflight
   scripts/release/collect-evidence.sh --preflight
   scripts/release/install-local-candidate.sh --preflight
@@ -877,6 +881,7 @@ run_lane schema schema_lane
 run_lane generated generated_lane
 run_lane static static_lane
 run_lane dependencies-advisory dependencies_advisory_lane
+run_lane migration scripts/gates/migration.sh --out "$run_dir/migration"
 run_lane mutations mutations_lane
 run_lane release-blockers release_blockers_lane
 

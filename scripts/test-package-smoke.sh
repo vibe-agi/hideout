@@ -90,6 +90,7 @@ grep -q 'Alpha package lifecycle' docs/STATUS.md
 tar -xzf "$pkg" -C "$tmp/install"
 prefix="$tmp/install/hideout"
 arch="$(go env GOARCH)"
+host_os="$(go env GOOS)"
 scripts/test-package-docs.sh --package-root "$prefix" --self-test
 
 manifest_relative_path() {
@@ -107,6 +108,8 @@ for path in \
   "$prefix/bin/hideout-hostfsd-linux-$arch" \
   "$prefix/bin/hideout-session-supervisor-linux-$arch" \
   "$prefix/bin/hideout-observer-linux-$arch" \
+  "$prefix/bin/hideout-migration-adopt-linux-$arch" \
+  "$prefix/bin/hideout-migration-vz-adopt-$host_os-$arch" \
   "$prefix/bin/hideout-workspace-portal-linux-$arch" \
   "$prefix/bin/tun2socks-linux-$arch" \
   "$prefix/install.sh" \
@@ -120,6 +123,7 @@ for path in \
   "$prefix/THIRD_PARTY_NOTICES.md" \
   "$prefix/SECURITY.md" \
   "$prefix/third_party/tun2socks/LICENSE" \
+  "$prefix/third_party/vz/LICENSE" \
   "$prefix/schemas/package-manifest.schema.json" \
   "$prefix/schemas/embedded-asset-manifest.schema.json" \
   "$prefix/schemas/package-components.schema.json" \
@@ -157,6 +161,8 @@ test -f "$prefix/bin/hideout-shim-linux-$arch.manifest.json"
 test -f "$prefix/bin/hideout-hostfsd-linux-$arch.manifest.json"
 test -f "$prefix/bin/hideout-session-supervisor-linux-$arch.manifest.json"
 test -f "$prefix/bin/hideout-observer-linux-$arch.manifest.json"
+test -f "$prefix/bin/hideout-migration-adopt-linux-$arch.manifest.json"
+test -f "$prefix/bin/hideout-migration-vz-adopt-$host_os-$arch.manifest.json"
 test -f "$prefix/bin/hideout-workspace-portal-linux-$arch.manifest.json"
 test -f "$prefix/bin/tun2socks-linux-$arch.manifest.json"
 jq -e --arg arch "$arch" '
@@ -181,6 +187,37 @@ jq -e --arg arch "$arch" '
   .packageOwned == true and
   (.sha256 | test("^[a-f0-9]{64}$"))
 ' "$prefix/bin/hideout-observer-linux-$arch.manifest.json" >/dev/null
+jq -e --arg arch "$arch" '
+  .version == "hideout.helper-manifest/v1" and
+  .command == "hideout-migration-adopt" and
+  .targetOS == "linux" and
+  .targetArch == $arch and
+  .builder == "go build -trimpath" and
+  .license == "Apache-2.0" and
+  .buildMode == "strict-data-only-adoption-v1" and
+  .packageOwned == true and
+  (.sha256 | test("^[a-f0-9]{64}$"))
+' "$prefix/bin/hideout-migration-adopt-linux-$arch.manifest.json" >/dev/null
+jq -e --arg os "$host_os" --arg arch "$arch" '
+  .version == "hideout.helper-manifest/v1" and
+  .command == "hideout-migration-vz-adopt" and
+  .targetOS == $os and
+  .targetArch == $arch and
+  .builder == "go build -mod=readonly -trimpath" and
+  .upstreamModule == "github.com/Code-Hex/vz/v3" and
+  .upstreamVersion == "v3.7.1" and
+  .license == "Apache-2.0" and
+  .buildMode == "apple-vz-zero-network-adoption-v1" and
+  .packageOwned == true and
+  (.sha256 | test("^[a-f0-9]{64}$"))
+' "$prefix/bin/hideout-migration-vz-adopt-$host_os-$arch.manifest.json" >/dev/null
+"$prefix/bin/hideout-migration-vz-adopt-$host_os-$arch" --probe |
+  jq -e '
+    .schema == "hideout.migration-vz-adopt-probe/v1" and
+    .protocol == "hideout.migration-vz-adopt/v1" and
+    .networkDeviceCount == 0 and
+    .controlChannel == "virtiofs-private"
+  ' >/dev/null
 jq -e --arg container_sha "$(sha256_file "$prefix/bin/hideout")" '
   .schema == "hideout.embedded-asset-manifest/v1" and
   .id == "browser-console" and
@@ -194,6 +231,7 @@ jq -e --arg container_sha "$(sha256_file "$prefix/bin/hideout")" '
     "client.js",
     "activity.js",
     "config.js",
+    "migration.js",
     "presentation.js",
     "app.js"
   ]) and
@@ -256,6 +294,8 @@ jq -e \
     (.layout.binaries | index("bin/hideout-shim-linux-" + $host_arch)) and
     (.layout.binaries | index("bin/hideout-session-supervisor-linux-" + $host_arch)) and
     (.layout.binaries | index("bin/hideout-observer-linux-" + $host_arch)) and
+    (.layout.binaries | index("bin/hideout-migration-adopt-linux-" + $host_arch)) and
+    (.layout.binaries | index("bin/hideout-migration-vz-adopt-" + $host_os + "-" + $host_arch)) and
     (.layout.binaries | index("bin/hideout-workspace-portal-linux-" + $host_arch)) and
     (.layout.binaries | index("bin/tun2socks-linux-" + $host_arch)) and
     (.layout.entrypoints | index("install.sh")) and
@@ -288,6 +328,10 @@ jq -e \
     any(.files[]; .path == "bin/hideout-session-supervisor-linux-" + $host_arch and .kind == "linux-helper" and (.sha256 | test("^[a-f0-9]{64}$"))) and
     any(.files[]; .path == "bin/hideout-observer-linux-" + $host_arch and .kind == "linux-helper" and (.sha256 | test("^[a-f0-9]{64}$"))) and
     any(.files[]; .path == "bin/hideout-observer-linux-" + $host_arch + ".manifest.json" and .kind == "helper-manifest" and (.sha256 | test("^[a-f0-9]{64}$"))) and
+    any(.files[]; .path == "bin/hideout-migration-adopt-linux-" + $host_arch and .kind == "linux-helper" and (.sha256 | test("^[a-f0-9]{64}$"))) and
+    any(.files[]; .path == "bin/hideout-migration-adopt-linux-" + $host_arch + ".manifest.json" and .kind == "helper-manifest" and (.sha256 | test("^[a-f0-9]{64}$"))) and
+    any(.files[]; .path == "bin/hideout-migration-vz-adopt-" + $host_os + "-" + $host_arch and .kind == "binary" and (.sha256 | test("^[a-f0-9]{64}$"))) and
+    any(.files[]; .path == "bin/hideout-migration-vz-adopt-" + $host_os + "-" + $host_arch + ".manifest.json" and .kind == "helper-manifest" and (.sha256 | test("^[a-f0-9]{64}$"))) and
     any(.files[]; .path == "bin/hideout-workspace-portal-linux-" + $host_arch and .kind == "linux-helper" and (.sha256 | test("^[a-f0-9]{64}$"))) and
     any(.files[]; .path == "bin/tun2socks-linux-" + $host_arch and .kind == "linux-helper" and (.sha256 | test("^[a-f0-9]{64}$"))) and
     any(.files[]; .path == "bin/tun2socks-linux-" + $host_arch + ".manifest.json" and .kind == "helper-manifest" and (.sha256 | test("^[a-f0-9]{64}$"))) and
@@ -296,6 +340,7 @@ jq -e \
     any(.files[]; .path == "LICENSE" and .kind == "doc" and (.sha256 | test("^[a-f0-9]{64}$"))) and
     any(.files[]; .path == "LICENSES/GPL-2.0-only.txt" and .kind == "doc" and (.sha256 | test("^[a-f0-9]{64}$"))) and
     any(.files[]; .path == "THIRD_PARTY_NOTICES.md" and .kind == "doc" and (.sha256 | test("^[a-f0-9]{64}$"))) and
+    any(.files[]; .path == "third_party/vz/LICENSE" and .kind == "doc" and (.sha256 | test("^[a-f0-9]{64}$"))) and
     any(.files[]; .path == "SECURITY.md" and .kind == "doc" and (.sha256 | test("^[a-f0-9]{64}$"))) and
     any(.files[]; .path == "third_party/tun2socks/LICENSE" and .kind == "doc" and (.sha256 | test("^[a-f0-9]{64}$"))) and
     any(.files[]; .path == "schemas/package-manifest.schema.json" and .kind == "schema" and (.sha256 | test("^[a-f0-9]{64}$"))) and
@@ -450,6 +495,25 @@ if [ -e "$tmp/broken-observer-install/bin/hideout" ]; then
   exit 1
 fi
 
+broken_missing_host_adoption="$tmp/package-missing-host-migration-executor"
+cp -R "$prefix" "$broken_missing_host_adoption"
+rm -f \
+  "$broken_missing_host_adoption/bin/hideout-migration-vz-adopt-$host_os-$arch"
+if "$broken_missing_host_adoption/install.sh" \
+  --prefix "$tmp/broken-host-adoption-install" \
+  --store "$tmp/broken-host-adoption-store" \
+  --skip-init >"$tmp/broken-host-adoption.out" \
+  2>"$tmp/broken-host-adoption.err"; then
+  echo "package-smoke: installer accepted package missing host migration executor" >&2
+  exit 1
+fi
+grep -q 'bin/hideout-migration-vz-adopt-' \
+  "$tmp/broken-host-adoption.err"
+if [ -e "$tmp/broken-host-adoption-install/bin/hideout" ]; then
+  echo "package-smoke: missing-host-executor package copied binaries before failing" >&2
+  exit 1
+fi
+
 broken_browser_manifest="$tmp/package-bad-browser-manifest"
 cp -R "$prefix" "$broken_browser_manifest"
 printf '\ncorrupt-for-smoke\n' \
@@ -549,11 +613,16 @@ test -x "$installed_prefix/bin/hideout-shim-linux-$arch"
 test -x "$installed_prefix/bin/hideout-hostfsd-linux-$arch"
 test -x "$installed_prefix/bin/hideout-session-supervisor-linux-$arch"
 test -x "$installed_prefix/bin/hideout-observer-linux-$arch"
+test -x "$installed_prefix/bin/hideout-migration-adopt-linux-$arch"
+test -x "$installed_prefix/bin/hideout-migration-vz-adopt-$host_os-$arch"
 test -x "$installed_prefix/bin/hideout-workspace-portal-linux-$arch"
 test -x "$installed_prefix/bin/tun2socks-linux-$arch"
 test -f "$installed_prefix/bin/tun2socks-linux-$arch.manifest.json"
 test -f "$installed_prefix/bin/hideout-observer-linux-$arch.manifest.json"
+test -f "$installed_prefix/bin/hideout-migration-adopt-linux-$arch.manifest.json"
+test -f "$installed_prefix/bin/hideout-migration-vz-adopt-$host_os-$arch.manifest.json"
 test -f "$installed_prefix/share/hideout/third_party/tun2socks/LICENSE"
+test -f "$installed_prefix/share/hideout/third_party/vz/LICENSE"
 test -f "$installed_prefix/share/hideout/LICENSES/GPL-2.0-only.txt"
 test -f "$installed_prefix/share/hideout/package-manifest.json"
 test -f "$installed_prefix/share/hideout/schemas/package-manifest.schema.json"
@@ -596,12 +665,11 @@ upgrade_unrelated="$installed_prefix/bin/operator-before-upgrade"
 printf 'operator-owned-before-upgrade\n' >"$upgrade_unrelated"
 before_upgrade_sha="$(sha256_file "$installed_prefix/bin/hideout")"
 
-# Model the last supported package line before tun2socks, the observer, and the
-# embedded browser manifest became mandatory package-owned components. The
-# candidate upgrade must add all of them without touching durable or unrelated
-# files.
+# Model the last supported package line before the current helper and embedded
+# browser component set became mandatory. The candidate upgrade must add all
+# of them without touching durable or unrelated files.
 installed_state="$installed_prefix/share/hideout/package-manifest.json"
-jq --arg arch "$arch" '
+jq --arg arch "$arch" --arg host_os "$host_os" '
   .package.release.productVersion = "0.1.0-alpha.0" |
   .package.release.channel = "alpha" |
   .package.release.tag = "v0.1.0-alpha.0" |
@@ -610,7 +678,12 @@ jq --arg arch "$arch" '
     .path != ("bin/tun2socks-linux-" + $arch + ".manifest.json") and
     .path != ("bin/hideout-observer-linux-" + $arch) and
     .path != ("bin/hideout-observer-linux-" + $arch + ".manifest.json") and
+    .path != ("bin/hideout-migration-adopt-linux-" + $arch) and
+    .path != ("bin/hideout-migration-adopt-linux-" + $arch + ".manifest.json") and
+    .path != ("bin/hideout-migration-vz-adopt-" + $host_os + "-" + $arch) and
+    .path != ("bin/hideout-migration-vz-adopt-" + $host_os + "-" + $arch + ".manifest.json") and
     .path != "share/hideout/third_party/tun2socks/LICENSE" and
+    .path != "share/hideout/third_party/vz/LICENSE" and
     .path != "share/hideout/LICENSES/GPL-2.0-only.txt" and
     .path != "share/hideout/runtime/package-components.json" and
     .path != "share/hideout/runtime/browser-console.assets.json"
@@ -622,7 +695,12 @@ rm -f \
   "$installed_prefix/bin/tun2socks-linux-$arch.manifest.json" \
   "$installed_prefix/bin/hideout-observer-linux-$arch" \
   "$installed_prefix/bin/hideout-observer-linux-$arch.manifest.json" \
+  "$installed_prefix/bin/hideout-migration-adopt-linux-$arch" \
+  "$installed_prefix/bin/hideout-migration-adopt-linux-$arch.manifest.json" \
+  "$installed_prefix/bin/hideout-migration-vz-adopt-$host_os-$arch" \
+  "$installed_prefix/bin/hideout-migration-vz-adopt-$host_os-$arch.manifest.json" \
   "$installed_prefix/share/hideout/third_party/tun2socks/LICENSE" \
+  "$installed_prefix/share/hideout/third_party/vz/LICENSE" \
   "$installed_prefix/share/hideout/LICENSES/GPL-2.0-only.txt" \
   "$installed_prefix/share/hideout/runtime/package-components.json" \
   "$installed_prefix/share/hideout/runtime/browser-console.assets.json"
@@ -635,7 +713,12 @@ test -x "$installed_prefix/bin/tun2socks-linux-$arch"
 test -f "$installed_prefix/bin/tun2socks-linux-$arch.manifest.json"
 test -x "$installed_prefix/bin/hideout-observer-linux-$arch"
 test -f "$installed_prefix/bin/hideout-observer-linux-$arch.manifest.json"
+test -x "$installed_prefix/bin/hideout-migration-adopt-linux-$arch"
+test -f "$installed_prefix/bin/hideout-migration-adopt-linux-$arch.manifest.json"
+test -x "$installed_prefix/bin/hideout-migration-vz-adopt-$host_os-$arch"
+test -f "$installed_prefix/bin/hideout-migration-vz-adopt-$host_os-$arch.manifest.json"
 test -f "$installed_prefix/share/hideout/third_party/tun2socks/LICENSE"
+test -f "$installed_prefix/share/hideout/third_party/vz/LICENSE"
 test -f "$installed_prefix/share/hideout/LICENSES/GPL-2.0-only.txt"
 test -f "$installed_prefix/share/hideout/runtime/package-components.json"
 test -f "$installed_prefix/share/hideout/runtime/browser-console.assets.json"
@@ -747,6 +830,8 @@ grep -q 'package: uninstall dry-run' "$tmp/package-uninstall-dry.out"
 grep -q 'remove bin/hideout' "$tmp/package-uninstall-dry.out"
 grep -q "remove bin/tun2socks-linux-$arch" "$tmp/package-uninstall-dry.out"
 grep -q "remove bin/hideout-observer-linux-$arch" "$tmp/package-uninstall-dry.out"
+grep -q "remove bin/hideout-migration-adopt-linux-$arch" "$tmp/package-uninstall-dry.out"
+grep -q "remove bin/hideout-migration-vz-adopt-$host_os-$arch" "$tmp/package-uninstall-dry.out"
 test -x "$installed_prefix/bin/hideout"
 test -f "$durable_fixture"
 "$installed_prefix/bin/hideout" package uninstall --prefix "$installed_prefix" >"$tmp/package-uninstall.out"
@@ -756,6 +841,10 @@ test ! -e "$installed_prefix/bin/tun2socks-linux-$arch"
 test ! -e "$installed_prefix/bin/tun2socks-linux-$arch.manifest.json"
 test ! -e "$installed_prefix/bin/hideout-observer-linux-$arch"
 test ! -e "$installed_prefix/bin/hideout-observer-linux-$arch.manifest.json"
+test ! -e "$installed_prefix/bin/hideout-migration-adopt-linux-$arch"
+test ! -e "$installed_prefix/bin/hideout-migration-adopt-linux-$arch.manifest.json"
+test ! -e "$installed_prefix/bin/hideout-migration-vz-adopt-$host_os-$arch"
+test ! -e "$installed_prefix/bin/hideout-migration-vz-adopt-$host_os-$arch.manifest.json"
 test ! -e "$installed_prefix/share/hideout/runtime/browser-console.assets.json"
 test -f "$unrelated_installed"
 test -f "$durable_fixture"
@@ -785,6 +874,8 @@ cat >"$tmp/package-lifecycle-summary.json" <<JSON
   "priorVersionUpgrade": true,
   "packageHelperAdded": true,
   "observerHelperAdded": true,
+  "migrationAdoptionHelperAdded": true,
+  "hostMigrationExecutorAdded": true,
   "browserAssetManifestAdded": true,
   "packageComponentContractAdded": true,
   "durableStatePreservedOnUpgrade": true,
@@ -807,6 +898,8 @@ test -x "$default_installed_prefix/bin/hideout-shim-linux-$arch"
 test -x "$default_installed_prefix/bin/hideout-hostfsd-linux-$arch"
 test -x "$default_installed_prefix/bin/hideout-session-supervisor-linux-$arch"
 test -x "$default_installed_prefix/bin/hideout-observer-linux-$arch"
+test -x "$default_installed_prefix/bin/hideout-migration-adopt-linux-$arch"
+test -x "$default_installed_prefix/bin/hideout-migration-vz-adopt-$host_os-$arch"
 test -x "$default_installed_prefix/bin/hideout-workspace-portal-linux-$arch"
 test -x "$default_installed_prefix/bin/tun2socks-linux-$arch"
 test -f "$default_installed_store/install-state.json"
@@ -838,6 +931,8 @@ test -x "$skip_installed_prefix/bin/hideout-shim-linux-$arch"
 test -x "$skip_installed_prefix/bin/hideout-hostfsd-linux-$arch"
 test -x "$skip_installed_prefix/bin/hideout-session-supervisor-linux-$arch"
 test -x "$skip_installed_prefix/bin/hideout-observer-linux-$arch"
+test -x "$skip_installed_prefix/bin/hideout-migration-adopt-linux-$arch"
+test -x "$skip_installed_prefix/bin/hideout-migration-vz-adopt-$host_os-$arch"
 test -x "$skip_installed_prefix/bin/hideout-workspace-portal-linux-$arch"
 test -x "$skip_installed_prefix/bin/tun2socks-linux-$arch"
 HIDEOUT_STORE_ROOT="$skip_installed_store" "$skip_installed_prefix/bin/hideout" help >"$tmp/package-help.out"

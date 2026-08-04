@@ -12,10 +12,12 @@ license text and copyright notices.
 | `github.com/Masterminds/semver/v3` | `v3.2.1` | MIT |
 | `github.com/charmbracelet/x/ansi` | `v0.11.7` | MIT |
 | `github.com/cilium/ebpf` | `v0.22.0` | MIT |
+| `github.com/Code-Hex/vz/v3` | `v3.7.1` | MIT |
 | `github.com/creack/pty` | `v1.1.24` | MIT |
 | `github.com/dop251/goja` | `v0.0.0-20250630131328-58d95d85e994` | MIT |
 | `github.com/fsnotify/fsnotify` | `v1.10.1` | BSD-3-Clause |
 | `github.com/hanwen/go-fuse/v2` | `v2.10.1` | BSD-3-Clause |
+| `github.com/klauspost/compress` | `v1.18.7` | BSD-3-Clause |
 | `github.com/santhosh-tekuri/jsonschema/v6` | `v6.0.2` | Apache-2.0 |
 | `golang.org/x/crypto` | `v0.54.0` | BSD-3-Clause |
 | `golang.org/x/sys` | `v0.47.0` | BSD-3-Clause |
@@ -35,6 +37,13 @@ its own isolated dependency graph:
 The upstream license is redistributed at
 `third_party/tun2socks/LICENSE`. The helper manifest records its module,
 version, target, build mode, package ownership, and artifact SHA-256.
+
+The macOS arm64 migration adoption executor uses
+`github.com/Code-Hex/vz/v3` v3.7.1 to construct a dedicated
+Virtualization.framework VM with zero network devices. The upstream MIT
+license is redistributed at `third_party/vz/LICENSE`; the executor manifest
+binds the module version, target, build mode, package ownership, and executable
+SHA-256.
 
 The package will also contain a Linux workload-observer helper and embedded
 eBPF object files generated from Hideout-owned source. The generated objects

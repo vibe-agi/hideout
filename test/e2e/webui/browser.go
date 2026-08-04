@@ -116,7 +116,7 @@ func runBrowserProof(t *testing.T, prereq Prerequisites, fixture Fixture, outDir
 	if !result.LiveUpdateObserved {
 		t.Fatalf("browser proof did not observe live update: %+v", result)
 	}
-	if len(result.PanelsVisible) != 10 ||
+	if len(result.PanelsVisible) != 11 ||
 		result.Activity.SessionID != fixture.BrowserEvidence.SessionID ||
 		result.Activity.RecordCount != fixture.BrowserEvidence.RecordCount ||
 		!result.Activity.FactsMatched ||

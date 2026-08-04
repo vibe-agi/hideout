@@ -19,6 +19,7 @@
     "activityRetention",
     "risks",
     "operations",
+    "migrations",
     "capabilities",
     "nextActions"
   ],
@@ -371,6 +372,13 @@
       "maxItems": 500,
       "items": {
         "$ref": "operation.schema.json"
+      }
+    },
+    "migrations": {
+      "type": "array",
+      "maxItems": 100,
+      "items": {
+        "$ref": "migration-operation-projection.schema.json"
       }
     },
     "capabilities": {

@@ -20,6 +20,10 @@ tmp_base="${tmp_base%/}"
 release_evidence_filter="$repo_root/scripts/release/release-evidence.jq"
 release_evidence_semantic_filter="$repo_root/scripts/release/release-evidence-semantic.jq"
 performance_evidence_assessment_filter="$repo_root/scripts/release/performance-evidence-assessment.jq"
+candidate_sequence_contract="$repo_root/specs/045-operator-observability-console/gate-matrix.md"
+# The backticks are literal Markdown delimiters in the required table row.
+# shellcheck disable=SC2016
+candidate_sequence_migration_row='| Portable migration, exact package | `scripts/gates/migration-lima.sh --candidate-result .artifacts/045/package/result.json --out .artifacts/045/migration-lima` |'
 installed_validation_binary=""
 installed_validation_daemon_pid=""
 
@@ -78,6 +82,15 @@ require_command() {
     printf 'collect-evidence: missing required command: %s\n' "$1" >&2
     return 1
   }
+}
+
+validate_candidate_sequence_contract() {
+  local matrix="${1:-$candidate_sequence_contract}"
+
+  [ -f "$matrix" ] && [ ! -L "$matrix" ] || return 1
+  grep -F "$candidate_sequence_migration_row" "$matrix" >/dev/null ||
+    return 1
+  [ "$(grep -Fc 'scripts/gates/migration-lima.sh' "$matrix")" -eq 2 ]
 }
 
 sha256_file() {
@@ -191,10 +204,12 @@ package_manifest_executable_value() {
 helper_manifest_binding_valid() {
   local manifest_path="$1" binary_path="$2"
   local expected_command="$3" expected_arch="$4"
+  local expected_os="${5:-linux}"
   local expected_artifact expected_sha
 
   case "$expected_command" in
-    hideout-hostfsd | hideout-observer | hideout-session-supervisor | \
+    hideout-hostfsd | hideout-migration-adopt | hideout-migration-vz-adopt | \
+      hideout-observer | hideout-session-supervisor | \
       hideout-shim | hideout-workspace-portal | tun2socks)
       ;;
     *)
@@ -207,17 +222,33 @@ helper_manifest_binding_valid() {
   expected_sha="$(sha256_file "$binary_path")" || return 1
   jq -e \
     --arg command "$expected_command" \
+    --arg os "$expected_os" \
     --arg arch "$expected_arch" \
     --arg artifact "$expected_artifact" \
     --arg sha256 "$expected_sha" '
       .version == "hideout.helper-manifest/v1" and
       .command == $command and
-      .targetOS == "linux" and
+      .targetOS == $os and
       .targetArch == $arch and
       .artifact == $artifact and
       .sha256 == $sha256 and
       ((.builtAt | try fromdateiso8601 catch null) | type) == "number" and
-      if $command == "hideout-observer" then
+      if $command == "hideout-migration-vz-adopt" then
+        $os == "darwin" and $arch == "arm64" and
+        .builder == "go build -mod=readonly -trimpath" and
+        .upstreamModule == "github.com/Code-Hex/vz/v3" and
+        .upstreamVersion == "v3.7.1" and
+        .license == "Apache-2.0" and
+        .buildMode == "apple-vz-zero-network-adoption-v1" and
+        .packageOwned == true
+      elif $command == "hideout-migration-adopt" then
+        .builder == "go build -trimpath" and
+        .license == "Apache-2.0" and
+        .buildMode == "strict-data-only-adoption-v1" and
+        .packageOwned == true and
+        (.upstreamModule == null) and
+        (.upstreamVersion == null)
+      elif $command == "hideout-observer" then
         .builder == "go build -trimpath" and
         .license == "Apache-2.0" and
         .buildMode == "embedded-core-bpf" and
@@ -694,6 +725,8 @@ run_preflight() {
   local browser_fixture final_review_count
   local helper_binary helper_manifest helper_sha
   local observer_binary observer_manifest observer_sha
+  local adoption_binary adoption_manifest adoption_sha
+  local host_adoption_binary host_adoption_manifest host_adoption_sha
   local tun_binary tun_manifest tun_sha
   local performance_fixture performance_invalid
   local performance_contention_quiet performance_contention_busy
@@ -701,6 +734,7 @@ run_preflight() {
   local performance_measurement_unowned performance_measurement_invalid_owner
   local performance_bound_fixture performance_snapshot_start
   local performance_snapshot_before performance_snapshot_after
+  local sequence_negative_fixture
   preflight_root="$(
     mktemp -d "$tmp_base/hideout-collect-evidence-preflight.XXXXXX"
   )"
@@ -716,6 +750,15 @@ run_preflight() {
     fi
   }
   trap cleanup_preflight EXIT
+
+  validate_candidate_sequence_contract ||
+    fail "release candidate sequence omits exact-package migration evidence"
+  sequence_negative_fixture="$preflight_root/gate-matrix-missing-sequence.md"
+  printf '%s\n' "$candidate_sequence_migration_row" \
+    >"$sequence_negative_fixture"
+  if validate_candidate_sequence_contract "$sequence_negative_fixture"; then
+    fail "release candidate sequence guard accepted a table-only migration row"
+  fi
 
   fixture="$preflight_root/evidence.json"
   printf '%s\n' '{"schema":"hideout.release-evidence/v1"}' >"$fixture"
@@ -834,6 +877,72 @@ run_preflight() {
     "$observer_manifest.unowned" "$observer_binary" \
     "hideout-observer" "arm64"; then
     fail "observer manifest without package ownership was accepted"
+  fi
+  adoption_binary="$preflight_root/hideout-migration-adopt-linux-arm64"
+  adoption_manifest="$adoption_binary.manifest.json"
+  printf '%s\n' 'migration adoption helper fixture' >"$adoption_binary"
+  chmod 0700 "$adoption_binary"
+  adoption_sha="$(sha256_file "$adoption_binary")"
+  jq -n \
+    --arg sha256 "$adoption_sha" '
+      {
+        version:"hideout.helper-manifest/v1",
+        command:"hideout-migration-adopt",
+        targetOS:"linux",
+        targetArch:"arm64",
+        artifact:"hideout-migration-adopt-linux-arm64",
+        sha256:$sha256,
+        builder:"go build -trimpath",
+        builtAt:"2026-08-01T00:00:00Z",
+        license:"Apache-2.0",
+        buildMode:"strict-data-only-adoption-v1",
+        packageOwned:true
+      }
+    ' >"$adoption_manifest"
+  helper_manifest_binding_valid \
+    "$adoption_manifest" "$adoption_binary" \
+    "hideout-migration-adopt" "arm64" ||
+    fail "package-owned migration adoption manifest was rejected"
+  jq '.buildMode = "generic"' \
+    "$adoption_manifest" >"$adoption_manifest.wrong-mode"
+  if helper_manifest_binding_valid \
+    "$adoption_manifest.wrong-mode" "$adoption_binary" \
+    "hideout-migration-adopt" "arm64"; then
+    fail "migration adoption manifest with a generic build mode was accepted"
+  fi
+  host_adoption_binary="$preflight_root/hideout-migration-vz-adopt-darwin-arm64"
+  host_adoption_manifest="$host_adoption_binary.manifest.json"
+  printf '%s\n' 'host migration adoption executor fixture' >"$host_adoption_binary"
+  chmod 0700 "$host_adoption_binary"
+  host_adoption_sha="$(sha256_file "$host_adoption_binary")"
+  jq -n \
+    --arg sha256 "$host_adoption_sha" '
+      {
+        version:"hideout.helper-manifest/v1",
+        command:"hideout-migration-vz-adopt",
+        targetOS:"darwin",
+        targetArch:"arm64",
+        artifact:"hideout-migration-vz-adopt-darwin-arm64",
+        sha256:$sha256,
+        builder:"go build -mod=readonly -trimpath",
+        builtAt:"2026-08-01T00:00:00Z",
+        upstreamModule:"github.com/Code-Hex/vz/v3",
+        upstreamVersion:"v3.7.1",
+        license:"Apache-2.0",
+        buildMode:"apple-vz-zero-network-adoption-v1",
+        packageOwned:true
+      }
+    ' >"$host_adoption_manifest"
+  helper_manifest_binding_valid \
+    "$host_adoption_manifest" "$host_adoption_binary" \
+    "hideout-migration-vz-adopt" "arm64" "darwin" ||
+    fail "package-owned host migration executor manifest was rejected"
+  jq '.targetOS = "linux"' \
+    "$host_adoption_manifest" >"$host_adoption_manifest.wrong-os"
+  if helper_manifest_binding_valid \
+    "$host_adoption_manifest.wrong-os" "$host_adoption_binary" \
+    "hideout-migration-vz-adopt" "arm64" "darwin"; then
+    fail "host migration executor manifest with a Linux target was accepted"
   fi
   tun_binary="$preflight_root/tun2socks-linux-arm64"
   tun_manifest="$tun_binary.manifest.json"
@@ -1356,6 +1465,7 @@ run_preflight() {
         "ui",
         "performance",
         "lima",
+        "migration-lima",
         "package-build",
         "package-lifecycle"
       ] as $gateIDs |
@@ -1384,13 +1494,17 @@ run_preflight() {
           )
         ],
         helpers:[
-          range(0; 13) as $index |
+          range(0; 17) as $index |
           package_file(
-            "bin/helper-\($index)";
-            (if $index < 6 then "helper-manifest" else "linux-helper" end);
+            (if $index == 16 then
+              "bin/hideout-migration-vz-adopt-darwin-arm64"
+            else "bin/helper-\($index)" end);
+            (if $index < 8 then "helper-manifest"
+             elif $index < 16 then "linux-helper"
+             else "binary" end);
             $sha;
-            (if $index < 6 then "0644" else "0755" end);
-            ($index >= 6)
+            (if $index < 8 then "0644" else "0755" end);
+            ($index >= 8)
           )
         ],
         browserConsole:{
@@ -1425,11 +1539,11 @@ run_preflight() {
         formal:{
           inventory:ref("formal/inventory.json"; $sha; "0600"),
           sourceInventory:ref("formal/source-inventory.json"; $sha; "0644"),
-          configurationCount:12,
-          moduleCount:10,
-          invariantCount:76,
-          propertyCount:19,
-          goTestCount:12
+          configurationCount:16,
+          moduleCount:12,
+          invariantCount:122,
+          propertyCount:28,
+          goTestCount:27
         },
         gates:[
           $gateIDs[] as $id |
@@ -1506,6 +1620,9 @@ if [ "$preflight_only" -eq 1 ]; then
   run_preflight
   exit 0
 fi
+
+validate_candidate_sequence_contract ||
+  fail "release candidate sequence omits exact-package migration evidence"
 
 for required_command in git go jq tar find sort comm awk sed grep stat cmp \
   seq sleep; do
@@ -1871,6 +1988,7 @@ privacy_pointer="$artifact_root/privacy/result.json"
 ui_pointer="$artifact_root/ui/result.json"
 performance_pointer="$artifact_root/performance/result.json"
 lima_pointer="$artifact_root/lima/result.json"
+migration_lima_pointer="$artifact_root/migration-lima/result.json"
 review_file="$repo_root/docs/release/045-code-review.md"
 claim_matrix="$repo_root/docs/release/045-claim-matrix.md"
 formal_inventory_source="$repo_root/formal/inventory.json"
@@ -1878,11 +1996,11 @@ formal_inventory_source="$repo_root/formal/inventory.json"
 validate_simple_summary "$formal_summary" "hideout.formal-gate/v1"
 jq -e '
   .candidateAcceptance == false and
-  .inventory.configurationCount == 12 and
-  .inventory.moduleCount == 10 and
-  .inventory.invariantCount == 76 and
-  .inventory.propertyCount == 19 and
-  .inventory.goTestCount == 12 and
+  .inventory.configurationCount == 16 and
+  .inventory.moduleCount == 12 and
+  .inventory.invariantCount == 122 and
+  .inventory.propertyCount == 28 and
+  .inventory.goTestCount == 27 and
   all(.configurations[]; .result == "passed") and
   .goRefinement.result == "passed" and
   all(.goRefinement.tests[]; .result == "passed") and
@@ -1895,6 +2013,7 @@ validate_simple_summary "$local_summary" \
 jq -e '
   .candidateAcceptance == false and
   all(.lanes[]; .result == "passed") and
+  any(.lanes[]; .id == "migration" and .result == "passed") and
   .statistics.failedLanes == 0
 ' "$local_summary" >/dev/null ||
   fail "local release aggregate is incomplete"
@@ -2171,18 +2290,31 @@ package_ref() {
     ' "$scratch/package-files.json"
 }
 
-jq '
+jq --arg hostHelper "bin/hideout-migration-vz-adopt-darwin-arm64" '
   [
     .[] |
-    select(.kind == "linux-helper" or .kind == "helper-manifest")
+    select(
+      .kind == "linux-helper" or
+      .kind == "helper-manifest" or
+      (.kind == "binary" and .path == $hostHelper)
+    )
   ]
 ' "$scratch/package-files.json" >"$scratch/helpers.json"
 [ "$(jq '[.[] | select(.kind == "helper-manifest")] | length' \
-  "$scratch/helpers.json")" -eq 6 ] ||
-  fail "candidate helper manifest count is not six"
+  "$scratch/helpers.json")" -eq 8 ] ||
+  fail "candidate helper manifest count is not eight"
+[ "$(jq '[.[] | select(.kind == "linux-helper")] | length' \
+  "$scratch/helpers.json")" -eq 8 ] ||
+  fail "candidate Linux helper count is not eight"
+[ "$(jq '[.[] | select(.kind == "binary")] | length' \
+  "$scratch/helpers.json")" -eq 1 ] ||
+  fail "candidate host migration executor count is not one"
 package_guest_arch="$(jq -er '.target.linuxGuestArch' \
   "$package_root/package-manifest.json")"
-helper_suffix="-linux-$package_guest_arch"
+package_host_os="$(jq -er '.target.hostOS' \
+  "$package_root/package-manifest.json")"
+package_host_arch="$(jq -er '.target.hostArch' \
+  "$package_root/package-manifest.json")"
 while IFS= read -r helper_manifest_relative; do
   helper_manifest="$package_root/$helper_manifest_relative"
   helper_binary_relative="${helper_manifest_relative%.manifest.json}"
@@ -2191,17 +2323,38 @@ while IFS= read -r helper_manifest_relative; do
     [ ! -L "$helper_binary" ] ||
     fail "helper manifest lacks its binary: $helper_manifest_relative"
   helper_artifact="$(basename -- "$helper_binary_relative")"
-  case "$helper_artifact" in
-    *"$helper_suffix")
-      helper_command="${helper_artifact%"$helper_suffix"}"
+  helper_target_os="$(jq -er '.targetOS' "$helper_manifest")"
+  helper_target_arch="$(jq -er '.targetArch' "$helper_manifest")"
+  case "$helper_target_os/$helper_target_arch" in
+    "linux/$package_guest_arch")
+      helper_suffix="-linux-$package_guest_arch"
+      case "$helper_artifact" in
+        *"$helper_suffix")
+          helper_command="${helper_artifact%"$helper_suffix"}"
+          ;;
+        *)
+          fail "helper artifact does not bind the guest architecture: $helper_artifact"
+          ;;
+      esac
+      ;;
+    "$package_host_os/$package_host_arch")
+      helper_suffix="-$package_host_os-$package_host_arch"
+      case "$helper_artifact" in
+        "hideout-migration-vz-adopt$helper_suffix")
+          helper_command="hideout-migration-vz-adopt"
+          ;;
+        *)
+          fail "host helper artifact is not the migration VZ executor: $helper_artifact"
+          ;;
+      esac
       ;;
     *)
-      fail "helper artifact does not bind the guest architecture: $helper_artifact"
+      fail "helper manifest targets an unsupported platform: $helper_target_os/$helper_target_arch"
       ;;
   esac
   helper_manifest_binding_valid \
     "$helper_manifest" "$helper_binary" \
-    "$helper_command" "$package_guest_arch" ||
+    "$helper_command" "$helper_target_arch" "$helper_target_os" ||
     fail "helper manifest binding is invalid: $helper_manifest_relative"
 done < <(
   jq -r \
@@ -2227,8 +2380,8 @@ jq -e \
     .id == "browser-console" and
     .container == "bin/hideout" and
     .containerSHA256 == $containerSHA256 and
-    (.assets | length) == 8 and
-    ([.assets[].path] | unique | length) == 8 and
+    (.assets | length) == 9 and
+    ([.assets[].path] | unique | length) == 9 and
     all(.assets[]; .sha256 | test("^[a-f0-9]{64}$"))
   ' "$browser_manifest" >/dev/null ||
   fail "embedded browser manifest is incomplete"
@@ -2269,6 +2422,67 @@ jq -e \
     )
   ' "$runtime_catalog" >/dev/null ||
   fail "runtime catalog, contract, and artifact binding is invalid"
+
+resolve_source_pointer \
+  "$migration_lima_pointer" \
+  "hideout.migration-lima-pointer/v1" \
+  "hideout.migration-lima-evidence/v1"
+migration_lima_summary="$resolved_summary"
+jq -e \
+  --arg commit "$source_commit" \
+  --arg tree "$source_tree" \
+  --arg candidatePointerSHA256 "$(sha256_file "$package_pointer")" \
+  --arg archiveSHA256 "$candidate_archive_sha" \
+  --arg installedBinarySHA256 "$(sha256_file "$browser_container")" '
+    .source == {commit:$commit,tree:$tree,dirty:false} and
+    .candidate == {
+      pointerSHA256:$candidatePointerSHA256,
+      archiveSHA256:$archiveSHA256,
+      installedBinarySHA256:$installedBinarySHA256
+    } and
+    .bundle.reusedDestinations == 4 and
+    all(.sourceImmutability[]; .beforeSHA256 == .afterSHA256) and
+    (.identityEvidence.control as $identity |
+      ($identity.destinationDigests | length) == 4 and
+      ($identity.destinationDigests | unique | length) == 4 and
+      ($identity.destinationDigests | index($identity.sourceDigest)) == null) and
+    (.identityEvidence.backend as $identity |
+      ($identity.destinationDigests | length) == 4 and
+      ($identity.destinationDigests | unique | length) == 4 and
+      ($identity.destinationDigests | index($identity.sourceDigest)) == null) and
+    (.identityEvidence.guest as $identity |
+      ($identity.safeCloneDigests | length) == 3 and
+      ($identity.safeCloneDigests | unique | length) == 3 and
+      ($identity.safeCloneDigests | index($identity.sourceDigest)) == null and
+      $identity.exactRestoreDigest == $identity.sourceDigest) and
+    [.crashRecovery.cuts[].phase] == ["materializing","adopting"] and
+    .crashRecovery.materializationRequiredProtectedResume == true and
+    .crashRecovery.adoptionRestartedWithoutBundleSecret == true and
+    ([
+      .crashRecovery.cuts[].daemonInstanceDigest,
+      .crashRecovery.finalDaemonInstanceDigest
+    ] as $daemonInstances |
+      ($daemonInstances | length) == 3 and
+      ($daemonInstances | unique | length) == 3) and
+    .compatibilityEvidence == {
+      fixture:"missing-package-owned-zero-network-executor",
+      errorCode:"migration.capability.unavailable",
+      operationCreated:false,
+      destinationEnvironmentCreated:false
+    } and
+    .checks.sameBundleThreeSafeClones == true and
+    .checks.materializationCrashResumed == true and
+    .checks.adoptionCrashRecovered == true and
+    .checks.daemonIdentityFreshAcrossCrashRecovery == true and
+    .checks.incompatibleAdoptionExecutorRejectedBeforeEffects == true and
+    all(.checks[]; . == true) and
+    (.artifacts | length) == 6 and
+    ([.artifacts[].path] | unique | length) == 6 and
+    all(.artifacts[];
+      .bytes > 0 and .mode == "0600" and
+      (.sha256 | test("^[a-f0-9]{64}$")))
+  ' "$migration_lima_summary" >/dev/null ||
+  fail "real migration gate is not bound to the exact package candidate"
 
 formal_inventory_relative="$(jq -er '.inventory.path' "$formal_summary")"
 formal_inventory_sha="$(jq -er '.inventory.sha256' "$formal_summary")"
@@ -2359,6 +2573,8 @@ append_gate ui candidate true "$ui_summary" "$ui_pointer"
 append_gate performance candidate true \
   "$performance_summary" "$performance_pointer"
 append_gate lima candidate true "$lima_summary" "$lima_pointer"
+append_gate migration-lima candidate true \
+  "$migration_lima_summary" "$migration_lima_pointer"
 append_gate package-build candidate true \
   "$package_summary" "$package_pointer"
 append_gate package-lifecycle candidate true \

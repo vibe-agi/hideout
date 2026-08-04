@@ -272,7 +272,7 @@ func (c Core) ApplyRun(ctx context.Context, plan RunPlan, opts ApplyRunOptions) 
 		lifecycleCleanupErr = errors.Join(lifecycleCleanupErr, closeErr)
 		result.CleanupError = appendCleanupError(result.CleanupError, closeErr)
 	}()
-	if runEnv.Record.Mode == environment.ModeShared {
+	if environment.UsesWorkspacePortal(runEnv.Record.Mode) {
 		if establishment == nil {
 			_ = environmentStore.ClearSessionRuntime(runEnv.Record.ID, runSession.Layout.ID)
 			return result, ErrSharedWorkspaceDaemonOwnerRequired
@@ -364,7 +364,7 @@ func (c Core) ApplyRun(ctx context.Context, plan RunPlan, opts ApplyRunOptions) 
 			return result, err
 		}
 	}
-	if runEnv.Record.Mode == environment.ModeShared {
+	if environment.UsesWorkspacePortal(runEnv.Record.Mode) {
 		workspaceLifecycleRefs, err = registerRunWorkspaceLifecycle(ctx, lifecycleRegistration, runSession.WorkspaceAttachment)
 		if err != nil {
 			return result, err
@@ -629,7 +629,7 @@ func (c Core) ApplyRun(ctx context.Context, plan RunPlan, opts ApplyRunOptions) 
 				return result, err
 			}
 		}
-		if runEnv.Record.Mode == environment.ModeShared {
+		if environment.UsesWorkspacePortal(runEnv.Record.Mode) {
 			if err := bindRunWorkspaceIncarnation(&runSession, lifecycleRegistration.Incarnation()); err != nil {
 				return result, err
 			}
@@ -818,7 +818,7 @@ func (c Core) ApplyRun(ctx context.Context, plan RunPlan, opts ApplyRunOptions) 
 					}
 				}
 				if lifecycleRegistration != nil {
-					if runEnv.Record.Mode == environment.ModeShared {
+					if environment.UsesWorkspacePortal(runEnv.Record.Mode) {
 						if err := activateLifecycleResource(ctx, lifecycleRegistration, workspaceLifecycleRefs.View); err != nil {
 							return err
 						}
@@ -829,7 +829,7 @@ func (c Core) ApplyRun(ctx context.Context, plan RunPlan, opts ApplyRunOptions) 
 					if err := activateLifecycleResource(ctx, lifecycleRegistration, lifecycleTargetRef); err != nil {
 						return err
 					}
-					if runEnv.Record.Mode == environment.ModeShared {
+					if environment.UsesWorkspacePortal(runEnv.Record.Mode) {
 						runSession.WorkspaceAttachment.State = workspaceattach.AttachmentReady
 					}
 				}
@@ -1261,14 +1261,14 @@ func (c Core) runSpec(runSession RunSession, runEnv RunEnvironment, dataPlane Ru
 	workspaceTransport := backend.WorkspaceTransportStatic
 	if runEnv.Active {
 		machineMode = runEnv.Record.Mode
-		if machineMode == environment.ModeShared {
+		if environment.UsesWorkspacePortal(machineMode) {
 			workspaceTransport = backend.WorkspaceTransportPortal
 		}
 	}
 	workspace := backend.WorkspaceAttachmentSpec{
 		HostRoot: runSession.Plan.Workspace, GuestRoot: runSession.Plan.GuestWorkspace, Transport: workspaceTransport,
 	}
-	if machineMode == environment.ModeShared && runSession.WorkspacePortal != nil {
+	if environment.UsesWorkspacePortal(machineMode) && runSession.WorkspacePortal != nil {
 		workspace.Portal = &backend.WorkspacePortalBinding{
 			PhysicalGuestRoot:   runSession.WorkspaceAttachment.PhysicalGuestRoot,
 			Endpoint:            runSession.WorkspacePortal.Endpoint,

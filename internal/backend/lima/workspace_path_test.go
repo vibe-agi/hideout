@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/vibe-agi/hideout/internal/backend"
 	"github.com/vibe-agi/hideout/internal/backend/lima"
 	"github.com/vibe-agi/hideout/internal/lifecycle"
 	"github.com/vibe-agi/hideout/internal/manager"
@@ -16,12 +17,13 @@ import (
 )
 
 func TestWorkspacePathPlanKeepsLogicalNavigationAndOpaquePhysicalIdentity(t *testing.T) {
-	plan, err := lima.BuildWorkspacePathPlan("wrk_0123456789abcdef")
+	workspaceID := "wrk_" + strings.Repeat("a", 64)
+	plan, err := lima.BuildWorkspacePathPlan(workspaceID)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if plan.LogicalRoot != workspaceattach.LogicalWorkspaceRoot ||
-		plan.PhysicalRoot != workspaceattach.PhysicalWorkspaceBase+"/wrk_0123456789abcdef" ||
+		plan.PhysicalRoot != workspaceattach.PhysicalWorkspaceBase+"/"+workspaceID ||
 		plan.Mechanism != lima.WorkspacePathMechanism {
 		t.Fatalf("path plan = %#v", plan)
 	}
@@ -37,13 +39,30 @@ func TestWorkspacePathPlanKeepsLogicalNavigationAndOpaquePhysicalIdentity(t *tes
 		TargetUser: "developer",
 		GuestWork:  plan.LogicalRoot,
 		Command:    []string{"bash"},
+		Workspace: backend.WorkspaceAttachmentSpec{
+			HostRoot:  "/Users/alice/project",
+			GuestRoot: plan.LogicalRoot,
+			Transport: backend.WorkspaceTransportPortal,
+			Portal: &backend.WorkspacePortalBinding{
+				PhysicalGuestRoot:   plan.PhysicalRoot,
+				Endpoint:            "host.lima.internal:43127",
+				CredentialGuestPath: workspaceattach.PortalCredentialGuestPath,
+			},
+		},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	joined := strings.Join(command, " ")
-	if !strings.Contains(joined, "cd '/workspace'") || strings.Contains(joined, "/Users/") {
+	if !strings.Contains(joined, `'hideout-session-target' '/workspace'`) ||
+		!strings.Contains(joined, `cd "$1"`) || strings.Contains(joined, "/Users/") {
 		t.Fatalf("session shell navigation does not retain the logical root: %s", joined)
+	}
+	if !strings.Contains(joined, "ln -s '"+plan.PhysicalRoot+"' \"$workspace_root/workspace\"") {
+		t.Fatalf("session view does not retain the opaque physical project identity: %s", joined)
+	}
+	if strings.Contains(joined, "mount --rbind '"+plan.PhysicalRoot+"' \"$workspace_root/workspace\"") {
+		t.Fatalf("session view collapsed the project identity to the fixed logical root: %s", joined)
 	}
 }
 

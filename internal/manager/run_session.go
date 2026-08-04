@@ -47,32 +47,34 @@ type RunSession struct {
 }
 
 type runSessionWorkspaceAuthority struct {
-	WorkspaceID string
-	HostRoot    string
-	GuestRoot   string
+	WorkspaceID       string
+	HostRoot          string
+	GuestRoot         string
+	PhysicalGuestRoot string
 }
 
 // workspaceAuthorityForRunSession is the only owner/receipt boundary for a
-// run workspace. Shared machines require the immutable session attachment;
-// pinned modes require the environment's mode-specific machine binding.
+// run workspace. Portal machines require the immutable session attachment;
+// statically pinned modes require the environment's mode-specific binding.
 func workspaceAuthorityForRunSession(runSession RunSession) (runSessionWorkspaceAuthority, error) {
 	if !runSession.Environment.Active {
 		return runSessionWorkspaceAuthority{}, errors.New("run session has no reusable environment workspace authority")
 	}
 	record := runSession.Environment.Record
-	if record.Mode == environment.ModeShared {
+	if environment.UsesWorkspacePortal(record.Mode) {
 		attachment := runSession.WorkspaceAttachment
 		if err := attachment.Validate(); err != nil {
-			return runSessionWorkspaceAuthority{}, fmt.Errorf("shared run workspace attachment: %w", err)
+			return runSessionWorkspaceAuthority{}, fmt.Errorf("Portal run workspace attachment: %w", err)
 		}
 		if attachment.SessionID != runSession.Layout.ID || attachment.EnvironmentID != record.ID ||
 			attachment.LogicalGuestRoot != runSession.Plan.GuestWorkspace {
-			return runSessionWorkspaceAuthority{}, errors.New("shared run workspace attachment does not match the session")
+			return runSessionWorkspaceAuthority{}, errors.New("Portal run workspace attachment does not match the session")
 		}
 		return runSessionWorkspaceAuthority{
-			WorkspaceID: attachment.WorkspaceID,
-			HostRoot:    attachment.CanonicalHostRoot,
-			GuestRoot:   attachment.LogicalGuestRoot,
+			WorkspaceID:       attachment.WorkspaceID,
+			HostRoot:          attachment.CanonicalHostRoot,
+			GuestRoot:         attachment.LogicalGuestRoot,
+			PhysicalGuestRoot: attachment.PhysicalGuestRoot,
 		}, nil
 	}
 	binding, ok := pinnedEnvironmentWorkspace(record)
@@ -227,7 +229,7 @@ func (c Core) BeginRunSession(plan RunPlan, runEnv RunEnvironment, opts RunSessi
 	out.Environment.Configuration.Session = sessionSnapshot
 	out.Environment.Configuration.Layers.SessionID = sessionSnapshotID
 	gitSafeDirectories := []string{plan.GuestWorkspace}
-	if runEnv.Active && runEnv.Record.Mode == environment.ModeShared {
+	if runEnv.Active && environment.UsesWorkspacePortal(runEnv.Record.Mode) {
 		// Portal ownership is synthesized as the target UID. Shared sessions do
 		// not need a Git ownership bypass before their attachment is verified.
 		gitSafeDirectories = nil
@@ -325,7 +327,7 @@ func buildRunSessionEnv(runSession RunSession, gitSafeDirectories []string) envp
 		ShimDir:                runSession.RuntimeShimDir,
 		GitConfigPath:          runSession.GitConfigPath,
 		GitSafeDirectories:     append([]string(nil), gitSafeDirectories...),
-		DisableGitPreloadIndex: runSession.Environment.Active && runSession.Environment.Record.Mode == environment.ModeShared,
+		DisableGitPreloadIndex: runSession.Environment.Active && environment.UsesWorkspacePortal(runSession.Environment.Record.Mode),
 	})
 }
 

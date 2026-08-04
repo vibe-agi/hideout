@@ -62,6 +62,33 @@ func TestPortalFuseTreeRenameUpdatesNodeAndDescendantPaths(t *testing.T) {
 	}
 }
 
+func TestPortalFuseTreeRemoveInvalidationDropsCachedSubtreeImmediately(t *testing.T) {
+	tree := &portalFuseTree{
+		nodes: map[string]*portalFuseNode{},
+		info: map[string]workspaceattach.PortalFileInfo{
+			"removed":       {Inode: 41},
+			"removed/child": {Inode: 42},
+		},
+		dirs: map[string]uint64{".": 7},
+	}
+	parent := &portalFuseNode{tree: tree, path: "."}
+	removed := &portalFuseNode{tree: tree, path: "removed"}
+	child := &portalFuseNode{tree: tree, path: "removed/child"}
+	tree.register(parent)
+	tree.register(removed)
+	tree.register(child)
+
+	tree.invalidatePath("removed", true, false)
+
+	if tree.nodes["removed"] != nil || tree.nodes["removed/child"] != nil ||
+		tree.info["removed"].Inode != 0 || tree.info["removed/child"].Inode != 0 {
+		t.Fatalf("removed subtree remained cached: nodes=%#v info=%#v", tree.nodes, tree.info)
+	}
+	if tree.nodes["."] != parent || tree.directoryGeneration(".") != 8 {
+		t.Fatalf("parent invalidation state nodes=%#v generation=%d", tree.nodes, tree.directoryGeneration("."))
+	}
+}
+
 func TestPortalFuseStableInodeBindsHostIdentityToPortalPath(t *testing.T) {
 	const hostInode = 42
 	before := portalFuseStableInode("before.txt", hostInode)

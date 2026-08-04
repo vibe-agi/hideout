@@ -19,6 +19,12 @@ func cloneOperations(values []manager.Operation) []manager.Operation {
 	return cloneJSONSlice(values)
 }
 
+func cloneMigrations(
+	values []manager.MigrationOperationProjection,
+) []manager.MigrationOperationProjection {
+	return cloneJSONSlice(values)
+}
+
 func cloneActivityProjection(value ActivityProjection) ActivityProjection {
 	cloned := value
 	cloned.Counts = append([]ActivityCount(nil), value.Counts...)

@@ -264,6 +264,10 @@ func (tree *portalFuseTree) renamePath(oldPath, newPath string) {
 }
 
 func (tree *portalFuseTree) invalidate(path string, rawOp uint32) {
+	tree.invalidatePath(path, fsnotify.Op(rawOp)&(fsnotify.Remove|fsnotify.Rename) != 0, true)
+}
+
+func (tree *portalFuseTree) invalidatePath(path string, removed, notifyKernel bool) {
 	path = filepath.ToSlash(filepath.Clean(path))
 	if path == "." || strings.HasPrefix(path, "../") || filepath.IsAbs(path) {
 		return
@@ -276,7 +280,7 @@ func (tree *portalFuseTree) invalidate(path string, rawOp uint32) {
 	tree.mu.RUnlock()
 	tree.mu.Lock()
 	delete(tree.info, path)
-	if fsnotify.Op(rawOp)&(fsnotify.Remove|fsnotify.Rename) != 0 {
+	if removed {
 		for candidate := range tree.nodes {
 			if candidate == path || strings.HasPrefix(candidate, path+"/") {
 				delete(tree.nodes, candidate)
@@ -286,6 +290,9 @@ func (tree *portalFuseTree) invalidate(path string, rawOp uint32) {
 	}
 	tree.dirs[parentPath]++
 	tree.mu.Unlock()
+	if !notifyKernel {
+		return
+	}
 	if parent != nil {
 		_ = parent.NotifyEntry(name)
 		_ = parent.NotifyContent(0, 0)
@@ -498,11 +505,25 @@ func (node *portalFuseNode) Mknod(context.Context, string, uint32, uint32, *fuse
 }
 
 func (node *portalFuseNode) Unlink(ctx context.Context, name string) syscall.Errno {
-	return portalFuseErrno(node.tree.client.Remove(ctx, node.child(name), false))
+	path := node.child(name)
+	if err := node.tree.client.Remove(ctx, path, false); err != nil {
+		return portalFuseErrno(err)
+	}
+	// The host watcher event is asynchronous. Clear the userspace path cache
+	// before returning success; the FUSE unlink response owns kernel dentry
+	// invalidation. Sending NotifyEntry from inside this callback would wait on
+	// the same FUSE connection and deadlock.
+	node.tree.invalidatePath(path, true, false)
+	return 0
 }
 
 func (node *portalFuseNode) Rmdir(ctx context.Context, name string) syscall.Errno {
-	return portalFuseErrno(node.tree.client.Remove(ctx, node.child(name), true))
+	path := node.child(name)
+	if err := node.tree.client.Remove(ctx, path, true); err != nil {
+		return portalFuseErrno(err)
+	}
+	node.tree.invalidatePath(path, true, false)
+	return 0
 }
 
 func (node *portalFuseNode) Rename(ctx context.Context, name string, newParent fs.InodeEmbedder, newName string, flags uint32) syscall.Errno {

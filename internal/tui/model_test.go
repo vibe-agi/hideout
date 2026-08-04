@@ -74,8 +74,11 @@ func TestModelHelpModalUsesInjectedCatalogForActiveView(t *testing.T) {
 			t.Fatalf("catalog help missing %q:\n%s", want, content)
 		}
 	}
-	if strings.Contains(content, "Keys: 1-5 views") {
+	if strings.Contains(content, "1-5 views") {
 		t.Fatalf("legacy non-contextual help remains:\n%s", content)
+	}
+	if !strings.Contains(content, "1-6 views") {
+		t.Fatalf("current view shortcuts are missing:\n%s", content)
 	}
 }
 

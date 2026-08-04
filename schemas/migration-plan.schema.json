@@ -1,0 +1,1225 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://hideout.local/schemas/migration-plan.schema.json",
+  "title": "Hideout migration requests and immutable plans v1",
+  "oneOf": [
+    {
+      "$ref": "#/$defs/exportRequest"
+    },
+    {
+      "$ref": "#/$defs/exportPlan"
+    },
+    {
+      "$ref": "#/$defs/importDraft"
+    },
+    {
+      "$ref": "#/$defs/importPlan"
+    }
+  ],
+  "$defs": {
+    "digest": {
+      "type": "string",
+      "pattern": "^sha256:[a-f0-9]{64}$"
+    },
+    "opaqueId": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_-]{7,127}$"
+    },
+    "planId": {
+      "type": "string",
+      "pattern": "^migplan_[A-Za-z0-9_-]{8,119}$"
+    },
+    "absolutePath": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 4096,
+      "pattern": "^/"
+    },
+    "name": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+    },
+    "destinationName": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$",
+      "not": {
+        "pattern": "^[Dd][Ee][Ff][Aa][Uu][Ll][Tt]$"
+      }
+    },
+    "boundedText": {
+      "type": "string",
+      "maxLength": 2048
+    },
+    "mode": {
+      "enum": [
+        "config",
+        "full"
+      ]
+    },
+    "identityPolicy": {
+      "enum": [
+        "safe-clone",
+        "exact-guest-restore"
+      ]
+    },
+    "exportRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema",
+        "mode",
+        "environmentNames",
+        "includeSecretRefs",
+        "outputPath",
+        "riskAcknowledgements"
+      ],
+      "properties": {
+        "schema": {
+          "const": "hideout.migration-export-request/v1"
+        },
+        "mode": {
+          "$ref": "#/$defs/mode"
+        },
+        "environmentNames": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 32,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/name"
+          }
+        },
+        "includeSecretRefs": {
+          "type": "array",
+          "maxItems": 256,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/name"
+          }
+        },
+        "outputPath": {
+          "$ref": "#/$defs/absolutePath"
+        },
+        "riskAcknowledgements": {
+          "$ref": "#/$defs/riskAcknowledgements"
+        }
+      }
+    },
+    "exportPlan": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema",
+        "planId",
+        "planDigest",
+        "baseRevisions",
+        "mode",
+        "environmentRefs",
+        "diskRefs",
+        "selectedSecretRefs",
+        "includedClasses",
+        "excludedClasses",
+        "environmentEstimates",
+        "diskEstimates",
+        "estimatedPayloadLogicalBytes",
+        "estimatedPayloadComplete",
+        "outputPath",
+        "providerCapabilityRevision",
+        "sourceInventoryDigest",
+        "warnings",
+        "effects",
+        "confirmationText"
+      ],
+      "properties": {
+        "schema": {
+          "const": "hideout.migration-export-plan/v1"
+        },
+        "planId": {
+          "$ref": "#/$defs/planId"
+        },
+        "planDigest": {
+          "$ref": "#/$defs/digest"
+        },
+        "baseRevisions": {
+          "$ref": "#/$defs/baseRevisions"
+        },
+        "mode": {
+          "$ref": "#/$defs/mode"
+        },
+        "environmentRefs": {
+          "$ref": "#/$defs/environmentRefs"
+        },
+        "diskRefs": {
+          "$ref": "#/$defs/diskRefs"
+        },
+        "selectedSecretRefs": {
+          "$ref": "#/$defs/secretRefs"
+        },
+        "includedClasses": {
+          "$ref": "#/$defs/includedClasses"
+        },
+        "excludedClasses": {
+          "$ref": "#/$defs/excludedClasses"
+        },
+        "environmentEstimates": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 32,
+          "items": {
+            "$ref": "#/$defs/exportEnvironmentEstimate"
+          }
+        },
+        "diskEstimates": {
+          "type": "array",
+          "maxItems": 256,
+          "items": {
+            "$ref": "#/$defs/exportDiskEstimate"
+          }
+        },
+        "estimatedPayloadLogicalBytes": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 4398046511104
+        },
+        "estimatedPayloadComplete": {
+          "type": "boolean"
+        },
+        "outputPath": {
+          "$ref": "#/$defs/absolutePath"
+        },
+        "providerCapabilityRevision": {
+          "$ref": "#/$defs/digest"
+        },
+        "sourceInventoryDigest": {
+          "$ref": "#/$defs/digest"
+        },
+        "warnings": {
+          "$ref": "#/$defs/warnings"
+        },
+        "effects": {
+          "$ref": "#/$defs/effects"
+        },
+        "confirmationText": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096
+        },
+        "riskAcknowledgements": {
+          "$ref": "#/$defs/riskAcknowledgements"
+        }
+      }
+    },
+    "importDraft": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema",
+        "bundlePath",
+        "bundleBinding",
+        "selectedEnvironmentRefs",
+        "nameMappings",
+        "conflictDecisions",
+        "workspaceMappings",
+        "secretMappings",
+        "identityPolicies",
+        "authorityDecisions"
+      ],
+      "properties": {
+        "schema": {
+          "const": "hideout.migration-import-draft/v1"
+        },
+        "bundlePath": {
+          "$ref": "#/$defs/absolutePath"
+        },
+        "bundleBinding": {
+          "$ref": "#/$defs/bundleBinding"
+        },
+        "selectedEnvironmentRefs": {
+          "$ref": "#/$defs/environmentRefs"
+        },
+        "nameMappings": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 32,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/nameMapping"
+          }
+        },
+        "conflictDecisions": {
+          "type": "array",
+          "maxItems": 32,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/conflictDecision"
+          }
+        },
+        "workspaceMappings": {
+          "type": "array",
+          "maxItems": 128,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/workspaceMapping"
+          }
+        },
+        "secretMappings": {
+          "type": "array",
+          "maxItems": 256,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/secretMapping"
+          }
+        },
+        "identityPolicies": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 32,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/identitySelection"
+          }
+        },
+        "authorityDecisions": {
+          "type": "array",
+          "maxItems": 1024,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/authorityDecision"
+          }
+        },
+        "riskAcknowledgements": {
+          "$ref": "#/$defs/riskAcknowledgements"
+        }
+      }
+    },
+    "importPlan": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema",
+        "planId",
+        "planDigest",
+        "bundlePath",
+        "bundleBinding",
+        "baseRevisions",
+        "compatibility",
+        "objects",
+        "conflictActions",
+        "environmentActions",
+        "identityActions",
+        "workspaceActions",
+        "authorityActions",
+        "disabledProposals",
+        "riskAcknowledgements",
+        "effects",
+        "blockers"
+      ],
+      "properties": {
+        "schema": {
+          "const": "hideout.migration-import-plan/v1"
+        },
+        "planId": {
+          "$ref": "#/$defs/planId"
+        },
+        "planDigest": {
+          "$ref": "#/$defs/digest"
+        },
+        "bundlePath": {
+          "$ref": "#/$defs/absolutePath"
+        },
+        "bundleBinding": {
+          "$ref": "#/$defs/bundleBinding"
+        },
+        "baseRevisions": {
+          "$ref": "#/$defs/baseRevisions"
+        },
+        "compatibility": {
+          "$ref": "#/$defs/compatibility"
+        },
+        "objects": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 32,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/importObject"
+          }
+        },
+        "conflictActions": {
+          "type": "array",
+          "maxItems": 64,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/conflictAction"
+          }
+        },
+        "environmentActions": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 32,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/environmentAction"
+          }
+        },
+        "identityActions": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 32,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/identityAction"
+          }
+        },
+        "workspaceActions": {
+          "type": "array",
+          "maxItems": 128,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/workspaceAction"
+          }
+        },
+        "authorityActions": {
+          "type": "array",
+          "maxItems": 1024,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/authorityAction"
+          }
+        },
+        "disabledProposals": {
+          "type": "array",
+          "maxItems": 1024,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/opaqueId"
+          }
+        },
+        "riskAcknowledgements": {
+          "$ref": "#/$defs/riskAcknowledgements"
+        },
+        "effects": {
+          "$ref": "#/$defs/effects"
+        },
+        "blockers": {
+          "type": "array",
+          "maxItems": 1024,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/blocker"
+          }
+        }
+      }
+    },
+    "bundleBinding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "bundleId",
+        "formatVersion",
+        "fileDigest",
+        "manifestDigest",
+        "completionDigest"
+      ],
+      "properties": {
+        "bundleId": {
+          "type": "string",
+          "pattern": "^migb_[A-Za-z0-9_-]{8,123}$"
+        },
+        "formatVersion": {
+          "const": 1
+        },
+        "fileDigest": {
+          "$ref": "#/$defs/digest"
+        },
+        "manifestDigest": {
+          "$ref": "#/$defs/digest"
+        },
+        "completionDigest": {
+          "$ref": "#/$defs/digest"
+        }
+      }
+    },
+    "baseRevisions": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 1024,
+      "uniqueItems": true,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "resource",
+          "revision",
+          "digest"
+        ],
+        "properties": {
+          "resource": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$"
+          },
+          "revision": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "digest": {
+            "$ref": "#/$defs/digest"
+          }
+        }
+      }
+    },
+    "environmentRefs": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 32,
+      "uniqueItems": true,
+      "items": {
+        "$ref": "#/$defs/opaqueId"
+      }
+    },
+    "diskRefs": {
+      "type": "array",
+      "maxItems": 256,
+      "uniqueItems": true,
+      "items": {
+        "$ref": "#/$defs/opaqueId"
+      }
+    },
+    "includedClasses": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 32,
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "pattern": "^[a-z][a-z0-9-]{0,63}$"
+      }
+    },
+    "exportEnvironmentEstimate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "environmentRef",
+        "displayName",
+        "portableConfigLogicalBytes",
+        "portableConfigDigest",
+        "diskRefs",
+        "referencedDiskLogicalBytes",
+        "estimatedLogicalBytes"
+      ],
+      "properties": {
+        "environmentRef": {
+          "$ref": "#/$defs/opaqueId"
+        },
+        "displayName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "portableConfigLogicalBytes": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1048576
+        },
+        "portableConfigDigest": {
+          "$ref": "#/$defs/digest"
+        },
+        "diskRefs": {
+          "$ref": "#/$defs/diskRefs"
+        },
+        "referencedDiskLogicalBytes": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 4398046511104
+        },
+        "estimatedLogicalBytes": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 4398046511104
+        }
+      }
+    },
+    "exportDiskEstimate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "diskRef",
+        "role",
+        "logicalBytes",
+        "allocatedBytesHint",
+        "consumers"
+      ],
+      "properties": {
+        "diskRef": {
+          "$ref": "#/$defs/opaqueId"
+        },
+        "role": {
+          "enum": ["root", "attached"]
+        },
+        "logicalBytes": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 4398046511104
+        },
+        "allocatedBytesHint": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 4398046511104
+        },
+        "consumers": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 32,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/opaqueId"
+          }
+        }
+      }
+    },
+    "secretRefs": {
+      "type": "array",
+      "maxItems": 256,
+      "uniqueItems": true,
+      "items": {
+        "$ref": "#/$defs/name"
+      }
+    },
+    "excludedClasses": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 32,
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "pattern": "^[a-z][a-z0-9-]{0,63}$"
+      }
+    },
+    "warning": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "code",
+        "summary"
+      ],
+      "properties": {
+        "code": {
+          "type": "string",
+          "pattern": "^migration\\.[a-z0-9._-]{1,119}$"
+        },
+        "summary": {
+          "$ref": "#/$defs/boundedText"
+        }
+      }
+    },
+    "warnings": {
+      "type": "array",
+      "maxItems": 1024,
+      "uniqueItems": true,
+      "items": {
+        "$ref": "#/$defs/warning"
+      }
+    },
+    "effect": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "kind",
+        "provider",
+        "compensation"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/opaqueId"
+        },
+        "kind": {
+          "enum": [
+            "claim-source",
+            "snapshot-source",
+            "write-bundle",
+            "seal-bundle",
+            "claim-destination",
+            "stage-destination",
+            "prepare-secret",
+            "adopt-destination",
+            "verify-destination",
+            "commit-visibility",
+            "release-claim"
+          ]
+        },
+        "provider": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]{0,31}$"
+        },
+        "compensation": {
+          "enum": [
+            "none",
+            "release-claim",
+            "release-snapshot",
+            "remove-partial",
+            "rollback-stage",
+            "delete-provisional-secret"
+          ]
+        }
+      }
+    },
+    "effects": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 4096,
+      "uniqueItems": true,
+      "items": {
+        "$ref": "#/$defs/effect"
+      }
+    },
+    "riskAcknowledgements": {
+      "type": "array",
+      "maxItems": 1024,
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "pattern": "^migration\\.[a-z0-9._-]{1,119}$"
+      }
+    },
+    "nameMapping": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "sourceRef",
+        "destinationName"
+      ],
+      "properties": {
+        "sourceRef": {
+          "$ref": "#/$defs/opaqueId"
+        },
+        "destinationName": {
+          "$ref": "#/$defs/destinationName"
+        }
+      }
+    },
+    "conflictDecision": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "sourceRef",
+        "decision",
+        "lifecycleOperationId",
+        "lifecyclePlanDigest"
+      ],
+      "properties": {
+        "sourceRef": {
+          "$ref": "#/$defs/opaqueId"
+        },
+        "decision": {
+          "const": "replace"
+        },
+        "lifecycleOperationId": {
+          "type": "string",
+          "pattern": "^op_[A-Za-z0-9_-]{8,124}$"
+        },
+        "lifecyclePlanDigest": {
+          "$ref": "#/$defs/digest"
+        }
+      }
+    },
+    "workspaceMapping": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "proposalId",
+        "decision"
+      ],
+      "properties": {
+        "proposalId": {
+          "$ref": "#/$defs/opaqueId"
+        },
+        "decision": {
+          "enum": [
+            "mapped",
+            "disabled"
+          ]
+        },
+        "destinationPath": {
+          "$ref": "#/$defs/absolutePath"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "decision": {
+                "const": "mapped"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "destinationPath"
+            ]
+          },
+          "else": {
+            "not": {
+              "required": [
+                "destinationPath"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "workspaceAction": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "proposalId",
+        "environmentRef",
+        "guestPath",
+        "decision"
+      ],
+      "properties": {
+        "proposalId": {
+          "$ref": "#/$defs/opaqueId"
+        },
+        "environmentRef": {
+          "$ref": "#/$defs/opaqueId"
+        },
+        "guestPath": {
+          "$ref": "#/$defs/absolutePath"
+        },
+        "decision": {
+          "enum": [
+            "mapped",
+            "disabled"
+          ]
+        },
+        "destinationPath": {
+          "$ref": "#/$defs/absolutePath"
+        },
+        "rootDevice": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "rootInode": {
+          "type": "integer",
+          "minimum": 1
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "decision": {
+                "const": "mapped"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "destinationPath",
+              "rootDevice",
+              "rootInode"
+            ]
+          },
+          "else": {
+            "not": {
+              "anyOf": [
+                {"required": ["destinationPath"]},
+                {"required": ["rootDevice"]},
+                {"required": ["rootInode"]}
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "secretMapping": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "sourceRef",
+        "decision"
+      ],
+      "properties": {
+        "sourceRef": {
+          "$ref": "#/$defs/opaqueId"
+        },
+        "decision": {
+          "enum": [
+            "existing-ref",
+            "import-value",
+            "unresolved"
+          ]
+        },
+        "destinationRef": {
+          "$ref": "#/$defs/name"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "decision": {
+                "enum": [
+                  "existing-ref",
+                  "import-value"
+                ]
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "destinationRef"
+            ]
+          },
+          "else": {
+            "not": {
+              "required": [
+                "destinationRef"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "identitySelection": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "sourceRef",
+        "policy"
+      ],
+      "properties": {
+        "sourceRef": {
+          "$ref": "#/$defs/opaqueId"
+        },
+        "policy": {
+          "$ref": "#/$defs/identityPolicy"
+        }
+      }
+    },
+    "authorityDecision": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "proposalId",
+        "decision"
+      ],
+      "properties": {
+        "proposalId": {
+          "$ref": "#/$defs/opaqueId"
+        },
+        "decision": {
+          "enum": [
+            "disabled",
+            "approved",
+            "rejected"
+          ]
+        },
+        "destinationValue": {
+          "type": "string",
+          "maxLength": 1024
+        }
+      }
+    },
+    "compatibility": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "backend",
+        "available",
+        "capabilityRevision",
+        "requiredBytes",
+        "availableBytes"
+      ],
+      "properties": {
+        "backend": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]{0,31}$"
+        },
+        "available": {
+          "type": "boolean"
+        },
+        "capabilityRevision": {
+          "$ref": "#/$defs/digest"
+        },
+        "requiredBytes": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 4398046511104
+        },
+        "availableBytes": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "reasonCode": {
+          "type": "string",
+          "pattern": "^migration\\.[a-z0-9._-]{1,119}$"
+        }
+      }
+    },
+    "importObject": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "sourceRef",
+        "destinationName",
+        "mode",
+        "diskRefs"
+      ],
+      "properties": {
+        "sourceRef": {
+          "$ref": "#/$defs/opaqueId"
+        },
+        "destinationName": {
+          "$ref": "#/$defs/destinationName"
+        },
+        "mode": {
+          "$ref": "#/$defs/mode"
+        },
+        "diskRefs": {
+          "$ref": "#/$defs/diskRefs"
+        }
+      }
+    },
+    "conflictAction": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "sourceRef",
+        "destinationName",
+        "kind",
+        "decision",
+        "destructive",
+        "effects",
+        "recovery"
+      ],
+      "properties": {
+        "sourceRef": {
+          "$ref": "#/$defs/opaqueId"
+        },
+        "destinationName": {
+          "$ref": "#/$defs/destinationName"
+        },
+        "kind": {
+          "enum": ["environment-name", "profile-name"]
+        },
+        "decision": {
+          "enum": ["refuse", "replace"]
+        },
+        "existingEnvironmentId": {
+          "type": "string",
+          "pattern": "^env_[a-z0-9]+$"
+        },
+        "existingStatus": {
+          "enum": ["new", "created", "ready", "running", "stopped", "error"]
+        },
+        "lifecycleOperationId": {
+          "type": "string",
+          "pattern": "^op_[A-Za-z0-9_-]{8,124}$"
+        },
+        "lifecyclePlanDigest": {
+          "$ref": "#/$defs/digest"
+        },
+        "destructive": {
+          "type": "boolean"
+        },
+        "effects": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 4,
+          "items": {
+            "$ref": "#/$defs/boundedText"
+          }
+        },
+        "recovery": {
+          "$ref": "#/$defs/boundedText"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "kind": {"const": "environment-name"}
+            }
+          },
+          "then": {
+            "required": ["existingEnvironmentId", "existingStatus"]
+          },
+          "else": {
+            "not": {
+              "anyOf": [
+                {"required": ["existingEnvironmentId"]},
+                {"required": ["existingStatus"]}
+              ]
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "decision": {"const": "replace"}
+            }
+          },
+          "then": {
+            "properties": {
+              "kind": {"const": "environment-name"},
+              "destructive": {"const": true}
+            },
+            "required": ["lifecycleOperationId", "lifecyclePlanDigest"]
+          },
+          "else": {
+            "properties": {
+              "destructive": {"const": false}
+            },
+            "not": {
+              "anyOf": [
+                {"required": ["lifecycleOperationId"]},
+                {"required": ["lifecyclePlanDigest"]}
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "identityAction": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "sourceRef",
+        "guestPolicy",
+        "freshControlIdentity",
+        "freshBackendIdentity"
+      ],
+      "properties": {
+        "sourceRef": {
+          "$ref": "#/$defs/opaqueId"
+        },
+        "guestPolicy": {
+          "$ref": "#/$defs/identityPolicy"
+        },
+        "freshControlIdentity": {
+          "const": true
+        },
+        "freshBackendIdentity": {
+          "const": true
+        }
+      }
+    },
+    "environmentAction": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "sourceRef",
+        "destinationProfileName",
+        "runtime",
+        "guestUser",
+        "backend",
+        "profileComponentId",
+        "profileContentDigest",
+        "profileLogicalBytes"
+      ],
+      "properties": {
+        "sourceRef": {
+          "$ref": "#/$defs/opaqueId"
+        },
+        "destinationProfileName": {
+          "$ref": "#/$defs/destinationName"
+        },
+        "runtime": {
+          "enum": ["linux", "native"]
+        },
+        "guestUser": {
+          "type": "string",
+          "pattern": "^[a-z_][a-z0-9_-]{0,31}$"
+        },
+        "backend": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9.-]{1,127}$"
+        },
+        "profileComponentId": {
+          "$ref": "#/$defs/opaqueId"
+        },
+        "profileContentDigest": {
+          "$ref": "#/$defs/digest"
+        },
+        "profileLogicalBytes": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1048576
+        }
+      }
+    },
+    "authorityAction": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "proposalId",
+        "environmentRef",
+        "class",
+        "destinationValue",
+        "approved"
+      ],
+      "properties": {
+        "proposalId": {
+          "$ref": "#/$defs/opaqueId"
+        },
+        "environmentRef": {
+          "$ref": "#/$defs/opaqueId"
+        },
+        "class": {
+          "enum": [
+            "workspace",
+            "hostfs",
+            "mount",
+            "network",
+            "proxy",
+            "endpoint",
+            "host-app",
+            "command-adapter",
+            "script",
+            "pack",
+            "environment",
+            "profile"
+          ]
+        },
+        "destinationValue": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024
+        },
+        "approved": {
+          "const": true
+        }
+      }
+    },
+    "blocker": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "code",
+        "summary",
+        "remediation"
+      ],
+      "properties": {
+        "code": {
+          "type": "string",
+          "pattern": "^migration\\.[a-z0-9._-]{1,119}$"
+        },
+        "summary": {
+          "$ref": "#/$defs/boundedText"
+        },
+        "remediation": {
+          "$ref": "#/$defs/boundedText"
+        },
+        "sourceRef": {
+          "$ref": "#/$defs/opaqueId"
+        }
+      }
+    }
+  }
+}

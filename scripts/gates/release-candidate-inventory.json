@@ -9,6 +9,7 @@
     "generated",
     "static",
     "dependencies-advisory",
+    "migration",
     "mutations",
     "release-blockers"
   ],
@@ -22,6 +23,8 @@
     "scripts/gates/formal.sh",
     "scripts/gates/generated.sh",
     "scripts/gates/keychain-real.sh",
+    "scripts/gates/migration-lima.sh",
+    "scripts/gates/migration.sh",
     "scripts/gates/network-rotation-lima.sh",
     "scripts/gates/package-components.sh",
     "scripts/gates/recovery.sh",
@@ -37,6 +40,10 @@
     "scripts/lib/gate-result.sh",
     "scripts/lib/gate2-concurrent-performance.sh",
     "scripts/lib/gate2-concurrent-sessions.sh",
+    "scripts/lib/gate2-shared-workspace-path.sh",
+    "scripts/lib/gate2-shared-workspace-performance.sh",
+    "scripts/lib/gate2-shared-workspace-product-performance.sh",
+    "scripts/lib/gate2-shared-workspace.sh",
     "scripts/lib/homebrew-formula.sh",
     "scripts/lib/reproducible-package.sh",
     "scripts/mutation/045/judge.sh",
@@ -49,10 +56,15 @@
     "scripts/release/revalidate-performance-evidence.sh",
     "scripts/release/test-package-lifecycle.sh",
     "scripts/release/verify-publication-absence.sh",
+    "scripts/test-first-run-docs-smoke.sh",
     "scripts/test-gate0.sh",
     "scripts/test-install-smoke.sh",
     "scripts/test-package-smoke.sh",
-    "scripts/test-vulnerability-gate.sh"
+    "scripts/test-shared-workspace-lima-e2e.sh",
+    "scripts/test-shared-workspace-smoke.sh",
+    "scripts/test-ui-e2e.sh",
+    "scripts/test-vulnerability-gate.sh",
+    "scripts/test-workspace-path-identity-lima.sh"
   ],
   "markdownLint": [
     "THIRD_PARTY_NOTICES.md",
@@ -64,6 +76,7 @@
     "docs/distribution-bootstrap.md",
     "docs/formal-models.md",
     "docs/manager-control-plane.md",
+    "docs/migration.md",
     "docs/privacy-run-design.md",
     "docs/privacy-run-test-plan.md",
     "docs/recovery.md",
@@ -88,7 +101,22 @@
     "specs/045-operator-observability-console/quickstart.md",
     "specs/045-operator-observability-console/research.md",
     "specs/045-operator-observability-console/spec.md",
-    "specs/045-operator-observability-console/tasks.md"
+    "specs/045-operator-observability-console/tasks.md",
+    "specs/046-portable-hideout-migration/adversarial-review.md",
+    "specs/046-portable-hideout-migration/checklists/requirements.md",
+    "specs/046-portable-hideout-migration/contracts/backend-provider.md",
+    "specs/046-portable-hideout-migration/contracts/bundle-format.md",
+    "specs/046-portable-hideout-migration/contracts/manager-api.md",
+    "specs/046-portable-hideout-migration/contracts/operator-ux.md",
+    "specs/046-portable-hideout-migration/data-model.md",
+    "specs/046-portable-hideout-migration/manager-foundation-adversarial-review.md",
+    "specs/046-portable-hideout-migration/plan.md",
+    "specs/046-portable-hideout-migration/portable-core-adversarial-review.md",
+    "specs/046-portable-hideout-migration/quickstart.md",
+    "specs/046-portable-hideout-migration/research.md",
+    "specs/046-portable-hideout-migration/schema-adversarial-review.md",
+    "specs/046-portable-hideout-migration/spec.md",
+    "specs/046-portable-hideout-migration/tasks.md"
   ],
   "fuzzTests": [
     {
@@ -96,6 +124,48 @@
       "importPath": "github.com/vibe-agi/hideout/internal/manager",
       "name": "FuzzTypedChangeNormalizationAndReview",
       "source": "internal/manager/profile_transaction_fuzz_test.go",
+      "fuzzTime": "5s"
+    },
+    {
+      "package": "./internal/migration",
+      "importPath": "github.com/vibe-agi/hideout/internal/migration",
+      "name": "FuzzMigrationFrame",
+      "source": "internal/migration/fuzz_test.go",
+      "fuzzTime": "5s"
+    },
+    {
+      "package": "./internal/migration",
+      "importPath": "github.com/vibe-agi/hideout/internal/migration",
+      "name": "FuzzMigrationManifest",
+      "source": "internal/migration/fuzz_test.go",
+      "fuzzTime": "5s"
+    },
+    {
+      "package": "./internal/migration",
+      "importPath": "github.com/vibe-agi/hideout/internal/migration",
+      "name": "FuzzMigrationPrivateHeader",
+      "source": "internal/migration/fuzz_test.go",
+      "fuzzTime": "5s"
+    },
+    {
+      "package": "./internal/migration",
+      "importPath": "github.com/vibe-agi/hideout/internal/migration",
+      "name": "FuzzMigrationPublicHeader",
+      "source": "internal/migration/fuzz_test.go",
+      "fuzzTime": "5s"
+    },
+    {
+      "package": "./internal/migration",
+      "importPath": "github.com/vibe-agi/hideout/internal/migration",
+      "name": "FuzzMigrationTrailer",
+      "source": "internal/migration/fuzz_test.go",
+      "fuzzTime": "5s"
+    },
+    {
+      "package": "./internal/migration",
+      "importPath": "github.com/vibe-agi/hideout/internal/migration",
+      "name": "FuzzMigrationZstdRecord",
+      "source": "internal/migration/fuzz_test.go",
       "fuzzTime": "5s"
     },
     {

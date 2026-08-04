@@ -18,8 +18,15 @@ const (
 	observerSourceLicense        = "Apache-2.0 OR GPL-2.0-only"
 	observerKernelProgramLicense = "GPL"
 	observerKernelLicenseText    = "LICENSES/GPL-2.0-only.txt"
+	migrationAdoptComponentID    = "linux-migration-adopt"
+	migrationAdoptArtifact       = "bin/hideout-migration-adopt-linux-{linuxGuestArch}"
+	migrationAdoptManifest       = migrationAdoptArtifact + ".manifest.json"
+	migrationVZAdoptComponentID  = "host-migration-vz-adopt"
+	migrationVZAdoptArtifact     = "bin/hideout-migration-vz-adopt-{hostOS}-{hostArch}"
+	migrationVZAdoptManifest     = migrationVZAdoptArtifact + ".manifest.json"
 	embeddedAssetComponentKind   = "embedded-assets"
 	linuxHelperComponentKind     = "linux-helper"
+	hostHelperComponentKind      = "host-helper"
 )
 
 func ExpectedPackageComponentContract() PackageComponentContract {
@@ -47,6 +54,26 @@ func ExpectedPackageComponentContract() PackageComponentContract {
 				PackageOwned:         true,
 			},
 			{
+				ID:               migrationAdoptComponentID,
+				Kind:             linuxHelperComponentKind,
+				ArtifactTemplate: migrationAdoptArtifact,
+				ManifestTemplate: migrationAdoptManifest,
+				License:          helperbin.LinuxMigrationAdoptLicense,
+				BuildMode:        helperbin.LinuxMigrationAdoptBuildMode,
+				PackageOwned:     true,
+			},
+			{
+				ID:               migrationVZAdoptComponentID,
+				Kind:             hostHelperComponentKind,
+				ArtifactTemplate: migrationVZAdoptArtifact,
+				ManifestTemplate: migrationVZAdoptManifest,
+				License:          helperbin.HostMigrationVZAdoptLicense,
+				BuildMode:        helperbin.HostMigrationVZAdoptBuildMode,
+				UpstreamModule:   helperbin.HostMigrationVZAdoptUpstreamModule,
+				UpstreamVersion:  helperbin.HostMigrationVZAdoptUpstreamVersion,
+				PackageOwned:     true,
+			},
+			{
 				ID:           BrowserConsoleAssetID,
 				Kind:         embeddedAssetComponentKind,
 				Container:    BrowserConsoleContainerPath,
@@ -65,7 +92,7 @@ func ValidatePackageComponentContract(contract PackageComponentContract) error {
 	}
 	expected := ExpectedPackageComponentContract()
 	if !reflect.DeepEqual(contract.Components, expected.Components) {
-		return errors.New("package component contract does not match the supported observer and browser inventory")
+		return errors.New("package component contract does not match the supported helper and browser inventory")
 	}
 	return nil
 }

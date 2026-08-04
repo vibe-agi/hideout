@@ -9,6 +9,7 @@
   <script defer src="/assets/client.js"></script>
   <script defer src="/assets/activity.js"></script>
   <script defer src="/assets/config.js"></script>
+  <script defer src="/assets/migration.js"></script>
   <script defer src="/assets/presentation.js"></script>
   <script defer src="/assets/app.js"></script>
 </head>
@@ -62,6 +63,7 @@
       <button id="tab-coverage" class="tab" type="button" role="tab" aria-controls="view-coverage" aria-selected="false" tabindex="-1" data-panel="coverage">Coverage</button>
       <button id="tab-risks" class="tab" type="button" role="tab" aria-controls="view-risks" aria-selected="false" tabindex="-1" data-panel="risks">Risks</button>
       <button id="tab-operations" class="tab" type="button" role="tab" aria-controls="view-operations" aria-selected="false" tabindex="-1" data-panel="operations">Operations</button>
+      <button id="tab-migration" class="tab" type="button" role="tab" aria-controls="view-migration" aria-selected="false" tabindex="-1" data-panel="migration">Migration</button>
       <button id="tab-config" class="tab" type="button" role="tab" aria-controls="view-config" aria-selected="false" tabindex="-1" data-panel="config">Configuration</button>
       <button id="tab-help" class="tab" type="button" role="tab" aria-controls="view-help" aria-selected="false" tabindex="-1" data-panel="help">Help</button>
     </nav>
@@ -209,6 +211,16 @@
             <div><p class="eyebrow">Durable outcomes</p><h2>Operations</h2></div>
           </div>
           <div id="operationsBody" class="panel-body history-body" tabindex="0" aria-label="Durable operation history"></div>
+        </div>
+      </section>
+
+      <section class="view" id="view-migration" role="tabpanel" aria-labelledby="tab-migration" tabindex="0" data-view="migration" hidden>
+        <div class="panel">
+          <div class="panel-head">
+            <div><p class="eyebrow">Portable encrypted bundle</p><h2>Migration</h2></div>
+            <span id="migrationMode" class="badge">read-only</span>
+          </div>
+          <div id="migrationBody" class="panel-body history-body" tabindex="0" aria-label="Migration inventory, progress, and recovery"></div>
         </div>
       </section>
 

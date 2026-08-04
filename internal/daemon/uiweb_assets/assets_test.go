@@ -64,6 +64,7 @@ func TestHandlerServesTypedAssetsWithStrictBrowserBoundary(t *testing.T) {
 		{"/assets/client.js", "text/javascript", "new EventSource"},
 		{"/assets/activity.js", "text/javascript", "function summarize"},
 		{"/assets/config.js", "text/javascript", "function createDraft"},
+		{"/assets/migration.js", "text/javascript", "function operationView"},
 		{"/assets/presentation.js", "text/javascript", "function safeText"},
 		{"/assets/app.js", "text/javascript", "function seedLiveConsole"},
 	} {

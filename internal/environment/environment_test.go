@@ -77,6 +77,10 @@ func TestEnvironmentModesRejectCrossModeWorkspaceAuthority(t *testing.T) {
 			rec.DedicatedWorkspace = workspace
 			rec.DedicatedGuestRoot = "/workspace"
 		}},
+		{"dedicated-portal", func(rec *Record) {
+			rec.Mode = ModeDedicatedPortal
+			rec.Name = "imported-machine"
+		}},
 		{"workspace-bound", func(rec *Record) {
 			rec.Mode = ModeWorkspaceBound
 			rec.Name = "workspace-bound"
@@ -92,7 +96,7 @@ func TestEnvironmentModesRejectCrossModeWorkspaceAuthority(t *testing.T) {
 				t.Fatalf("valid %s record rejected: %v", tt.name, err)
 			}
 			invalid := rec
-			if rec.Mode == ModeShared {
+			if UsesWorkspacePortal(rec.Mode) {
 				invalid.BoundWorkspace = workspace
 				invalid.BoundGuestRoot = "/workspace"
 			} else {
@@ -102,6 +106,37 @@ func TestEnvironmentModesRejectCrossModeWorkspaceAuthority(t *testing.T) {
 				t.Fatalf("cross-mode authority accepted: %+v", invalid)
 			}
 		})
+	}
+}
+
+func TestDedicatedPortalRecordIsNamedPersistentAndCarriesNoHostAuthority(t *testing.T) {
+	rec := Record{
+		Version: version, ID: "env_20260802t000000z0123456789abcdef", Name: "imported-machine",
+		ImageRef: BuiltinBaseImage, Profile: "imported-profile", Backend: "lima",
+		Mode: ModeDedicatedPortal, MachineIdentityID: testMachineIdentityID(),
+		BootConfigurationID: testBootConfigurationID(), Status: StatusStopped,
+		CreatedAt: time.Now().UTC(),
+	}
+	if err := rec.Validate(); err != nil {
+		t.Fatalf("valid dedicated Portal record rejected: %v", err)
+	}
+	if !UsesWorkspacePortal(rec.Mode) || UsesWorkspacePortal(ModeDedicated) || UsesWorkspacePortal(ModeWorkspaceBound) {
+		t.Fatal("workspace Portal mode classification is incorrect")
+	}
+	if host, guest, ok := rec.WorkspaceBinding(); ok || host != "" || guest != "" {
+		t.Fatalf("dedicated Portal record exposed static workspace authority: %q -> %q, ok=%v", host, guest, ok)
+	}
+
+	withStaticAuthority := rec
+	withStaticAuthority.DedicatedWorkspace = filepath.Clean(t.TempDir())
+	withStaticAuthority.DedicatedGuestRoot = "/workspace"
+	if err := withStaticAuthority.Validate(); err == nil {
+		t.Fatal("dedicated Portal record accepted static host workspace authority")
+	}
+	withDisposableAuthority := rec
+	withDisposableAuthority.Disposable = true
+	if err := withDisposableAuthority.Validate(); err == nil {
+		t.Fatal("dedicated Portal record accepted disposable cleanup authority")
 	}
 }
 

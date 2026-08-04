@@ -8,10 +8,13 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/vibe-agi/hideout/internal/backend"
+	"github.com/vibe-agi/hideout/internal/backend/native"
 	"github.com/vibe-agi/hideout/internal/decision"
 	"github.com/vibe-agi/hideout/internal/environment"
 	"github.com/vibe-agi/hideout/internal/lifecycle"
@@ -75,6 +78,11 @@ type Options struct {
 	// ActivityStore is injectable for recovery and lifecycle tests. Production
 	// opens the private bounded store rooted under Store.Root.
 	ActivityStore *workloadstore.Store
+	// MigrationProvider is optional and never enlarges the base backend
+	// interface. Production injects the package-backed Lima provider; absence
+	// leaves full-state migration explicitly unavailable.
+	MigrationProvider backend.MigrationProvider
+	ProductVersion    string
 	// LiveResources lists resources that could survive a restart (running
 	// environments). Defaults to none; the daemon reports any it cannot prove it
 	// owns as orphans. Injectable for tests.
@@ -104,6 +112,9 @@ type Daemon struct {
 	activityStore      *workloadstore.Store
 	activityOwned      bool
 	activityCleanup    *manager.ActivityCleanupService
+	migrationWorkers   *migrationWorkerSet
+	migrationSecrets   *manager.MigrationSecretInputStore
+	migrationCache     *manager.MigrationInspectionCache
 	secrets            *daemonSecretService
 	environmentActions *manager.EnvironmentActionService
 	lifecycle          *lifecycle.Coordinator
@@ -462,6 +473,46 @@ func Start(opts Options) (*Daemon, error) {
 		Store:    operationStore,
 		Observer: bus,
 	}
+	migrationSecrets := manager.NewMigrationSecretInputStore(
+		manager.MigrationSecretInputStoreOptions{Now: opts.Now},
+	)
+	migrationCache := manager.NewMigrationInspectionCache(
+		manager.MigrationInspectionCacheOptions{Now: opts.Now},
+	)
+	migrationService := manager.MigrationService{
+		Store:        manager.MigrationStore{Root: opts.Store.Root, Now: opts.Now},
+		Environments: environment.Store{Root: opts.Store.Root},
+		Profiles:     opts.Store,
+		Export:       opts.MigrationProvider, Import: opts.MigrationProvider,
+		Config: native.ConfigMigrationHarness{
+			HostOS: runtime.GOOS, HostArch: runtime.GOARCH,
+		},
+		SecretInputs: migrationSecrets, Secrets: secretStore, Now: opts.Now,
+		ProductVersion: opts.ProductVersion, HostOS: runtime.GOOS, HostArch: runtime.GOARCH,
+	}
+	migrationImportService := manager.MigrationImportService{
+		MigrationService: migrationService,
+		BundleSource: manager.CachedMigrationBundleSource{
+			SecretInputs: migrationSecrets, Cache: migrationCache,
+		},
+		InspectionCache: migrationCache,
+	}
+	d.migrationSecrets = migrationSecrets
+	d.migrationCache = migrationCache
+	d.migrationWorkers = newMigrationWorkerSet(
+		migrationService, migrationImportService, al, bus,
+	)
+	d.api.Migrations = &manager.MigrationAPIService{
+		Service: migrationService, Import: migrationImportService,
+		Inspection: manager.MigrationInspectionService{
+			SecretInputs: migrationSecrets, Cache: migrationCache,
+		},
+		StartExport: d.migrationWorkers.StartExport,
+		StartImport: d.migrationWorkers.StartImport,
+		Resume:      d.migrationWorkers.Resume,
+		Cancel:      d.migrationWorkers.Cancel,
+		Recover:     d.migrationWorkers.Recover,
+	}
 	environmentActions := &manager.EnvironmentActionService{
 		Core:        core,
 		Operations:  operationService,
@@ -529,6 +580,21 @@ func Start(opts Options) (*Daemon, error) {
 			"daemon: reconcile accepted operations: %w",
 			err,
 		)
+	}
+	if err := d.migrationWorkers.ReconcileStartup(); err != nil {
+		lifecycleCancel()
+		migrationSecrets.Close()
+		migrationCache.Close()
+		if activityOwned {
+			_ = activityStore.Close()
+		}
+		_ = core.NetworkGateways.Close()
+		_ = lifecycleCoordinator.Close()
+		_ = sessionListener.Close()
+		_ = ln.Close()
+		_ = al.close()
+		releaseLock(lockFile, filepath.Join(dir, lockName))
+		return nil, fmt.Errorf("daemon: reconcile migration operations: %w", err)
 	}
 	d.server = &http.Server{Handler: d.buildHandler()}
 	d.startAuditTail()
@@ -770,6 +836,15 @@ func (d *Daemon) Stop(ctx context.Context) error {
 			}
 		}
 		d.bg.drain(drainTimeout)
+	}
+	if d.migrationWorkers != nil {
+		d.migrationWorkers.Stop(ctx)
+	}
+	if d.migrationSecrets != nil {
+		d.migrationSecrets.Close()
+	}
+	if d.migrationCache != nil {
+		d.migrationCache.Close()
 	}
 	if d.lifecycle != nil {
 		stopErr = errors.Join(stopErr, d.lifecycle.Close())

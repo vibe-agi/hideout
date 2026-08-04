@@ -216,6 +216,14 @@ h2 { font-size: 16px; }
   resize: vertical;
 }
 .config-console { display: grid; gap: 12px; }
+.migration-console { display: grid; gap: 12px; }
+.migration-choice {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: minmax(180px, 1fr) minmax(180px, 1fr);
+}
+.migration-choice > .row-title,
+.migration-choice > .confirm-check { grid-column: 1 / -1; }
 .config-toolbar {
   align-items: end;
   border-bottom: 1px solid var(--line);
@@ -285,6 +293,7 @@ dialog form > header { display: flex; align-items: center; justify-content: spac
   .filter-grid, .filter-grid.nested { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .config-toolbar { align-items: stretch; flex-direction: column; }
   .config-layers { grid-template-columns: 1fr; }
+  .migration-choice { grid-template-columns: 1fr; }
   .history-body { max-height: 62vh; }
 }
 

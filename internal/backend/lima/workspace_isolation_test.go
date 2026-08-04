@@ -9,10 +9,8 @@ import (
 )
 
 func TestPortalWorkspaceViewRemovesStagingAndControlBeforeTarget(t *testing.T) {
-	const (
-		workspaceID = "wrk_0123456789abcdef"
-		siblingID   = "wrk_fedcba9876543210"
-	)
+	workspaceID := "wrk_" + strings.Repeat("a", 64)
+	siblingID := "wrk_" + strings.Repeat("b", 64)
 	command, err := BuildSessionViewCommand(SessionViewSpec{
 		SessionID: "ses_20260718T120000Z_0123456789abcdef", TargetUser: "developer",
 		GuestWork: workspaceattach.LogicalWorkspaceRoot, Env: []string{"PATH=/hideout/session/shims:/usr/bin:/bin"},
@@ -51,8 +49,12 @@ func TestPortalWorkspaceViewRemovesStagingAndControlBeforeTarget(t *testing.T) {
 			t.Fatalf("session view exposed broad/sibling authority %q:\n%s", forbidden, script)
 		}
 	}
-	if strings.Contains(script, "ln -s '/hideout/workspaces/") {
-		t.Fatal("logical /workspace was implemented as an opaque-path symlink")
+	logicalLink := "ln -s '/hideout/workspaces/" + workspaceID + "' \"$workspace_root/workspace\""
+	if !strings.Contains(script, logicalLink) {
+		t.Fatal("logical /workspace did not retain the selected opaque project identity")
+	}
+	if strings.Contains(script, "mount --rbind '/hideout/workspaces/"+workspaceID+"' \"$workspace_root/workspace\"") {
+		t.Fatal("fixed /workspace bind mount collapsed the project identity")
 	}
 	if strings.Count(script, workspaceattach.PhysicalWorkspaceBase+"/"+workspaceID) < 3 {
 		t.Fatal("selected opaque child was not bound as the sole workspace view")
@@ -60,6 +62,7 @@ func TestPortalWorkspaceViewRemovesStagingAndControlBeforeTarget(t *testing.T) {
 }
 
 func TestPortalWorkspaceBindingRejectsGuessedSiblingAndControlOverrides(t *testing.T) {
+	workspaceID := "wrk_" + strings.Repeat("a", 64)
 	base := SessionViewSpec{
 		SessionID: "ses_20260718T120000Z_0123456789abcdef", TargetUser: "developer",
 		GuestWork: workspaceattach.LogicalWorkspaceRoot, Command: []string{"true"},
@@ -67,7 +70,7 @@ func TestPortalWorkspaceBindingRejectsGuessedSiblingAndControlOverrides(t *testi
 			HostRoot: t.TempDir(), GuestRoot: workspaceattach.LogicalWorkspaceRoot,
 			Transport: backend.WorkspaceTransportPortal,
 			Portal: &backend.WorkspacePortalBinding{
-				PhysicalGuestRoot: workspaceattach.PhysicalWorkspaceBase + "/wrk_0123456789abcdef",
+				PhysicalGuestRoot: workspaceattach.PhysicalWorkspaceBase + "/" + workspaceID,
 				Endpoint:          "host.lima.internal:43127", CredentialGuestPath: workspaceattach.PortalCredentialGuestPath,
 			},
 		},

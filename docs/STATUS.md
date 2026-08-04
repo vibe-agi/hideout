@@ -74,10 +74,27 @@ user-facing vocabulary is environments, workspaces, permissions, and audit.
 | Host capability projection (`code .`) and readiness (043) | Implemented and validated on real macOS arm64 Lima. Core owns a static capability registry and generic `host.app.open-resource` provider; exact immutable bindings, constrained grammar, current authority, fixed application roots, and immediate signing checks prevent ambient host execution or shadowed guest fallback. Safe mode isolates editor data and disables extensions/automatic tasks; trusted mode uses a durable, revocable per-profile+workspace grant created with `hideout allow/deny host-app <command>`. The complete built-in plus enabled external catalog is now hashed, published manifest-last, validated in the exact guest session view, and authenticated before lifecycle activation and target commit. A clean exact-package 043 Gate 2 passed 10/10 fresh and 30/30 warm first attempts, one concurrent disjoint-catalog pair, pre-commit cancellation, built-in safe projection, 032 external pack, and 039 separate-run grant/revoke. Fresh and warm readiness p95 remained below the two-second bound; retries, fallback, timeouts, unauthorized host effects, and cross-session access were zero. The canonical proof and exact sample summary are in `.hideout-release-evidence/043-projection-readiness-real-gate2/`. A matching clean Gate 3 was not run, so the newer receipt does not promote alias privacy; the older dirty Gate 3 remains engineering evidence only. adb, AppleScript, and result streaming remain design-ready and fail closed. See [host-capability-projection.md](host-capability-projection.md) and [threat-model.md](threat-model.md). |
 | Script runtime | Required Phase 1 supports `command.decide`, `audit.redact`, and 008 command adapter entrypoints through constrained goja ABIs with deterministic time/randomness. `decideCommand(ctx)` continues to govern existing command policy, `redactAudit(ctx)` governs export/user redaction, and `decideCommandAdapter(ctx)` can classify command-name intent and return strict Go-validated adapter outcomes. Bounded context query APIs beyond the supplied command facts are still later work. |
 
+## Current Worktree Convergence
+
+Feature 035 workspace-path convergence is implemented and its behavior-only
+installed-product checkpoint passed on macOS arm64 Lima. The retained attempt13
+artifact has 27 passing path checks, including 100 repeated cross-alias
+deletes, an exact divergent-inode negative fixture,
+and explicit Partial limitations for unavailable process cwd, bounded physical
+argv capture, and relative workspace file-path aliases. Package SHA-256 is
+`af761bf3e9c66c4c829bd5df04c263221a424e36a489cb3a2deb95504906f354` and
+evidence-manifest SHA-256 is
+`f27b23c8e1b6a8aa16fb7116bdd01f31601525ec010ff3fcdcfcb68540c710da`.
+This checkpoint is `dirty:true` and intentionally has no performance proof, so
+the production evaluator rejects it as a release candidate. A clean exact-byte
+recollection plus the independent performance proof remains required before
+promotion; no new package has been published from this worktree.
+
 ## Not Yet Productized
 
 | Area | Status |
 | --- | --- |
+| Portable migration (046) | Implemented in the current source, but the full-state release claim remains pending. The canonical v1 path includes the encrypted/resumable single-file bundle, config-only export/import, authenticated included/excluded inventory and logical-size estimates, explicit noninteractive scope, selected managed-secret transfer, destination path/authority/conflict review, durable terminal receipts, Lima snapshot/stage/adoption/verification, packaged Linux and zero-network macOS helpers, and shared CLI/TUI/Web/automation plan and operation projections. Every import creates fresh Hideout/control/backend identity; Safe Clone and Exact Guest Restore remain separate import-time guest policies. Unpublished development bundle/profile/environment formats fail closed and must be re-exported or recreated; no compatibility reader is retained for a nonexistent user base. The explicit 191-test/13-package inventory, 13-cut durable restart inventory, nine-category hostile-input matrix, six migration fuzz targets, and installed-candidate real-Lima gate are implemented and statically validated. A clean exact package run, its three-Safe-Clone/one-Exact terminal evidence with materialization/adoption daemon crash recovery and fail-closed missing-executor compatibility, and cross-computer physical-host acceptance remain required before broad full-state portability is claimed. See `docs/migration.md`. Performance qualification is explicitly deferred in `docs/DEBT.md`; until its quiet-host process-scoped gate passes, Hideout makes no migration throughput, CPU, I/O, peak-memory, sparse-efficiency, or duration claim. |
 | Generic tool provider declarations | Dropped as a product direction: Hideout ships no package-installation providers; tool declarations are thin expected-command diagnostic records. The declarative guest base-environment artifact class (base image references; guest domain, shareable through the ecosystem) is the accepted direction. Imperative environment recipes remain out of scope. |
 | `endpoint.expose.guest-to-host` | Lab/separate design. Required before adb, browser DevTools, host service reachability, or similar workflows. |
 | Automatic service-listener discovery / AccessSensor | Later. `endpoint.observe` may produce exposure candidates, audit, and warnings, but must not authorize exposure by itself. This is separate from the implemented bounded workload process-to-IP/port activity evidence. |
@@ -85,3 +102,27 @@ user-facing vocabulary is environments, workspaces, permissions, and audit.
 | adb / device / simulator workflows | Adapter recipes over future guest-to-host and OpenTarget capabilities; not productized. |
 | Additional host app/resource effects | Design-ready only. Community recipes cannot create a new provider; effects beyond `host.app.open-resource` require reviewed Core validators and providers. |
 | Public ecosystem | Later. Trust MVP is two-tier: local artifacts, and third-party artifacts behind digest pinning, a permission diff, and one explicit confirmation. Marketplace day-1: signing, revocation/kill-switch, publisher identity, and namespace protection — designed when the marketplace launches, not before. |
+
+### Portable migration release matrix
+
+| Surface | Current qualification | Release interpretation |
+| --- | --- | --- |
+| Configuration-only export/import | Implemented for Lima and the backend-independent native harness; authenticated inventory, explicit scope, secret/authority review, recovery, and cross-surface plans are covered locally. | Eligible for the first canonical v1 package after exact clean-candidate acceptance; it is not a compatibility path for unpublished development state. |
+| Lima full-state export/import | Root and attached disks, Safe Clone, Exact Guest Restore, source immutability, fresh control/backend identities, and the zero-network adoption executor are implemented. | Not yet a released portability claim. The exact installed candidate must pass `migration-lima`, then the same quickstart must pass on two physical destination Macs. |
+| Native full-state migration | Deliberately absent. | Unsupported; native remains a weak-isolation development harness and configuration-only migration provider. |
+| Bundle/state compatibility | One encrypted single-file format version 1 with an authenticated `hideout.migration-manifest/v1`; current environment records use their one canonical schema. | Unknown or unpublished development formats fail closed. With no migration users to preserve, recreate old local state or re-export it with the accepted build instead of shipping dual readers. |
+| Performance | Qualification deferred to the quiet-host, process-scoped migration gate. | No CPU, I/O, memory, throughput, sparse-efficiency, or duration claim. |
+
+The latest dirty-aware non-performance diagnostic run passed all 10 local
+release lanes with zero failures;
+`.artifacts/046/local-canonical-v1-final-pass/summary.json` has
+SHA-256
+`beaff0d025d4a5e9e654fd9c33be44a52ab9a95ebc4e9a19aa4dd06d58301834`.
+The matching package-component/install lifecycle summary has SHA-256
+`05d7787e1186eac88379ea06f18b8507bd351b77693176995c63829b488867bc`.
+The aggregate's nested migration result, including all 13 durable crash cuts,
+has SHA-256
+`15dd876b76e4a59d3e2bd31188443903c50050a4c386ee422e2787e5537ca610`.
+All three record source commit `dc38f282f73efe0d71a63d5fdf047aba1effbac4` and
+`dirty:true`; they prove current implementation mechanics only and cannot be
+promoted, signed, notarized, tagged, or published as candidate evidence.

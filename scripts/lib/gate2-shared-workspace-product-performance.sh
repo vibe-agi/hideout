@@ -1,21 +1,25 @@
 #!/usr/bin/env bash
+# shellcheck disable=SC2329
+
+# The cleanup function is invoked indirectly through a subshell EXIT trap.
 
 # Release-shaped 035 performance/correctness driver. The caller must source
-# workspace-research.sh and gate2-shared-workspace.sh before invoking it. Test
-# orchestration lives in this source tree, but every product effect goes through
-# the installed hideout binary and its manifest-verified packaged Portal helper.
+# workspace-research.sh, gate2-shared-workspace.sh, and
+# gate2-shared-workspace-path.sh before invoking it. Test orchestration lives in
+# this source tree, but every product effect goes through the installed hideout
+# binary and its manifest-verified packaged Portal helper.
 
 gate2_shared_workspace_measure_product() (
   set -euo pipefail
 
-  if [ "$#" -ne 9 ]; then
-    echo "usage: gate2_shared_workspace_measure_product <repo> <out> <store> <lima-home> <hideout> <profile> <fixture-root> <samples> <baseline>" >&2
+  if [ "$#" -ne 10 ]; then
+    echo "usage: gate2_shared_workspace_measure_product <repo> <out> <store> <lima-home> <hideout> <profile> <fixture-root> <samples> <baseline> <path-correctness>" >&2
     return 2
   fi
   local repo="$1" out="$2" store="$3" lima_home="$4" hideout="$5" profile="$6"
-  local fixture_root="$7" samples="$8" baseline="$9"
+  local fixture_root="$7" samples="$8" baseline="$9" path_correctness_report="${10}"
   local perf="$fixture_root/performance" hold="$fixture_root/performance-hold"
-  local atomic="$fixture_root/atomic-live" correctness="$fixture_root/correctness"
+  local atomic="$fixture_root/atomic-live"
   local profile_cache="$store/profiles/$profile/cache"
   local control="$profile_cache/035-static-virtiofs-control"
   local paired_driver="$profile_cache/035-paired-workload.py"
@@ -23,7 +27,13 @@ gate2_shared_workspace_measure_product() (
 
   mkdir -p "$out/raw" "$out/filesystem-control/raw" \
     "$perf/git" "$perf/package" "$perf/atomic" \
-    "$hold" "$atomic" "$correctness"
+    "$hold" "$atomic"
+  declare -F gate2_035_path_correctness_judge >/dev/null || {
+    echo "shared-workspace Gate 2 path correctness judge is unavailable" >&2
+    return 2
+  }
+  gate2_035_path_correctness_judge "$path_correctness_report"
+  cp "$path_correctness_report" "$out/path-correctness.json"
   "$repo/test/fixtures/workspaceattach/generate.sh" git-10k "$perf/git"
   "$repo/test/fixtures/workspaceattach/generate.sh" package-20k "$perf/package"
   cp "$repo/test/fixtures/workspaceattach/workload.py" "$perf/workload.py"
@@ -85,7 +95,7 @@ touch /workspace/ready
 while [ ! -f /workspace/release ]; do sleep 0.02; done
 ' >"$out/raw/hold.out" 2>"$out/raw/hold.err" &
   hold_pid=$!
-  gate2_035_wait_file "$hold/ready" "performance hold session"
+  gate2_035_wait_file "$hold/ready" "performance hold session" 6000 "$hold_pid"
 
   # One real product attachment owns both steady-state filesystem lanes. The
   # workload warms each side once, then alternates Portal and static virtiofs
@@ -146,7 +156,7 @@ PY
   gate2_035_product_run "$atomic" python3 /workspace/atomic.py "$samples" \
     >"$out/raw/atomic.out" 2>"$out/raw/atomic.err" &
   atomic_pid=$!
-  gate2_035_wait_file "$atomic/ready" "atomic visibility probe"
+  gate2_035_wait_file "$atomic/ready" "atomic visibility probe" 6000 "$atomic_pid"
 	  python3 - "$atomic" "$samples" \
 	    "$out/raw/atomic-host-to-guest.values" \
 	    "$out/raw/atomic-guest-to-host.values" <<'PY'
@@ -199,7 +209,7 @@ while not (root/"saturation.release").exists():
             os.stat(os.path.join(current, name), follow_symlinks=False)
 ' >"$out/raw/saturation-owner.out" 2>"$out/raw/saturation-owner.err" &
   saturation_pid=$!
-  gate2_035_wait_file "$perf/saturation.ready" "saturation owner"
+  gate2_035_wait_file "$perf/saturation.ready" "saturation owner" 6000 "$saturation_pid"
   gate2_035_product_run "$perf" python3 -c '
 import pathlib,time
 path=pathlib.Path("/workspace/git/.git/HEAD")
@@ -247,53 +257,6 @@ PY
     workspace_summarize_samples "$out/filesystem-control/raw/$metric.values" \
       "$out/filesystem-control/$metric-summary.json"
   done
-
-  # Write the correctness record only after real package-path operations have
-  # succeeded. The symlink probe must fail to read outside the captured root.
-  gate2_035_product_run "$correctness" python3 - <<'PY'
-import os
-import pathlib
-
-root = pathlib.Path("/workspace")
-directory = root / "tree"
-directory.mkdir()
-source = directory / "source.txt"
-payload = b"hideout-035\n"
-with source.open("wb") as stream:
-    if stream.write(payload) != len(payload):
-        raise RuntimeError("short write")
-    stream.flush()
-    os.fsync(stream.fileno())
-source.chmod(0o640)
-target = directory / "renamed.txt"
-source.rename(target)
-if target.read_bytes() != payload:
-    raise RuntimeError("renamed content mismatch")
-target.unlink()
-directory.rmdir()
-escape = root / "escape-link"
-escape.symlink_to("/etc/passwd")
-try:
-    escape.read_bytes()
-except OSError:
-    pass
-else:
-    raise RuntimeError("workspace symlink escaped the captured root")
-escape.unlink()
-if pathlib.Path("/hideout/workspaces").exists():
-    raise RuntimeError("private workspace staging is target-visible")
-PY
-  test ! -e "$correctness/tree"
-  test ! -e "$correctness/escape-link"
-  jq -n --argjson samples "$samples" '{
-    schema:"hideout.shared-workspace-correctness/v1",
-    hostCreateVisible:true,targetCreateVisible:true,
-    hostAtomicReplaceVisible:true,targetAtomicReplaceVisible:true,
-    renameVisible:true,deleteVisible:true,modeVisible:true,flushDurable:true,
-    sameRootLocksConflict:true,rootEscapeRejected:true,symlinkEscapeRejected:true,
-    watcherStreamHealthy:true,silentShortWrites:0,falseSuccesses:0,
-    hostWatcherSamples:$samples,targetWatcherSamples:$samples
-  }' >"$out/correctness.json"
 
   touch "$hold/release"
   gate2_035_wait_process "$hold_pid" "performance hold session"

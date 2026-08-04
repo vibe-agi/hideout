@@ -53,10 +53,21 @@ const (
 type Mode string
 
 const (
-	ModeShared         Mode = "shared"
-	ModeDedicated      Mode = "dedicated"
-	ModeWorkspaceBound Mode = "workspace-bound"
+	ModeShared    Mode = "shared"
+	ModeDedicated Mode = "dedicated"
+	// ModeDedicatedPortal is a named, persistent machine whose host workspace
+	// authority is granted per session through Workspace Portal. It is used by
+	// imported machines so an immutable bundle can be adopted on many hosts
+	// without retaining or inventing a source-host mount.
+	ModeDedicatedPortal Mode = "dedicated-portal"
+	ModeWorkspaceBound  Mode = "workspace-bound"
 )
+
+// UsesWorkspacePortal reports whether workspace authority belongs to a run
+// session instead of the persistent environment record and machine config.
+func UsesWorkspacePortal(mode Mode) bool {
+	return mode == ModeShared || mode == ModeDedicatedPortal
+}
 
 // ErrUnsupportedVersion is returned when an operation touches an environment
 // record written by a previous environment model. Records are never migrated;
@@ -65,10 +76,14 @@ var ErrUnsupportedVersion = errors.New("environment model changed: this record p
 
 type Store struct {
 	Root string
+
+	// batchCut is a deterministic crash cut used only by package tests.
+	batchCut func(string, int) error
 }
 
 type Lock struct {
-	file *os.File
+	file           *os.File
+	snapshotAbsent bool
 }
 
 type Spec struct {
@@ -183,9 +198,9 @@ func (r Record) Validate() error {
 	}, r.Status) {
 		return errors.New("environment record lifecycle state is invalid")
 	}
-	// A disposable environment is always its run's own dedicated machine: the
-	// shared slot and workspace-bound records are reusable by contract and must
-	// never carry the pre-authorized destruction marker.
+	// A disposable environment is always its run's own statically mounted
+	// dedicated machine. Reusable shared, dedicated-portal, and workspace-bound
+	// records must never carry the pre-authorized destruction marker.
 	if r.Disposable && r.Mode != ModeDedicated {
 		return errors.New("disposable environments must be dedicated")
 	}
@@ -201,6 +216,13 @@ func (r Record) Validate() error {
 		}
 		if r.SharedSlot != "" || !validWorkspaceBinding(r.DedicatedWorkspace, r.DedicatedGuestRoot) || r.BoundWorkspace != "" || r.BoundGuestRoot != "" {
 			return errors.New("dedicated environment requires exactly one dedicated workspace binding")
+		}
+	case ModeDedicatedPortal:
+		if err := ValidateName(r.Name); err != nil {
+			return err
+		}
+		if r.AutoNamed || r.SharedSlot != "" || r.DedicatedWorkspace != "" || r.DedicatedGuestRoot != "" || r.BoundWorkspace != "" || r.BoundGuestRoot != "" {
+			return errors.New("dedicated Portal environment must be explicitly named and carry no static workspace binding")
 		}
 	case ModeWorkspaceBound:
 		if err := ValidateName(r.Name); err != nil {
@@ -462,7 +484,12 @@ func (s Store) Create(spec Spec) (Record, error) {
 			return Record{}, errors.New("runtime provenance does not match environment imageRef")
 		}
 	}
-	if existing, err := s.LoadByName(spec.Name); err == nil {
+	catalog, err := s.lockCatalog(true)
+	if err != nil {
+		return Record{}, err
+	}
+	defer catalog.Unlock()
+	if existing, err := s.loadByNameUnlocked(spec.Name); err == nil {
 		return Record{}, fmt.Errorf("environment named %q already exists (%s)", existing.Name, existing.ID)
 	} else if !errors.Is(err, ErrNameNotFound) {
 		return Record{}, err
@@ -572,7 +599,19 @@ func (s Store) LoadByName(name string) (Record, error) {
 	if strings.TrimSpace(name) == "" {
 		return Record{}, errors.New("environment name is required")
 	}
-	records, err := s.List()
+	catalog, err := s.lockCatalog(false)
+	if err != nil {
+		return Record{}, err
+	}
+	defer catalog.Unlock()
+	if catalog.snapshotAbsent {
+		return Record{}, fmt.Errorf("environment named %q not found (see 'hideout env list'): %w", name, ErrNameNotFound)
+	}
+	return s.loadByNameUnlocked(name)
+}
+
+func (s Store) loadByNameUnlocked(name string) (Record, error) {
+	records, err := s.listUnlocked()
 	if err != nil {
 		return Record{}, err
 	}
@@ -588,6 +627,14 @@ func (s Store) LoadByName(name string) (Record, error) {
 }
 
 func (s Store) Save(rec Record) error {
+	catalog, err := s.lockCatalog(true)
+	if err != nil {
+		return err
+	}
+	defer catalog.Unlock()
+	if err := s.pendingBatchMutationCheckUnlocked(rec.ID); err != nil {
+		return err
+	}
 	path := s.recordPath(rec.ID)
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return err
@@ -623,7 +670,15 @@ func cloneRuntimeProvenance(in *RuntimeProvenance) *RuntimeProvenance {
 }
 
 func (s Store) Load(id string) (Record, error) {
-	resolved, err := s.ResolveID(id)
+	catalog, err := s.lockCatalog(false)
+	if err != nil {
+		return Record{}, err
+	}
+	defer catalog.Unlock()
+	if catalog.snapshotAbsent {
+		return Record{}, fmt.Errorf("environment %q not found", strings.TrimSpace(id))
+	}
+	resolved, err := s.resolveIDUnlocked(id)
 	if err != nil {
 		return Record{}, err
 	}
@@ -631,18 +686,40 @@ func (s Store) Load(id string) (Record, error) {
 }
 
 func (s Store) ResolveID(id string) (string, error) {
+	catalog, err := s.lockCatalog(false)
+	if err != nil {
+		return "", err
+	}
+	defer catalog.Unlock()
+	if catalog.snapshotAbsent {
+		return "", fmt.Errorf("environment %q not found", strings.TrimSpace(id))
+	}
+	return s.resolveIDUnlocked(id)
+}
+
+func (s Store) resolveIDUnlocked(id string) (string, error) {
 	id = strings.TrimSpace(id)
 	if id == "" {
 		return "", errors.New("environment id is required")
 	}
+	activations, err := s.loadBatchActivationsUnlocked()
+	if err != nil {
+		return "", err
+	}
 	if ValidID(id) {
 		if _, err := os.Stat(s.recordPath(id)); err == nil {
-			return id, nil
+			visible, visibleErr := s.batchRecordVisibleUnlocked(id, activations)
+			if visibleErr != nil {
+				return "", visibleErr
+			}
+			if visible {
+				return id, nil
+			}
 		} else if !errors.Is(err, os.ErrNotExist) {
 			return "", err
 		}
 	}
-	records, err := s.List()
+	records, err := s.listWithActivationsUnlocked(activations)
 	if err != nil {
 		return "", err
 	}
@@ -663,6 +740,28 @@ func (s Store) ResolveID(id string) (string, error) {
 }
 
 func (s Store) List() ([]Record, error) {
+	catalog, err := s.lockCatalog(false)
+	if err != nil {
+		return nil, err
+	}
+	defer catalog.Unlock()
+	if catalog.snapshotAbsent {
+		return nil, nil
+	}
+	return s.listUnlocked()
+}
+
+func (s Store) listUnlocked() ([]Record, error) {
+	activations, err := s.loadBatchActivationsUnlocked()
+	if err != nil {
+		return nil, err
+	}
+	return s.listWithActivationsUnlocked(activations)
+}
+
+func (s Store) listWithActivationsUnlocked(
+	activations map[string]batchActivation,
+) ([]Record, error) {
 	dir := s.environmentsDir()
 	entries, err := os.ReadDir(dir)
 	if err != nil {
@@ -674,6 +773,13 @@ func (s Store) List() ([]Record, error) {
 	records := make([]Record, 0, len(entries))
 	for _, entry := range entries {
 		if !entry.IsDir() || !ValidID(entry.Name()) {
+			continue
+		}
+		visible, err := s.batchRecordVisibleUnlocked(entry.Name(), activations)
+		if err != nil {
+			return nil, err
+		}
+		if !visible {
 			continue
 		}
 		rec, err := s.loadExact(entry.Name())
@@ -707,8 +813,16 @@ func (s Store) List() ([]Record, error) {
 }
 
 func (s Store) Remove(id string) error {
-	resolved, err := s.ResolveID(id)
+	catalog, err := s.lockCatalog(true)
 	if err != nil {
+		return err
+	}
+	defer catalog.Unlock()
+	resolved, err := s.resolveIDUnlocked(id)
+	if err != nil {
+		return err
+	}
+	if err := s.pendingBatchMutationCheckUnlocked(resolved); err != nil {
 		return err
 	}
 	return os.RemoveAll(s.dir(resolved))
@@ -772,6 +886,21 @@ var ErrTransitionBusy = errors.New("environment transition is busy")
 func (s Store) tryLock(id string) (*Lock, error) {
 	if !ValidID(id) {
 		return nil, fmt.Errorf("invalid environment id %q", id)
+	}
+	catalog, err := s.lockCatalog(false)
+	if err != nil {
+		return nil, err
+	}
+	if catalog.snapshotAbsent {
+		_ = catalog.Unlock()
+		return nil, os.ErrNotExist
+	}
+	if err := s.pendingBatchMutationCheckUnlocked(id); err != nil {
+		_ = catalog.Unlock()
+		return nil, err
+	}
+	if err := catalog.Unlock(); err != nil {
+		return nil, err
 	}
 	dir := s.dir(id)
 	info, err := os.Lstat(dir)

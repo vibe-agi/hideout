@@ -43,6 +43,7 @@ func TestLoopbackUIServesEventConsumingWebUI(t *testing.T) {
 		`src="/assets/client.js"`,
 		`src="/assets/activity.js"`,
 		`src="/assets/config.js"`,
+		`src="/assets/migration.js"`,
 		`src="/assets/presentation.js"`,
 		`src="/assets/app.js"`,
 		`href="/assets/style.css"`,
@@ -54,6 +55,7 @@ func TestLoopbackUIServesEventConsumingWebUI(t *testing.T) {
 		`data-panel="coverage"`,
 		`data-panel="risks"`,
 		`data-panel="operations"`,
+		`data-panel="migration"`,
 		`data-panel="config"`,
 		`data-panel="help"`,
 	} {

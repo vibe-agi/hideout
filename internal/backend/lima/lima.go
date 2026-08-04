@@ -65,6 +65,7 @@ func (ExecRunner) Run(ctx context.Context, name string, args []string, env []str
 
 type Backend struct {
 	LimactlPath   string
+	Migration     *MigrationOptions
 	Runner        CommandRunner
 	SetupRunner   SetupCommandRunner
 	SSHClients    *SSHClientPool
@@ -154,16 +155,16 @@ func (b Backend) Prepare(_ context.Context, spec backend.RunSpec) (*backend.Sess
 	if err := spec.Machine.Validate(); err != nil {
 		return nil, err
 	}
-	runtimeOnlySharedVerification := spec.Machine.Mode == environment.ModeShared &&
+	runtimeOnlyPortalVerification := environment.UsesWorkspacePortal(spec.Machine.Mode) &&
 		len(spec.Command) == 0 &&
 		spec.RuntimeContract != nil &&
 		spec.RuntimeInstanceExpected != nil
 	guestWork := spec.Workspace.GuestRoot
-	if runtimeOnlySharedVerification {
+	if runtimeOnlyPortalVerification {
 		// Machine-scoped verification probes only the running guest at "/".
 		// Reject any project facts so this exception cannot mint attachment authority.
 		if spec.Workspace != (backend.WorkspaceAttachmentSpec{}) {
-			return nil, errors.New("shared runtime verification cannot carry workspace attachment authority")
+			return nil, errors.New("workspace Portal runtime verification cannot carry workspace attachment authority")
 		}
 		guestWork = "/"
 	} else {
@@ -226,7 +227,7 @@ func (b Backend) Prepare(_ context.Context, spec backend.RunSpec) (*backend.Sess
 		return nil, err
 	}
 	var staticMounts *StaticRunMounts
-	if spec.Machine.Mode != environment.ModeShared {
+	if !environment.UsesWorkspacePortal(spec.Machine.Mode) {
 		staticMounts = &StaticRunMounts{Workspace: spec.Workspace, SessionDir: spec.SessionDir}
 	}
 	cfg, err := ConfigForMachineSpec(spec.Machine, staticMounts)
@@ -1141,9 +1142,9 @@ func ConfigForMachineSpec(spec backend.MachineActivationSpec, static *StaticRunM
 	}
 	mounts := identityStateMounts(identityRoot)
 	switch spec.Mode {
-	case environment.ModeShared:
+	case environment.ModeShared, environment.ModeDedicatedPortal:
 		if static != nil {
-			return limaConfig{}, errors.New("shared machine configuration rejects static workspace mounts")
+			return limaConfig{}, errors.New("workspace Portal machine configuration rejects static workspace mounts")
 		}
 		mounts = append(mounts, mount{Location: spec.RuntimeRoot, MountPoint: GuestRuntimeDir, Writable: true})
 	case environment.ModeDedicated, environment.ModeWorkspaceBound:

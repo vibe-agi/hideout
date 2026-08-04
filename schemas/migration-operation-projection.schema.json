@@ -1,0 +1,487 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://hideout.local/schemas/migration-operation-projection.schema.json",
+  "title": "Hideout migration operation projection v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "operationId",
+    "revision",
+    "bundleId",
+    "kind",
+    "state",
+    "phaseLabel",
+    "progress",
+    "recovery",
+    "warnings",
+    "effects",
+    "identityPolicies"
+  ],
+  "properties": {
+    "schema": {
+      "const": "hideout.migration-operation-projection/v1"
+    },
+    "operationId": {
+      "$ref": "#/$defs/operationId"
+    },
+    "revision": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "bundleId": {
+      "type": "string",
+      "pattern": "^migb_[A-Za-z0-9_-]{8,123}$"
+    },
+    "kind": {
+      "$ref": "#/$defs/kind"
+    },
+    "state": {
+      "$ref": "#/$defs/phase"
+    },
+    "phaseLabel": {
+      "enum": [
+        "Preparing migration",
+        "Checking source and destination",
+        "Waiting for confirmation",
+        "Reserving migration resources",
+        "Taking a consistent snapshot",
+        "Writing the portable bundle",
+        "Verifying and sealing the bundle",
+        "Copying persistent data",
+        "Preparing destination secrets",
+        "Applying destination identity policy",
+        "Verifying the imported environment",
+        "Publishing the imported environment",
+        "Stopping at a safe boundary",
+        "Removing staged import data",
+        "Waiting for recovery",
+        "Migration complete",
+        "Migration cancelled",
+        "Import rolled back",
+        "Migration failed"
+      ]
+    },
+    "progress": {
+      "$ref": "#/$defs/progress"
+    },
+    "recovery": {
+      "$ref": "#/$defs/recovery"
+    },
+    "warnings": {
+      "type": "array",
+      "maxItems": 256,
+      "items": {
+        "$ref": "#/$defs/notice"
+      }
+    },
+    "effects": {
+      "type": "array",
+      "maxItems": 256,
+      "items": {
+        "$ref": "#/$defs/effect"
+      }
+    },
+    "identityPolicies": {
+      "$ref": "#/$defs/identityPolicies"
+    },
+    "decision": {
+      "enum": ["commit", "rollback"]
+    },
+    "lastErrorCode": {
+      "$ref": "#/$defs/code"
+    },
+    "terminalReceipt": {
+      "$ref": "#/$defs/terminalReceipt"
+    }
+  },
+  "$defs": {
+    "operationId": {
+      "type": "string",
+      "pattern": "^op_[A-Za-z0-9_-]{8,124}$"
+    },
+    "opaqueId": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_-]{7,127}$"
+    },
+    "digest": {
+      "type": "string",
+      "pattern": "^sha256:[a-f0-9]{64}$"
+    },
+    "code": {
+      "type": "string",
+      "pattern": "^migration\\.[a-z][a-z0-9._-]{1,127}$"
+    },
+    "kind": {
+      "enum": ["export", "import"]
+    },
+    "phase": {
+      "enum": [
+        "draft",
+        "validating",
+        "awaiting-confirmation",
+        "claiming",
+        "snapshotting",
+        "writing",
+        "sealing",
+        "materializing",
+        "preparing-secrets",
+        "adopting",
+        "verifying",
+        "committing",
+        "cancelling",
+        "rolling-back",
+        "recoverable-failure",
+        "complete",
+        "cancelled",
+        "rolled-back",
+        "failed"
+      ]
+    },
+    "progress": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "logicalTotalKnown",
+        "completedLogicalBytes",
+        "encodedTotalKnown",
+        "completedEncodedBytes",
+        "componentsComplete",
+        "elapsedSeconds",
+        "remainingKnown",
+        "cancelPending"
+      ],
+      "properties": {
+        "logicalTotalKnown": { "type": "boolean" },
+        "completedLogicalBytes": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 4398046511104
+        },
+        "totalLogicalBytes": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 4398046511104
+        },
+        "encodedTotalKnown": { "type": "boolean" },
+        "completedEncodedBytes": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 4466765987840
+        },
+        "totalEncodedBytes": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 4466765987840
+        },
+        "componentsComplete": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 1048576
+        },
+        "componentsTotal": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 1048576
+        },
+        "currentItem": {
+          "type": "string",
+          "maxLength": 512
+        },
+        "phaseStartedAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "checkpointAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "elapsedSeconds": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "throughputBytesPerSecond": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "remainingKnown": { "type": "boolean" },
+        "remainingSeconds": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "cancelPending": { "type": "boolean" },
+        "retainedBytes": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 4466765987840
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": { "logicalTotalKnown": { "const": false } },
+            "required": ["logicalTotalKnown"]
+          },
+          "then": {
+            "properties": { "totalLogicalBytes": { "const": 0 } }
+          }
+        },
+        {
+          "if": {
+            "properties": { "encodedTotalKnown": { "const": false } },
+            "required": ["encodedTotalKnown"]
+          },
+          "then": {
+            "properties": { "totalEncodedBytes": { "const": 0 } }
+          }
+        },
+        {
+          "if": {
+            "properties": { "remainingKnown": { "const": false } },
+            "required": ["remainingKnown"]
+          },
+          "then": {
+            "properties": { "remainingSeconds": { "const": 0 } }
+          }
+        }
+      ]
+    },
+    "recovery": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["required", "allowedActions"],
+      "properties": {
+        "required": { "type": "boolean" },
+        "code": { "$ref": "#/$defs/code" },
+        "allowedActions": {
+          "type": "array",
+          "maxItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "enum": ["resume", "finish", "rollback", "remove-partial", "manual"]
+          }
+        },
+        "nextAction": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        }
+      },
+      "oneOf": [
+        {
+          "properties": {
+            "required": { "const": true },
+            "allowedActions": { "minItems": 1, "maxItems": 1 }
+          },
+          "required": ["code", "nextAction"]
+        },
+        {
+          "properties": {
+            "required": { "const": false },
+            "allowedActions": { "maxItems": 0 }
+          },
+          "not": {
+            "anyOf": [
+              { "required": ["nextAction"] }
+            ]
+          }
+        }
+      ]
+    },
+    "notice": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["code", "summary"],
+      "properties": {
+        "code": { "$ref": "#/$defs/code" },
+        "summary": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        }
+      }
+    },
+    "effect": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "status"],
+      "properties": {
+        "kind": {
+          "enum": [
+            "snapshot",
+            "write-bundle",
+            "seal-bundle",
+            "stage",
+            "prepare-secret",
+            "adopt",
+            "verify",
+            "activate",
+            "cleanup"
+          ]
+        },
+        "status": {
+          "enum": [
+            "pending",
+            "running",
+            "succeeded",
+            "failed",
+            "compensating",
+            "compensated",
+            "unproved"
+          ]
+        }
+      }
+    },
+    "identityPolicies": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["safeClone", "exactGuestRestore", "freshControl", "freshBackend"],
+      "properties": {
+        "safeClone": { "type": "integer", "minimum": 0, "maximum": 32 },
+        "exactGuestRestore": { "type": "integer", "minimum": 0, "maximum": 32 },
+        "freshControl": { "type": "integer", "minimum": 0, "maximum": 32 },
+        "freshBackend": { "type": "integer", "minimum": 0, "maximum": 32 }
+      }
+    },
+    "effectCounts": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "pending",
+        "running",
+        "succeeded",
+        "failed",
+        "compensating",
+        "compensated",
+        "unproved"
+      ],
+      "properties": {
+        "pending": { "type": "integer", "minimum": 0, "maximum": 256 },
+        "running": { "type": "integer", "minimum": 0, "maximum": 256 },
+        "succeeded": { "type": "integer", "minimum": 0, "maximum": 256 },
+        "failed": { "type": "integer", "minimum": 0, "maximum": 256 },
+        "compensating": { "type": "integer", "minimum": 0, "maximum": 256 },
+        "compensated": { "type": "integer", "minimum": 0, "maximum": 256 },
+        "unproved": { "type": "integer", "minimum": 0, "maximum": 256 }
+      }
+    },
+    "replacement": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "sourceRef",
+        "destinationName",
+        "lifecycleOperationId",
+        "lifecyclePlanDigest"
+      ],
+      "properties": {
+        "sourceRef": { "$ref": "#/$defs/opaqueId" },
+        "destinationName": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+        },
+        "lifecycleOperationId": { "$ref": "#/$defs/operationId" },
+        "lifecyclePlanDigest": { "$ref": "#/$defs/digest" }
+      }
+    },
+    "approvedAuthority": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["proposalId", "environmentRef", "class"],
+      "properties": {
+        "proposalId": { "$ref": "#/$defs/opaqueId" },
+        "environmentRef": { "$ref": "#/$defs/opaqueId" },
+        "class": {
+          "enum": [
+            "workspace",
+            "hostfs",
+            "mount",
+            "network",
+            "proxy",
+            "endpoint",
+            "host-app",
+            "command-adapter",
+            "script",
+            "pack",
+            "environment",
+            "profile"
+          ]
+        }
+      }
+    },
+    "terminalReceipt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema",
+        "operationId",
+        "bundleId",
+        "kind",
+        "terminalState",
+        "resultCode",
+        "completedComponents",
+        "completedLogicalBytes",
+        "effects",
+        "allEffectsSucceeded",
+        "identityPolicies",
+        "replacements",
+        "approvedAuthority",
+        "disabledAuthorityProposalIds",
+        "claimsReleased",
+        "completedAt"
+      ],
+      "properties": {
+        "schema": { "const": "hideout.migration-operation-receipt/v1" },
+        "operationId": { "$ref": "#/$defs/operationId" },
+        "bundleId": {
+          "type": "string",
+          "pattern": "^migb_[A-Za-z0-9_-]{8,123}$"
+        },
+        "kind": { "$ref": "#/$defs/kind" },
+        "terminalState": {
+          "enum": ["complete", "cancelled", "rolled-back", "failed"]
+        },
+        "resultCode": { "$ref": "#/$defs/code" },
+        "decision": { "enum": ["commit", "rollback"] },
+        "completedComponents": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 1048576
+        },
+        "totalComponents": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 1048576
+        },
+        "completedLogicalBytes": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 4398046511104
+        },
+        "effects": { "$ref": "#/$defs/effectCounts" },
+        "allEffectsSucceeded": { "type": "boolean" },
+        "identityPolicies": { "$ref": "#/$defs/identityPolicies" },
+        "replacements": {
+          "type": "array",
+          "maxItems": 32,
+          "items": { "$ref": "#/$defs/replacement" }
+        },
+        "approvedAuthority": {
+          "type": "array",
+          "maxItems": 256,
+          "items": { "$ref": "#/$defs/approvedAuthority" }
+        },
+        "disabledAuthorityProposalIds": {
+          "type": "array",
+          "maxItems": 256,
+          "items": { "$ref": "#/$defs/opaqueId" }
+        },
+        "claimsReleased": { "type": "boolean" },
+        "completedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      }
+    }
+  }
+}

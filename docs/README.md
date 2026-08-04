@@ -40,6 +40,7 @@ Subsystem documents:
 | Supported CLI runtime preview | [031 spec](../specs/031-supported-cli-runtime/spec.md), [runtime contracts](../specs/031-supported-cli-runtime/contracts/runtime-catalog.md) |
 | Init tasks | [init-task-architecture.md](init-task-architecture.md) |
 | Manager control plane | [manager-control-plane.md](manager-control-plane.md) |
+| Portable migration | [migration.md](migration.md): encrypted config/full export, destination review, identity policy, recovery, compatibility, and release evidence. |
 | Network privacy | [network-privacy-architecture.md](network-privacy-architecture.md) |
 | OpenTarget and host reach-back | [opentarget-architecture.md](opentarget-architecture.md) |
 | Policy/config supply chain | [policy-config-supply-chain.md](policy-config-supply-chain.md): authoring, source resolution, install, update, trust, override, and export behavior for the ecosystem model. |

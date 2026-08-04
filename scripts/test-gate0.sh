@@ -45,6 +45,10 @@ if [ -n "$unformatted" ]; then
 fi
 go test -p "$go_test_parallelism" -count=1 ./...
 scripts/test-vulnerability-gate.sh --self-test --source
+# Portable migration foundation: strict schemas and parsers, bounded fuzz
+# smoke, the four focused TLC configurations, and production refinement traces.
+# This starts no VM; full formal inventory evidence still follows separately.
+scripts/gates/migration.sh
 scripts/gates/formal.sh
 scripts/gates/recovery.sh
 scripts/test-install-smoke.sh
@@ -156,6 +160,9 @@ grep -Fq "sha256 \"$published_sha\"" packaging/homebrew/hideout.rb
 grep -q 'depends_on "lima"' packaging/homebrew/hideout.rb
 grep -q 'skip_clean "bin/hideout-dns-stub-linux-arm64"' packaging/homebrew/hideout.rb
 grep -q '"bin/hideout-observer-linux-arm64"' packaging/homebrew/hideout.rb
+grep -q '"bin/hideout-migration-adopt-linux-arm64"' packaging/homebrew/hideout.rb
+grep -q 'package_root/"bin/hideout-migration-vz-adopt-darwin-arm64"' \
+  packaging/homebrew/hideout.rb
 grep -q 'system "/usr/bin/codesign", "--verify", "--strict"' packaging/homebrew/hideout.rb
 grep -q '"--skip-init"' packaging/homebrew/hideout.rb
 grep -q '"package", "verify", prefix' packaging/homebrew/hideout.rb

@@ -1,0 +1,83 @@
+{
+  "schema": "hideout.migration-export-plan/v1",
+  "planId": "migplan_surfaceparity001",
+  "planDigest": "sha256:e3bf1110022d2ad2e120dcd5e40097646024e251634b41227effe8af043a29e0",
+  "baseRevisions": [
+    {
+      "resource": "environment:environment_source1",
+      "revision": 1,
+      "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    }
+  ],
+  "mode": "full",
+  "environmentRefs": [
+    "environment_source1"
+  ],
+  "diskRefs": [
+    "disk_root0000001"
+  ],
+  "selectedSecretRefs": [],
+  "includedClasses": [
+    "environment-declarations",
+    "persistent-disks",
+    "portable-profiles"
+  ],
+  "excludedClasses": [
+    "host-workspace-content",
+    "unselected-secret-values"
+  ],
+  "environmentEstimates": [
+    {
+      "environmentRef": "environment_source1",
+      "displayName": "dev",
+      "portableConfigLogicalBytes": 1024,
+      "portableConfigDigest": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      "diskRefs": [
+        "disk_root0000001"
+      ],
+      "referencedDiskLogicalBytes": 8192,
+      "estimatedLogicalBytes": 9216
+    }
+  ],
+  "diskEstimates": [
+    {
+      "diskRef": "disk_root0000001",
+      "role": "root",
+      "logicalBytes": 8192,
+      "allocatedBytesHint": 4096,
+      "consumers": [
+        "environment_source1"
+      ]
+    }
+  ],
+  "estimatedPayloadLogicalBytes": 9216,
+  "estimatedPayloadComplete": true,
+  "outputPath": "/tmp/surface-parity.hideout-migration",
+  "providerCapabilityRevision": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "sourceInventoryDigest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+  "warnings": [],
+  "effects": [
+    {
+      "id": "migeffect_snapshot01",
+      "kind": "snapshot-source",
+      "provider": "lima",
+      "compensation": "release-snapshot"
+    },
+    {
+      "id": "migeffect_write0001",
+      "kind": "write-bundle",
+      "provider": "manager",
+      "compensation": "remove-partial"
+    },
+    {
+      "id": "migeffect_seal00001",
+      "kind": "seal-bundle",
+      "provider": "manager",
+      "compensation": "none"
+    }
+  ],
+  "confirmationText": "Export the reviewed stopped environment and its persistent disk into one encrypted bundle.",
+  "riskAcknowledgements": [
+    "migration.content.opaque_guest_disk_sensitive"
+  ]
+}

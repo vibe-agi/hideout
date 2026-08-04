@@ -18,6 +18,7 @@ import (
 	"github.com/vibe-agi/hideout/internal/environment"
 	"github.com/vibe-agi/hideout/internal/privilege"
 	"github.com/vibe-agi/hideout/internal/profile"
+	"github.com/vibe-agi/hideout/internal/workspacepath"
 )
 
 type WorkspaceTransport string
@@ -61,9 +62,9 @@ func (spec MachineActivationSpec) Validate() error {
 		return errors.New("machine activation identity root must be absolute")
 	}
 	switch spec.Mode {
-	case environment.ModeShared:
+	case environment.ModeShared, environment.ModeDedicatedPortal:
 		if spec.EnvironmentID == "" || spec.RuntimeRoot == "" || !filepath.IsAbs(spec.RuntimeRoot) {
-			return errors.New("shared machine activation requires environment identity and runtime root")
+			return errors.New("workspace Portal machine activation requires environment identity and runtime root")
 		}
 	case environment.ModeDedicated, environment.ModeWorkspaceBound:
 	default:
@@ -92,21 +93,29 @@ func (spec WorkspaceAttachmentSpec) Validate(machineMode environment.Mode) error
 		!filepath.IsAbs(spec.GuestRoot) || filepath.Clean(spec.GuestRoot) != spec.GuestRoot {
 		return errors.New("workspace attachment requires clean absolute host and guest roots")
 	}
-	if machineMode == environment.ModeShared {
+	if environment.UsesWorkspacePortal(machineMode) {
 		if spec.Transport != WorkspaceTransportPortal {
-			return errors.New("shared machine requires the selected dynamic workspace transport")
+			return errors.New("workspace Portal machine requires the selected dynamic workspace transport")
 		}
-		if spec.Portal == nil || !filepath.IsAbs(spec.Portal.PhysicalGuestRoot) ||
+		if spec.Portal == nil {
+			return errors.New("workspace Portal machine requires a complete workspace Portal binding")
+		}
+		if _, err := workspacepath.BindingFromPhysicalRoot(
+			spec.GuestRoot,
+			spec.Portal.PhysicalGuestRoot,
+		); err != nil {
+			return errors.New("workspace Portal machine requires a complete workspace Portal binding")
+		}
+		if !filepath.IsAbs(spec.Portal.PhysicalGuestRoot) ||
 			filepath.Clean(spec.Portal.PhysicalGuestRoot) != spec.Portal.PhysicalGuestRoot ||
-			!strings.HasPrefix(spec.Portal.PhysicalGuestRoot, "/hideout/workspaces/") ||
 			!filepath.IsAbs(spec.Portal.CredentialGuestPath) ||
 			filepath.Clean(spec.Portal.CredentialGuestPath) != spec.Portal.CredentialGuestPath ||
 			strings.TrimSpace(spec.Portal.Endpoint) == "" {
-			return errors.New("shared machine requires a complete workspace Portal binding")
+			return errors.New("workspace Portal machine requires a complete workspace Portal binding")
 		}
 		host, port, err := net.SplitHostPort(spec.Portal.Endpoint)
 		if err != nil || strings.TrimSpace(host) == "" || port == "" || port == "0" {
-			return errors.New("shared machine workspace Portal endpoint is invalid")
+			return errors.New("workspace Portal endpoint is invalid")
 		}
 		return nil
 	}

@@ -97,6 +97,8 @@ mkdir -p "$package_components_tmp/extracted"
 tar -xzf "$archive" -C "$package_components_tmp/extracted"
 package_root="$package_components_tmp/extracted/hideout"
 guest_arch="$(go env GOARCH)"
+host_os="$(go env GOOS)"
+host_arch="$(go env GOARCH)"
 
 "$package_root/bin/hideout" package verify "$package_root" \
   >"$run_dir/package-verify.log"
@@ -121,6 +123,10 @@ guest_arch="$(go env GOARCH)"
 
 observer_binary="$package_root/bin/hideout-observer-linux-$guest_arch"
 observer_manifest="$observer_binary.manifest.json"
+adoption_binary="$package_root/bin/hideout-migration-adopt-linux-$guest_arch"
+adoption_manifest="$adoption_binary.manifest.json"
+host_adoption_binary="$package_root/bin/hideout-migration-vz-adopt-$host_os-$host_arch"
+host_adoption_manifest="$host_adoption_binary.manifest.json"
 asset_manifest="$package_root/runtime/browser-console.assets.json"
 component_contract="$package_root/runtime/package-components.json"
 package_manifest="$package_root/package-manifest.json"
@@ -143,6 +149,55 @@ if ! jq -e --arg arch "$guest_arch" '
   printf 'package-components-gate: observer provenance binding failed\n' >&2
   exit 1
 fi
+if [ "$(jq -er '.sha256' "$host_adoption_manifest")" != \
+  "$(sha256_file "$host_adoption_binary")" ]; then
+  printf 'package-components-gate: host migration executor digest binding failed\n' >&2
+  exit 1
+fi
+if ! jq -e --arg os "$host_os" --arg arch "$host_arch" '
+  .version == "hideout.helper-manifest/v1" and
+  .command == "hideout-migration-vz-adopt" and
+  .targetOS == $os and
+  .targetArch == $arch and
+  .builder == "go build -mod=readonly -trimpath" and
+  .upstreamModule == "github.com/Code-Hex/vz/v3" and
+  .upstreamVersion == "v3.7.1" and
+  .license == "Apache-2.0" and
+  .buildMode == "apple-vz-zero-network-adoption-v1" and
+  .packageOwned == true
+' "$host_adoption_manifest" >/dev/null ||
+  ! "$host_adoption_binary" --probe | jq -e \
+    --arg os "$host_os" --arg arch "$host_arch" '
+      .schema == "hideout.migration-vz-adopt-probe/v1" and
+      .protocol == "hideout.migration-vz-adopt/v1" and
+      .version == "1.0.0" and
+      .hostOS == $os and .hostArch == $arch and
+      .hypervisor == "apple-virtualization-framework" and
+      .networkDeviceCount == 0 and
+      .controlChannel == "virtiofs-private" and
+      .bootTrigger == "nocloud-fixed-cloud-boothook"
+    ' >/dev/null; then
+  printf 'package-components-gate: host migration executor provenance/probe failed\n' >&2
+  exit 1
+fi
+if [ "$(jq -er '.sha256' "$adoption_manifest")" != \
+  "$(sha256_file "$adoption_binary")" ]; then
+  printf 'package-components-gate: migration adoption helper digest binding failed\n' >&2
+  exit 1
+fi
+if ! jq -e --arg arch "$guest_arch" '
+  .version == "hideout.helper-manifest/v1" and
+  .command == "hideout-migration-adopt" and
+  .targetOS == "linux" and
+  .targetArch == $arch and
+  .builder == "go build -trimpath" and
+  .license == "Apache-2.0" and
+  .buildMode == "strict-data-only-adoption-v1" and
+  .packageOwned == true
+' "$adoption_manifest" >/dev/null; then
+  printf 'package-components-gate: migration adoption helper provenance binding failed\n' >&2
+  exit 1
+fi
 if [ "$(jq -er '.containerSHA256' "$asset_manifest")" != \
   "$(sha256_file "$package_root/bin/hideout")" ]; then
   printf 'package-components-gate: browser container binding failed\n' >&2
@@ -161,6 +216,11 @@ if [ ! -f "$package_root/LICENSES/GPL-2.0-only.txt" ]; then
   printf 'package-components-gate: observer GPL license text is missing\n' >&2
   exit 1
 fi
+if [ ! -f "$package_root/third_party/vz/LICENSE" ] ||
+  [ -L "$package_root/third_party/vz/LICENSE" ]; then
+  printf 'package-components-gate: Code-Hex/vz license text is missing\n' >&2
+  exit 1
+fi
 
 {
   if command -v ruby >/dev/null 2>&1; then
@@ -168,13 +228,20 @@ fi
   fi
   grep -Fq '"bin/hideout-observer-linux-arm64"' \
     packaging/homebrew/hideout.rb
-  printf 'Homebrew observer executable preservation: passed\n'
+  grep -Fq '"bin/hideout-migration-adopt-linux-arm64"' \
+    packaging/homebrew/hideout.rb
+  grep -Fq 'package_root/"bin/hideout-migration-vz-adopt-darwin-arm64"' \
+    packaging/homebrew/hideout.rb
+  printf 'Homebrew helper executable preservation: passed\n'
 } >"$run_dir/homebrew-formula.log"
 
 scripts/test-package-smoke.sh >"$run_dir/package-lifecycle.log" 2>&1
 
 cp "$package_manifest" "$run_dir/package-manifest.json"
 cp "$observer_manifest" "$run_dir/hideout-observer.manifest.json"
+cp "$adoption_manifest" "$run_dir/hideout-migration-adopt.manifest.json"
+cp "$host_adoption_manifest" \
+  "$run_dir/hideout-migration-vz-adopt.manifest.json"
 cp "$asset_manifest" "$run_dir/browser-console.assets.json"
 cp "$component_contract" "$run_dir/package-components.json"
 
@@ -207,6 +274,10 @@ jq -n \
   --arg run "$run_id" \
   --arg observerSHA256 "$(sha256_file "$observer_binary")" \
   --arg observerManifestSHA256 "$(sha256_file "$observer_manifest")" \
+  --arg adoptionSHA256 "$(sha256_file "$adoption_binary")" \
+  --arg adoptionManifestSHA256 "$(sha256_file "$adoption_manifest")" \
+  --arg hostAdoptionSHA256 "$(sha256_file "$host_adoption_binary")" \
+  --arg hostAdoptionManifestSHA256 "$(sha256_file "$host_adoption_manifest")" \
   --arg containerSHA256 "$(sha256_file "$package_root/bin/hideout")" \
   --arg assetManifestSHA256 "$(sha256_file "$asset_manifest")" \
   --arg componentContractSHA256 "$(sha256_file "$component_contract")" \
@@ -224,16 +295,22 @@ jq -n \
     checks: {
       observerBinaryAndManifest: "passed",
       observerLicenseBoundary: "passed",
+      migrationAdoptionHelperAndManifest: "passed",
+      hostMigrationExecutorAndManifest: "passed",
       browserAssetInventory: "passed",
       browserContainerBinding: "passed",
       packageComponentContract: "passed",
-      homebrewObserverExecutablePreservation: "passed",
+      homebrewHelperExecutablePreservation: "passed",
       packageSchemaAndVerification: "passed",
       installUpgradeUninstallLifecycle: "passed"
     },
     inventory: {
       observerSHA256: $observerSHA256,
       observerManifestSHA256: $observerManifestSHA256,
+      adoptionSHA256: $adoptionSHA256,
+      adoptionManifestSHA256: $adoptionManifestSHA256,
+      hostAdoptionSHA256: $hostAdoptionSHA256,
+      hostAdoptionManifestSHA256: $hostAdoptionManifestSHA256,
       containerSHA256: $containerSHA256,
       assetManifestSHA256: $assetManifestSHA256,
       componentContractSHA256: $componentContractSHA256,

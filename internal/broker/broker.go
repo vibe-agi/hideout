@@ -29,6 +29,7 @@ import (
 	"github.com/vibe-agi/hideout/internal/policy"
 	"github.com/vibe-agi/hideout/internal/privilege"
 	"github.com/vibe-agi/hideout/internal/profile"
+	"github.com/vibe-agi/hideout/internal/workspacepath"
 )
 
 const (
@@ -139,6 +140,7 @@ type Server struct {
 	Endpoint            Endpoint
 	HostRoot            string
 	GuestRoot           string
+	PhysicalGuestRoot   string
 	WorkspaceID         string
 	Profile             string
 	ProfileDir          string
@@ -805,8 +807,7 @@ func (s *Server) normalizeBrokerRequestCWD(req *Request) error {
 	if hasURLScheme(cwd) {
 		return errors.New("broker request args.cwd must be a guest workspace path")
 	}
-	clean := filepath.Clean(cwd)
-	if !filepath.IsAbs(clean) {
+	if !filepath.IsAbs(cwd) {
 		return errors.New("broker request args.cwd must be an absolute guest path")
 	}
 	if s.GuestRoot == "" || s.HostRoot == "" {
@@ -816,13 +817,15 @@ func (s *Server) normalizeBrokerRequestCWD(req *Request) error {
 	// host workspace as cwd even when the profile exposes the guest alias. Convert
 	// only an in-workspace native cwd to the guest identity before applying the
 	// same mapping and symlink checks used for guest requests.
+	candidate := cwd
 	if s.Backend == "native" {
+		clean := filepath.Clean(cwd)
 		if hostRel, hostErr := relInsideRoot(s.HostRoot, clean); hostErr == nil && !pathEscapesRoot(hostRel) {
-			clean = filepath.Join(s.GuestRoot, hostRel)
+			candidate = filepath.Join(s.GuestRoot, hostRel)
 		}
 	}
-	rel, err := relInsideRoot(s.GuestRoot, clean)
-	if err != nil || pathEscapesRoot(rel) {
+	canonicalGuest, rel, err := s.resolveGuestWorkspacePath(candidate)
+	if err != nil {
 		return errors.New("broker request args.cwd is outside workspace")
 	}
 	hostPath := filepath.Join(s.HostRoot, rel)
@@ -844,7 +847,7 @@ func (s *Server) normalizeBrokerRequestCWD(req *Request) error {
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return errors.New("broker request args.cwd cannot be resolved within workspace")
 	}
-	req.Args["cwd"] = clean
+	req.Args["cwd"] = canonicalGuest
 	return nil
 }
 
@@ -1103,21 +1106,20 @@ func (s *Server) mapGuestPath(target string) (string, error) {
 	if s.GuestRoot == "" || s.HostRoot == "" {
 		return "", errors.New("workspace mapping is unavailable")
 	}
-	clean := filepath.Clean(target)
 	if hasURLScheme(target) {
-		return "", fmt.Errorf("URL scheme in file target %q is denied", target)
+		return "", errors.New("URL scheme in file target is denied")
 	}
-	if !filepath.IsAbs(clean) {
+	if !filepath.IsAbs(target) {
 		return "", errors.New("file open requires an absolute guest path")
 	}
-	rel, err := relInsideRoot(s.GuestRoot, clean)
-	if err != nil || pathEscapesRoot(rel) {
-		return "", fmt.Errorf("file target %q is outside workspace", target)
+	_, rel, err := s.resolveGuestWorkspacePath(target)
+	if err != nil {
+		return "", errors.New("file target is outside workspace")
 	}
 	hostPath := filepath.Join(s.HostRoot, rel)
 	hostRel, err := relInsideRoot(s.HostRoot, hostPath)
 	if err != nil || pathEscapesRoot(hostRel) {
-		return "", fmt.Errorf("file target %q maps outside workspace", target)
+		return "", errors.New("file target maps outside workspace")
 	}
 	resolved, err := filepath.EvalSymlinks(hostPath)
 	if err == nil {
@@ -1127,21 +1129,58 @@ func (s *Server) mapGuestPath(target string) (string, error) {
 		}
 		resolvedRel, relErr := filepath.Rel(resolvedRoot, resolved)
 		if relErr != nil || pathEscapesRoot(resolvedRel) {
-			return "", fmt.Errorf("file target %q resolves outside workspace", target)
+			return "", errors.New("file target resolves outside workspace")
 		}
 		info, statErr := os.Stat(resolved)
 		if statErr != nil {
-			return "", fmt.Errorf("file target %q cannot be resolved within workspace", target)
+			return "", errors.New("file target cannot be resolved within workspace")
 		}
 		if !info.Mode().IsRegular() && !info.IsDir() {
-			return "", fmt.Errorf("file target %q is not a regular file or directory", target)
+			return "", errors.New("file target is not a regular file or directory")
 		}
 		return resolved, nil
 	}
 	if errors.Is(err, os.ErrNotExist) {
-		return "", fmt.Errorf("file target %q does not exist", target)
+		return "", errors.New("file target does not exist")
 	}
-	return "", fmt.Errorf("file target %q cannot be resolved within workspace", target)
+	return "", errors.New("file target cannot be resolved within workspace")
+}
+
+// resolveGuestWorkspacePath derives authority from one configured attachment.
+// Portal sessions accept the logical alias and only their exact opaque physical
+// alias; static/native sessions retain their existing single-root behavior.
+func (s *Server) resolveGuestWorkspacePath(target string) (string, string, error) {
+	if s.GuestRoot == "" || s.HostRoot == "" || !filepath.IsAbs(target) {
+		return "", "", errors.New("workspace mapping is unavailable")
+	}
+	if s.PhysicalGuestRoot != "" {
+		if filepath.Clean(s.GuestRoot) != workspacepath.LogicalRoot {
+			return "", "", errors.New("workspace attachment logical root is invalid")
+		}
+		binding, err := workspacepath.Resolve(s.WorkspaceID, filepath.ToSlash(s.PhysicalGuestRoot))
+		if err != nil || binding.RelativePath != "." ||
+			binding.SourceAlias != workspacepath.PhysicalAlias ||
+			filepath.ToSlash(filepath.Clean(s.PhysicalGuestRoot)) != binding.PhysicalPath {
+			return "", "", errors.New("workspace attachment physical root is invalid")
+		}
+		resolved, err := workspacepath.Resolve(s.WorkspaceID, filepath.ToSlash(target))
+		if err != nil {
+			return "", "", err
+		}
+		return filepath.FromSlash(resolved.LogicalPath), filepath.FromSlash(resolved.RelativePath), nil
+	}
+	for _, element := range strings.Split(filepath.ToSlash(target), "/") {
+		if element == ".." {
+			return "", "", errors.New("guest path contains parent traversal")
+		}
+	}
+
+	clean := filepath.Clean(target)
+	rel, err := relInsideRoot(s.GuestRoot, clean)
+	if err != nil || pathEscapesRoot(rel) {
+		return "", "", errors.New("guest path is outside workspace")
+	}
+	return clean, rel, nil
 }
 
 func relInsideRoot(root, target string) (string, error) {

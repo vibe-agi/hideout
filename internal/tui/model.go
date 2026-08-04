@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"sort"
+	"strings"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
@@ -43,6 +44,7 @@ const (
 	ViewActivity   View = "activity"
 	ViewConfig     View = "config"
 	ViewOperations View = "operations"
+	ViewMigration  View = "migration"
 	ViewHelp       View = "help"
 )
 
@@ -72,6 +74,7 @@ const (
 	ModalHelp      Modal = "help"
 	ModalConfig    Modal = "config"
 	ModalLifecycle Modal = "lifecycle"
+	ModalMigration Modal = "migration"
 )
 
 type EventMsg struct {
@@ -80,6 +83,16 @@ type EventMsg struct {
 
 type SnapshotMsg struct {
 	State liveconsole.State
+}
+
+type SnapshotRefreshTickMsg struct {
+	At time.Time
+}
+
+type SnapshotRefreshLoadedMsg struct {
+	requestID uint64
+	state     liveconsole.State
+	err       error
 }
 
 type FrameTickMsg struct {
@@ -126,6 +139,13 @@ type ModelOptions struct {
 	// LifecycleProvider is the existing authenticated Manager environment
 	// stop/clean plan/apply authority.
 	LifecycleProvider tuimodal.LifecycleProvider
+	MigrationProvider tuimodal.MigrationProvider
+	// SnapshotProvider refreshes the same authenticated Manager projection used
+	// to seed the TUI. Healthy overview state remains event-driven; this boundary
+	// is polled only while Migration is visible or after the event stream closes.
+	SnapshotProvider func(context.Context) (liveconsole.State, error)
+	SnapshotInterval time.Duration
+	FallbackInterval time.Duration
 }
 
 type Model struct {
@@ -164,10 +184,22 @@ type Model struct {
 
 	lifecycleProvider tuimodal.LifecycleProvider
 	lifecycleModal    *tuimodal.Lifecycle
+	migrationProvider tuimodal.MigrationProvider
+	migrationModal    *tuimodal.Migration
+	migrationWizard   *tuimodal.MigrationWizard
 
 	operationsSelected int
 	operationLookupID  string
-	helpCatalog        operatorhelp.Catalog
+	migrationSelected  int
+
+	snapshotProvider func(context.Context) (liveconsole.State, error)
+	snapshotInterval time.Duration
+	fallbackInterval time.Duration
+	snapshotRequest  uint64
+	snapshotLoading  bool
+	snapshotDirty    bool
+	snapshotError    string
+	helpCatalog      operatorhelp.Catalog
 }
 
 const maxPendingEvents = 256
@@ -180,6 +212,14 @@ func NewModel(options ModelOptions) *Model {
 	now := options.Now
 	if now == nil {
 		now = func() time.Time { return time.Now().UTC() }
+	}
+	snapshotInterval := options.SnapshotInterval
+	if snapshotInterval <= 0 {
+		snapshotInterval = 2 * time.Second
+	}
+	fallbackInterval := options.FallbackInterval
+	if fallbackInterval <= 0 {
+		fallbackInterval = 2 * time.Second
 	}
 	noColor := options.NoColor || os.Getenv("NO_COLOR") != ""
 	activityContext := options.Context
@@ -195,6 +235,10 @@ func NewModel(options ModelOptions) *Model {
 		activityContext: activityContext, activityProvider: options.ActivityProvider,
 		configProvider:    options.ConfigProvider,
 		lifecycleProvider: options.LifecycleProvider,
+		migrationProvider: options.MigrationProvider,
+		snapshotProvider:  options.SnapshotProvider,
+		snapshotInterval:  snapshotInterval,
+		fallbackInterval:  fallbackInterval,
 		activityTab:       ActivityTabAll,
 		helpCatalog:       options.HelpCatalog.Clone(),
 	}
@@ -207,6 +251,9 @@ func (model *Model) Init() tea.Cmd {
 	var commands []tea.Cmd
 	if model.events != nil {
 		commands = append(commands, model.waitForEvent(), model.frameTick())
+	}
+	if model.snapshotProvider != nil && model.events == nil {
+		commands = append(commands, model.requestSnapshotRefresh())
 	}
 	commands = append(commands, model.widgets.Viewport.Init())
 	return tea.Batch(commands...)
@@ -230,7 +277,11 @@ func (model *Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		} else {
 			model.pending = append(model.pending, typed.Event)
 		}
-		return model, model.waitForEvent()
+		var snapshotCommand tea.Cmd
+		if migrationSnapshotEvent(typed.Event) {
+			snapshotCommand = model.queueSnapshotRefresh()
+		}
+		return model, tea.Batch(model.waitForEvent(), snapshotCommand)
 	case FrameTickMsg:
 		activityChanged := false
 		for _, event := range model.pending {
@@ -243,8 +294,10 @@ func (model *Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		model.pending = nil
 		model.selector.Replace(model.state.Overview.Sessions, model.selector.Selected())
 		model.clampOperationsSelection()
+		model.clampMigrationSelection()
 		model.syncConfigModal()
 		model.syncLifecycleModal()
+		model.syncMigrationModal()
 		var activityCommand tea.Cmd
 		if activityChanged && model.view == ViewActivity {
 			if model.activityLoading {
@@ -253,25 +306,53 @@ func (model *Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 				activityCommand = model.requestActivity()
 			}
 		}
-		if model.events != nil {
-			return model, tea.Batch(model.frameTick(), activityCommand)
+		var snapshotCommand tea.Cmd
+		if model.state.RequiresReseed {
+			snapshotCommand = model.queueSnapshotRefresh()
 		}
-		return model, activityCommand
+		if model.events != nil {
+			return model, tea.Batch(
+				model.frameTick(), activityCommand, snapshotCommand,
+			)
+		}
+		return model, tea.Batch(activityCommand, snapshotCommand)
 	case SnapshotMsg:
-		preferred := model.selector.Selected()
-		model.state = typed.State
-		model.pending = nil
-		model.selector.Replace(model.state.Overview.Sessions, preferred)
-		model.detailOpen = false
-		model.clearActivityForScope()
-		model.clampOperationsSelection()
-		model.syncConfigModal()
-		model.syncLifecycleModal()
+		model.installSnapshot(typed.State)
 		if model.view == ViewActivity {
 			return model, model.requestActivity()
 		}
 		return model, nil
+	case SnapshotRefreshTickMsg:
+		if !model.snapshotRefreshActive() {
+			return model, nil
+		}
+		if model.snapshotLoading {
+			return model, model.snapshotRefreshTick()
+		}
+		return model, model.requestSnapshotRefresh()
+	case SnapshotRefreshLoadedMsg:
+		if typed.requestID != model.snapshotRequest {
+			return model, nil
+		}
+		model.snapshotLoading = false
+		if typed.err != nil {
+			model.snapshotError = "authenticated snapshot refresh failed"
+		} else {
+			model.snapshotError = ""
+			if model.snapshotCanReplace(typed.state) {
+				model.installSnapshot(typed.state)
+			}
+		}
+		if model.snapshotDirty {
+			model.snapshotDirty = false
+			return model, model.requestSnapshotRefresh()
+		}
+		if model.snapshotRefreshActive() {
+			return model, model.snapshotRefreshTick()
+		}
+		return model, nil
 	case StreamClosedMsg:
+		model.events = nil
 		model.state.ReadOnly = true
 		model.state.RequiresReseed = true
 		model.state.StreamHealth = liveconsole.StreamHealth{
@@ -279,7 +360,8 @@ func (model *Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		model.syncConfigModal()
 		model.syncLifecycleModal()
-		return model, nil
+		model.syncMigrationModal()
+		return model, model.queueSnapshotRefresh()
 	case ActivityLoadedMsg:
 		if typed.requestID != model.activityRequest ||
 			typed.sessionID != model.SelectedSession() ||
@@ -319,6 +401,10 @@ func (model *Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			model.lifecycleModal != nil {
 			return model.updateLifecycleModal(message)
 		}
+		if model.TopModal() == ModalMigration &&
+			(model.migrationModal != nil || model.migrationWizard != nil) {
+			return model.updateMigrationModal(message)
+		}
 		return model, model.widgets.Update(message, string(model.focus))
 	}
 }
@@ -343,6 +429,11 @@ func (model *Model) View() tea.View {
 			Selected:   model.operationsSelected,
 			DetailOpen: model.detailOpen,
 			LookupID:   model.operationLookupID,
+		}, options)
+	case ViewMigration:
+		content = tuirender.Migration(tuirender.MigrationInput{
+			State: model.state, Selected: model.migrationSelected,
+			DetailOpen: model.detailOpen, RefreshError: model.snapshotError,
 		}, options)
 	default:
 		content = tuirender.Overview(tuirender.OverviewInput{
@@ -370,6 +461,14 @@ func (model *Model) View() tea.View {
 				content = "Hideout · Environments\n\n" +
 					model.lifecycleModal.View(model.width)
 			}
+		case ModalMigration:
+			if model.migrationWizard != nil {
+				content = "Hideout · Migration\n\n" +
+					model.migrationWizard.View(model.width)
+			} else if model.migrationModal != nil {
+				content = "Hideout · Migration\n\n" +
+					model.migrationModal.View(model.width)
+			}
 		}
 	}
 	view := tea.NewView(content)
@@ -385,6 +484,8 @@ func (model *Model) helpContext() (string, []string) {
 			return "Configuration", []string{"connect", "secret", "profile"}
 		case ModalLifecycle:
 			return "Environments", []string{"env", "stop", "clean"}
+		case ModalMigration:
+			return "Migration", []string{"migrate", "env", "doctor"}
 		}
 	}
 	switch model.view {
@@ -394,6 +495,8 @@ func (model *Model) helpContext() (string, []string) {
 		return "Configuration", []string{"connect", "secret", "profile"}
 	case ViewOperations:
 		return "Operations", []string{"decision", "hostfs", "daemon"}
+	case ViewMigration:
+		return "Migration", []string{"migrate", "env", "doctor"}
 	case ViewHelp:
 		return "Overview", []string{"setup", "doctor", "run", "help"}
 	default:
@@ -409,6 +512,12 @@ func (model *Model) updateKey(message tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 		if model.lifecycleModal != nil {
 			model.lifecycleModal.Clear()
+		}
+		if model.migrationModal != nil {
+			model.migrationModal.Clear()
+		}
+		if model.migrationWizard != nil {
+			model.migrationWizard.Clear()
 		}
 		return model, tea.Quit
 	}
@@ -431,6 +540,12 @@ func (model *Model) updateKey(message tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 				return model, nil
 			}
 			return model.updateLifecycleModal(message)
+		case ModalMigration:
+			if key == "?" {
+				model.modals = append(model.modals, ModalHelp)
+				return model, nil
+			}
+			return model.updateMigrationModal(message)
 		}
 		return model, nil
 	}
@@ -467,6 +582,8 @@ func (model *Model) updateKey(message tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			model.moveConfigSelection(1)
 		} else if model.view == ViewOperations {
 			model.moveOperationsSelection(1)
+		} else if model.view == ViewMigration {
+			model.moveMigrationSelection(1)
 		} else {
 			model.selector.Move(1)
 		}
@@ -478,6 +595,8 @@ func (model *Model) updateKey(message tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			model.moveConfigSelection(-1)
 		} else if model.view == ViewOperations {
 			model.moveOperationsSelection(-1)
+		} else if model.view == ViewMigration {
+			model.moveMigrationSelection(-1)
 		} else {
 			model.selector.Move(-1)
 		}
@@ -507,6 +626,14 @@ func (model *Model) updateKey(message tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			)) != 0 {
 				model.detailOpen = true
 			}
+		} else if model.view == ViewMigration {
+			if len(tuirender.MigrationRows(
+				tuirender.MigrationInput{State: model.state},
+			)) != 0 {
+				model.openMigrationModal()
+			} else {
+				model.openMigrationWizard("")
+			}
 		} else if model.SelectedSession() != "" {
 			model.detailOpen = true
 		}
@@ -521,9 +648,20 @@ func (model *Model) updateKey(message tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		if model.view == ViewActivity {
 			return model, model.requestActivity()
 		}
+		if model.view == ViewMigration {
+			return model, model.queueSnapshotRefresh()
+		}
 	case "e":
 		if model.view == ViewOverview {
 			model.openLifecycleModal()
+		}
+	case "x":
+		if model.view == ViewMigration {
+			model.openMigrationWizard(tuimodal.MigrationWizardExport)
+		}
+	case "i":
+		if model.view == ViewMigration {
+			model.openMigrationWizard(tuimodal.MigrationWizardImport)
 		}
 	case "1":
 		model.setView(ViewOverview)
@@ -537,6 +675,10 @@ func (model *Model) updateKey(message tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		model.setView(ViewOperations)
 		model.clampOperationsSelection()
 	case "5":
+		model.setView(ViewMigration)
+		model.clampMigrationSelection()
+		return model, model.queueSnapshotRefresh()
+	case "6":
 		model.setView(ViewHelp)
 		model.modals = append(model.modals, ModalHelp)
 	}
@@ -560,6 +702,81 @@ func (model *Model) frameTick() tea.Cmd {
 	return tea.Tick(model.frameInterval, func(at time.Time) tea.Msg {
 		return FrameTickMsg{At: at}
 	})
+}
+
+func (model *Model) snapshotRefreshTick() tea.Cmd {
+	if !model.snapshotRefreshActive() {
+		return nil
+	}
+	interval := model.snapshotInterval
+	if model.events == nil {
+		interval = model.fallbackInterval
+	}
+	return tea.Tick(interval, func(at time.Time) tea.Msg {
+		return SnapshotRefreshTickMsg{At: at}
+	})
+}
+
+func (model *Model) snapshotRefreshActive() bool {
+	return model.snapshotProvider != nil &&
+		(model.events == nil || model.view == ViewMigration)
+}
+
+func (model *Model) queueSnapshotRefresh() tea.Cmd {
+	if model.snapshotProvider == nil {
+		return nil
+	}
+	if model.snapshotLoading {
+		model.snapshotDirty = true
+		return nil
+	}
+	return model.requestSnapshotRefresh()
+}
+
+func migrationSnapshotEvent(event liveconsole.Event) bool {
+	return event.Kind == liveconsole.KindBackground &&
+		strings.HasPrefix(event.Payload.Op, "migration-")
+}
+
+func (model *Model) requestSnapshotRefresh() tea.Cmd {
+	if model.snapshotProvider == nil || model.snapshotLoading {
+		return nil
+	}
+	model.snapshotRequest++
+	requestID := model.snapshotRequest
+	model.snapshotLoading = true
+	provider := model.snapshotProvider
+	ctx := model.activityContext
+	return func() tea.Msg {
+		state, err := provider(ctx)
+		return SnapshotRefreshLoadedMsg{
+			requestID: requestID,
+			state:     state,
+			err:       err,
+		}
+	}
+}
+
+func (model *Model) snapshotCanReplace(candidate liveconsole.State) bool {
+	if candidate.DaemonInstanceID != model.state.DaemonInstanceID ||
+		candidate.CredentialGeneration != model.state.CredentialGeneration {
+		return true
+	}
+	return candidate.LastSeq >= model.state.LastSeq || model.state.RequiresReseed
+}
+
+func (model *Model) installSnapshot(state liveconsole.State) {
+	preferred := model.selector.Selected()
+	model.state = state
+	model.pending = nil
+	model.selector.Replace(model.state.Overview.Sessions, preferred)
+	model.detailOpen = false
+	model.clearActivityForScope()
+	model.clampOperationsSelection()
+	model.clampMigrationSelection()
+	model.syncConfigModal()
+	model.syncLifecycleModal()
+	model.syncMigrationModal()
 }
 
 func (model *Model) requestActivity() tea.Cmd {
@@ -1005,6 +1222,30 @@ func (model *Model) clampOperationsSelection() {
 	}
 }
 
+func (model *Model) moveMigrationSelection(delta int) {
+	rows := tuirender.MigrationRows(tuirender.MigrationInput{State: model.state})
+	if len(rows) == 0 || delta == 0 {
+		model.migrationSelected = 0
+		return
+	}
+	model.migrationSelected = (model.migrationSelected + delta) % len(rows)
+	if model.migrationSelected < 0 {
+		model.migrationSelected += len(rows)
+	}
+}
+
+func (model *Model) clampMigrationSelection() {
+	rows := tuirender.MigrationRows(tuirender.MigrationInput{State: model.state})
+	switch {
+	case len(rows) == 0:
+		model.migrationSelected = 0
+	case model.migrationSelected >= len(rows):
+		model.migrationSelected = len(rows) - 1
+	case model.migrationSelected < 0:
+		model.migrationSelected = 0
+	}
+}
+
 func (model *Model) clampConfigSelection() {
 	rows := tuirender.ConfigRows(model.state)
 	switch {
@@ -1153,6 +1394,99 @@ func (model *Model) syncLifecycleModal() {
 	)
 }
 
+func (model *Model) openMigrationModal() {
+	rows := tuirender.MigrationRows(tuirender.MigrationInput{State: model.state})
+	if len(rows) == 0 {
+		return
+	}
+	model.clampMigrationSelection()
+	operation := rows[model.migrationSelected].Operation
+	model.migrationModal = tuimodal.NewMigration(tuimodal.MigrationOptions{
+		Context: model.activityContext, Provider: model.migrationProvider,
+		Operation: operation,
+		Mutable:   model.MutationEnabled() && model.migrationProvider != nil,
+		Reason:    model.state.StreamHealth.Reason,
+	})
+	model.modals = append(model.modals, ModalMigration)
+}
+
+func (model *Model) openMigrationWizard(mode tuimodal.MigrationWizardMode) {
+	model.migrationWizard = tuimodal.NewMigrationWizard(
+		tuimodal.MigrationWizardOptions{
+			Context:      model.activityContext,
+			Provider:     model.migrationProvider,
+			Environments: model.state.Overview.Environments,
+			Mode:         mode,
+			Mutable: model.MutationEnabled() &&
+				model.migrationProvider != nil,
+			Reason: model.state.StreamHealth.Reason,
+		},
+	)
+	model.migrationModal = nil
+	model.modals = append(model.modals, ModalMigration)
+}
+
+func (model *Model) updateMigrationModal(
+	message tea.Msg,
+) (tea.Model, tea.Cmd) {
+	if model.migrationWizard != nil {
+		command, outcome := model.migrationWizard.Update(message)
+		if outcome.Close {
+			model.migrationWizard.Clear()
+			model.migrationWizard = nil
+			if model.TopModal() == ModalMigration {
+				model.modals = model.modals[:len(model.modals)-1]
+			}
+			if outcome.Result != nil {
+				return model, tea.Batch(command, model.queueSnapshotRefresh())
+			}
+		}
+		return model, command
+	}
+	if model.migrationModal == nil {
+		if model.TopModal() == ModalMigration {
+			model.modals = model.modals[:len(model.modals)-1]
+		}
+		return model, nil
+	}
+	command, outcome := model.migrationModal.Update(message)
+	if outcome.Projection != nil {
+		model.upsertMigrationProjection(*outcome.Projection)
+	}
+	if outcome.Close {
+		model.migrationModal.Clear()
+		model.migrationModal = nil
+		if model.TopModal() == ModalMigration {
+			model.modals = model.modals[:len(model.modals)-1]
+		}
+	}
+	return model, command
+}
+
+func (model *Model) syncMigrationModal() {
+	if model.migrationWizard != nil {
+		model.migrationWizard.SyncAuthority(
+			model.MutationEnabled() && model.migrationProvider != nil,
+			model.state.StreamHealth.Reason,
+		)
+	}
+	if model.migrationModal == nil {
+		return
+	}
+	operationID := model.migrationModal.OperationID()
+	for _, operation := range model.state.Migrations {
+		if operation.OperationID != operationID {
+			continue
+		}
+		model.migrationModal.SyncAuthority(
+			model.MutationEnabled() && model.migrationProvider != nil,
+			operation,
+			model.state.StreamHealth.Reason,
+		)
+		return
+	}
+}
+
 func (model *Model) selectedEnvironmentID() string {
 	selectedSession := model.SelectedSession()
 	if selectedSession == "" {
@@ -1270,6 +1604,31 @@ func (model *Model) upsertOperation(operation manager.Operation) {
 	model.clampOperationsSelection()
 }
 
+func (model *Model) upsertMigrationProjection(
+	projection manager.MigrationOperationProjection,
+) {
+	if projection.Validate() != nil {
+		return
+	}
+	for index := range model.state.Migrations {
+		if model.state.Migrations[index].OperationID == projection.OperationID {
+			if projection.Revision >= model.state.Migrations[index].Revision {
+				model.state.Migrations[index] = projection
+			}
+			model.clampMigrationSelection()
+			return
+		}
+	}
+	model.state.Migrations = append(
+		[]manager.MigrationOperationProjection{projection},
+		model.state.Migrations...,
+	)
+	if len(model.state.Migrations) > manager.DefaultOperatorMigrationLimit {
+		model.state.Migrations = model.state.Migrations[:manager.DefaultOperatorMigrationLimit]
+	}
+	model.clampMigrationSelection()
+}
+
 func activityErrorMessage(err error) string {
 	switch {
 	case err == nil:
@@ -1363,6 +1722,7 @@ func (model *Model) ActivityLoading() bool           { return model.activityLoad
 func (model *Model) ActivityError() string           { return model.activityError }
 func (model *Model) ConfigSelected() int             { return model.configSelected }
 func (model *Model) OperationsSelected() int         { return model.operationsSelected }
+func (model *Model) MigrationSelected() int          { return model.migrationSelected }
 func (model *Model) OperationLookupID() string       { return model.operationLookupID }
 
 func (model *Model) ConfigStage() tuimodal.Stage {
@@ -1377,6 +1737,20 @@ func (model *Model) LifecycleStage() tuimodal.Stage {
 		return ""
 	}
 	return model.lifecycleModal.Stage()
+}
+
+func (model *Model) MigrationStage() tuimodal.MigrationStage {
+	if model.migrationModal == nil {
+		return ""
+	}
+	return model.migrationModal.Stage()
+}
+
+func (model *Model) MigrationWizardStage() tuimodal.MigrationWizardStage {
+	if model.migrationWizard == nil {
+		return ""
+	}
+	return model.migrationWizard.Stage()
 }
 
 func (model *Model) TopModal() Modal {

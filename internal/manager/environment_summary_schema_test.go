@@ -38,6 +38,15 @@ func TestEnvironmentSummarySchemaSeparatesSharedMachineFromWorkspaceBinding(t *t
 	validateEnvironmentSummary(t, schema, dedicated, true)
 	delete(dedicated, "workspace")
 	validateEnvironmentSummary(t, schema, dedicated, false)
+
+	portal := cloneEnvironmentSummary(t, shared)
+	portal["mode"] = "dedicated-portal"
+	delete(portal, "sharedSlot")
+	validateEnvironmentSummary(t, schema, portal, true)
+	portal["workspace"] = "/source/host/path"
+	portal["guestWorkspace"] = "/workspace"
+	portal["workspaceLabel"] = "must-not-be-visible"
+	validateEnvironmentSummary(t, schema, portal, false)
 }
 
 func compileEnvironmentSummarySchema(t *testing.T) *jsonschema.Schema {

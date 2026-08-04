@@ -333,6 +333,7 @@ func (c Core) StartRunDataPlane(ctx context.Context, runSession RunSession, runN
 		Endpoint:            listenEndpoint,
 		HostRoot:            workspaceAuthority.HostRoot,
 		GuestRoot:           workspaceAuthority.GuestRoot,
+		PhysicalGuestRoot:   workspaceAuthority.PhysicalGuestRoot,
 		WorkspaceID:         workspaceAuthority.WorkspaceID,
 		Profile:             runSession.Plan.ProfileName,
 		ProfileDir:          filepath.Join(runSession.RuntimeSessionDir, "policy"),

@@ -5,7 +5,7 @@
 Hideout uses small TLA+ models for lifecycle and concurrency rules that are
 easy to state incorrectly in implementation code. These models are bounded
 abstractions. TLC alone does not prove that the Go implementation refines a
-model. The repository gate therefore combines TLC with 12 named Go
+model. The repository gate therefore combines TLC with 27 named Go
 production-refinement and crash-matrix tests; those tests establish explicit
 trace correspondences and regression boundaries, not a machine-checked
 whole-program refinement proof.
@@ -45,6 +45,8 @@ each has an explicit Manager plan mapping and behavioral parity tests.
 | `StopObservation` | Environment stop separates actual VM state from inventory samples: success requires stable terminal proof and is never reported while the bound incarnation still runs; anomalous samples and boot changes fail closed. |
 | `AttachReservation` | The attach-establishment reservation excludes reconciliation without the rejected lock cycle; reconcile scrubs only provably orphaned residue, cancellation removes only the run's own state, and daemon-crash residue stays scrubbable. |
 | `DisposableRecovery` | Disposable owner cleanup binds an exact lifecycle generation and cannot remove retained evidence before backend absence and metadata cleanup are proved. |
+| `MigrationBundle` | A stopped source is claimed only until an independent snapshot exists; authenticated checkpoints survive crash, unverified tails are discarded, only a complete footer publishes, cancellation never publishes, an explicitly retained partial remains non-importable until separately removed, tampering blocks import, and export never changes source content. |
+| `MigrationAdoption` | One immutable bundle may feed several destination operations; name claims remain exclusive; conflicts default to refusal; rename preserves the existing owner; replacement requires a separate confirmation and destructive effect followed by a fresh import plan; staged objects never run; control/backend IDs are fresh; Safe Clone guest IDs are pairwise fresh; Exact Guest Restore preserves identity without a uniqueness claim; and imported authority stays disabled without approval. |
 | `OperatorConfiguration` | Multiple clients share CAS revisions, canonical operation identity, leases, crash recovery, rollback evidence, and fail-closed terminal publication. |
 | `SecretTransition` | Live secret rotation proves route stage/probe/activate/prove/drain before the provider generation changes; daemon authority reset closes connections, exact committed or unchanged generations reconcile without replay, and mismatches remain recovery-required. |
 | `WorkloadObservation` | Workload records remain owner-isolated; known loss, retention truncation, coverage degradation, exact cleanup, and observer tail drain are explicit and make bounded progress. |
@@ -62,6 +64,18 @@ lifecycle coordinator. Reconciliation judges only observable evidence
 reservation/reconcile exclusion reproduces the runtime-scrub race. Model
 success does not replace the Go interleaving tests.
 
+`MigrationBundle` and `MigrationAdoption` are the feature 046 design preflight.
+They deliberately put identity transformation on each import rather than in
+the reusable export. The adoption model checks Safe Clone uniqueness across
+destinations but does not assert uniqueness for Exact Guest Restore: without a
+cross-computer coordinator, source retirement is an operator statement rather
+than a fact Hideout can prove. Pure production-shaped Go transitions now refine
+the export, crash/resume, cancellation, multi-destination identity, authority,
+conflict, and rollback traces. The Lima snapshot, staging, adoption, verification,
+and cleanup effects are implemented, but TLC does not prove those provider calls;
+`scripts/gates/migration.sh` checks the refinement inventory and the exact-package
+`scripts/gates/migration-lima.sh` supplies separate real-backend evidence.
+
 The state spaces intentionally exclude concrete filesystem paths, file
 contents, secrets, Lima commands, and unbounded production identifiers. Those
 belong in implementation tests and real backend evidence.
@@ -75,8 +89,8 @@ scripts/gates/formal.sh
 ```
 
 The gate reads `formal/inventory.json`, pins TLA+ tools `v1.7.4` by SHA-256,
-runs all 12 configurations across 10 modules and all 12 inventoried Go tests,
-checks the exact set of 76 safety invariants and 19 liveness properties,
+runs all 16 configurations across 12 modules and all 27 inventoried Go tests,
+checks the exact set of 122 safety invariants and 28 liveness properties,
 verifies the evidence independently, and writes private digest-bound output
 below `.artifacts/045/formal/`. Java is a development dependency only; it is
 not included in the Hideout package and is not required in a target

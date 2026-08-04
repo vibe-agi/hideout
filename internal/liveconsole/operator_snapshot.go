@@ -137,6 +137,7 @@ func NewStateFromOperatorSnapshot(snapshot manager.OperatorSnapshot) (State, err
 		DaemonInstanceID: snapshot.InstanceID, CredentialGeneration: snapshot.CredentialGeneration,
 		EventSequence: snapshot.Sequence, StreamHealth: snapshot.StreamHealth.State,
 		Overview: overview, Profiles: snapshot.Profiles, Operations: snapshot.Operations,
+		Migrations: snapshot.Migrations,
 		Activity: ActivityProjection{
 			Cursor: snapshot.ActivityCursor, Counts: activityCounts,
 			Recent: append([]workloadtypes.ActivityRecord(nil), snapshot.Activity...),
@@ -200,6 +201,21 @@ func consoleNextAction(id string) NextActionRef {
 	case "doctor.operations":
 		action.Label = "inspect operation history"
 		action.Command = "hideout tui"
+	case "migration.inspect":
+		action.Label = "inspect a migration bundle"
+		action.Command = "hideout migrate inspect <bundle.hideout>"
+	case "migration.export":
+		action.Label = "export this Hideout"
+		action.Command = "hideout migrate export --all --out <bundle.hideout>"
+	case "migration.status":
+		action.Label = "inspect migration progress"
+		action.Command = "hideout migrate status <operation-id>"
+	case "migration.recover":
+		action.Label = "continue migration recovery"
+		action.Command = "hideout migrate recover <operation-id>"
+	case "doctor.migration":
+		action.Label = "check migration state"
+		action.Command = "hideout doctor --feature migration"
 	}
 	return action
 }

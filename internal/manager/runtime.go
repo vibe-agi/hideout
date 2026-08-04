@@ -266,7 +266,7 @@ func (c Core) ApplyRuntimeVerify(ctx context.Context, plan RuntimeVerifyPlan, be
 		return result, fmt.Errorf("invalidate prior runtime verification: %w", err)
 	}
 	spec := c.runSpec(runSession, runEnv, RunDataPlane{Env: append([]string(nil), runSession.Env.Env...)}, RunNetwork{})
-	if record.Mode == environment.ModeShared {
+	if environment.UsesWorkspacePortal(record.Mode) {
 		// Machine-scoped verification has no project authority. Do not let the
 		// generic shared-run transport marker look like a partial attachment.
 		spec.Workspace = backend.WorkspaceAttachmentSpec{}
@@ -391,7 +391,7 @@ func runtimeReceiptAuthoritySafe(workspace, storeRoot string) bool {
 func runtimeReceiptAuthoritySafeForEnvironment(record environment.Record, storeRoot string) bool {
 	binding, ok := pinnedEnvironmentWorkspace(record)
 	if !ok {
-		return record.Mode == environment.ModeShared
+		return environment.UsesWorkspacePortal(record.Mode)
 	}
 	return runtimeReceiptAuthoritySafe(binding.HostRoot, storeRoot)
 }

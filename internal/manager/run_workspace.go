@@ -186,8 +186,8 @@ func (c Core) PlanRunWorkspaceAttachmentForIncarnation(runSession RunSession, in
 	if c.Store.Root == "" {
 		return WorkspaceAttachPlan{}, errors.New("manager store root is required")
 	}
-	if !runSession.Environment.Active || runSession.Environment.Record.Mode != environment.ModeShared {
-		return WorkspaceAttachPlan{}, errors.New("workspace portal attachment requires a shared environment")
+	if !runSession.Environment.Active || !environment.UsesWorkspacePortal(runSession.Environment.Record.Mode) {
+		return WorkspaceAttachPlan{}, errors.New("workspace Portal attachment requires a Portal-backed environment")
 	}
 	if runSession.Layout.ID == "" || runSession.Plan.GuestWorkspace != workspaceattach.LogicalWorkspaceRoot {
 		return WorkspaceAttachPlan{}, errors.New("workspace attachment session or logical root is invalid")
@@ -264,7 +264,7 @@ func (c Core) ApplyRunWorkspaceAttachment(runSession RunSession, plan WorkspaceA
 	if runSession.WorkspaceAttachment.ID != "" {
 		return RunSession{}, errors.New("run session already has a workspace attachment")
 	}
-	if !runSession.Environment.Active || runSession.Environment.Record.Mode != environment.ModeShared ||
+	if !runSession.Environment.Active || !environment.UsesWorkspacePortal(runSession.Environment.Record.Mode) ||
 		plan.Attachment.SessionID != runSession.Layout.ID ||
 		plan.Attachment.EnvironmentID != runSession.Environment.Record.ID ||
 		plan.Attachment.LogicalGuestRoot != runSession.Plan.GuestWorkspace {
@@ -290,17 +290,17 @@ func (c Core) ApplyRunWorkspaceAttachment(runSession RunSession, plan WorkspaceA
 }
 
 func bindRunWorkspaceIncarnation(runSession *RunSession, incarnation lifecycle.EnvironmentRef) error {
-	if runSession == nil || runSession.Environment.Record.Mode != environment.ModeShared {
-		return errors.New("shared workspace run session is required for boot binding")
+	if runSession == nil || !environment.UsesWorkspacePortal(runSession.Environment.Record.Mode) {
+		return errors.New("Portal workspace run session is required for boot binding")
 	}
 	if err := incarnation.Validate(true); err != nil {
-		return errors.New("shared workspace boot binding requires an observed incarnation")
+		return errors.New("Portal workspace boot binding requires an observed incarnation")
 	}
 	attachment := runSession.WorkspaceAttachment
 	current := attachment.Incarnation
 	if current.EnvironmentID != incarnation.EnvironmentID || current.StartGeneration != incarnation.StartGeneration ||
 		current.InstanceName != incarnation.InstanceName || (current.BootID != "" && current.BootID != incarnation.BootID) {
-		return errors.New("shared workspace boot binding changed the planned incarnation")
+		return errors.New("Portal workspace boot binding changed the planned incarnation")
 	}
 	attachment.Incarnation = incarnation
 	if err := attachment.Validate(); err != nil {

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
+ROOT="$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)"
 cd "$ROOT"
 
 usage() {
@@ -72,6 +72,7 @@ fi
 command -v jq >/dev/null 2>&1 || { echo "test-ui-e2e: jq required" >&2; exit 127; }
 
 mkdir -p "$out"
+out="$(cd "$out" && pwd -P)"
 manifest="$out/product-hardening-evidence.json"
 
 commit="$(git rev-parse HEAD 2>/dev/null || printf 'unknown')"

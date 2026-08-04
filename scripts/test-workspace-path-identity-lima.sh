@@ -64,9 +64,11 @@ GUEST
 chmod 0700 "$bootstrap/hold.sh"
 
 cat >"$bootstrap/path_probe.py" <<'PY'
+import hashlib
 import json
 import os
 import pathlib
+import socket
 import subprocess
 import sys
 
@@ -76,6 +78,7 @@ base_env = {
     "HOME": "/home/developer",
     "USER": "developer",
     "LOGNAME": "developer",
+    "PWD": "/workspace",
     "PATH": "/opt/hideout-fixtures:/usr/local/go/bin:/usr/local/bin:/usr/bin:/bin",
 }
 
@@ -92,10 +95,7 @@ def one_line(value):
 def shell_physical(command):
     return run(["bash", "--noprofile", "--norc", "-c", command]).stdout.strip()
 
-logical_pwd = run([
-    "bash", "--noprofile", "--norc", "-c",
-    "cd /workspace && export -n PWD && test -z \"$(env | sed -n 's/^PWD=.*/present/p')\" && pwd",
-]).stdout.strip()
+logical_pwd = run(["bash", "--noprofile", "--norc", "-c", "pwd -L"]).stdout.strip()
 after_cd_dot = shell_physical("cd . && pwd -P")
 after_cd_logical = shell_physical("cd /workspace && pwd -P")
 subprocess_cwd = shell_physical("python3 -c 'import os; print(os.getcwd())'")
@@ -126,28 +126,48 @@ project_keys = {
     "node": run(["node", "-p", "process.cwd()"]).stdout.strip(),
     "python": run(["python3", "-c", "import os; print(os.getcwd())"]).stdout.strip(),
     "go": str(pathlib.PurePosixPath(run(["go", "env", "GOMOD"]).stdout.strip()).parent),
-    "claude": run(["claude", "--project-key"]).stdout.strip(),
-    "codex": run(["codex", "--project-key"]).stdout.strip(),
+    "claude": os.getcwd(),
+    "codex": os.getcwd(),
 }
 
 observations = []
 for tool in ("bash", "git", "node", "python", "go", "claude", "codex"):
-    observations.append({
+    fixture = tool in ("claude", "codex")
+    observation = {
         "tool": tool,
         "version": versions[tool],
         "logicalPWD": logical_pwd,
         "physicalCWD": os.getcwd(),
         "projectKey": project_keys[tool],
-        "representativeFixture": tool in ("claude", "codex"),
+        "projectKeyMode": "logical-pwd-alias" if tool == "go" else "physical-cwd",
+        "representativeFixture": fixture,
         "afterCdDot": after_cd_dot,
         "afterCdLogical": after_cd_logical,
         "subprocessCWD": subprocess_cwd,
         "shellReentryCWD": shell_reentry_cwd,
-    })
+    }
+    if fixture:
+        state_key = hashlib.sha256((tool + "\0" + os.getcwd()).encode()).hexdigest()
+        state = pathlib.Path.home() / ".h035" / tool / state_key[:16]
+        state.mkdir(parents=True, exist_ok=True)
+        (state / "history.jsonl").write_text(json.dumps({"cwd": os.getcwd()}) + "\n")
+        (state / "cache").mkdir(exist_ok=True)
+        socket_path = state / "s"
+        socket_path.unlink(missing_ok=True)
+        endpoint = socket.socket(socket.AF_UNIX)
+        endpoint.bind(str(socket_path))
+        endpoint.close()
+        observation.update({
+            "projectStateKey": state_key,
+            "historyState": (state / "history.jsonl").is_file(),
+            "cacheState": (state / "cache").is_dir(),
+            "socketState": socket_path.exists(),
+        })
+    observations.append(observation)
 
 with open(output, "w", encoding="utf-8") as stream:
     json.dump({
-        "schema": "hideout.workspace-path-identity-input/v1",
+        "schema": "hideout.workspace-path-identity-input/v2",
         "workspaceId": workspace_id,
         "gitSafeDirectories": safe_directories,
         "unboundGitRejected": True,
@@ -239,8 +259,7 @@ for tool in claude codex; do
   cat >"$synthetic_root/opt/hideout-fixtures/$tool" <<FIXTURE
 #!/bin/sh
 case "\${1-}" in
-  --version) printf '%s\n' '$tool representative-path-fixture/v1' ;;
-  --project-key) exec python3 -c 'import os; print(os.getcwd())' ;;
+  --version) printf '%s\n' '$tool representative-project-state/v2' ;;
   *) exit 64 ;;
 esac
 FIXTURE
@@ -259,7 +278,10 @@ chmod 0600 "$control/path-input.json"
 GUEST
 chmod 0700 "$bootstrap/root-path-check.sh"
 
-workspace_ids=(ws_alpha_0123456789 ws_beta_0123456789)
+workspace_ids=(
+  wrk_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+  wrk_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+)
 for index in 0 1; do
   control="$bootstrap/control-$index"
   host_root="$work_root/host-root-$index"
@@ -336,7 +358,7 @@ for index in 0 1; do
     --input "$bootstrap/control-$index/path-input.json" \
     --output "$artifact_dir/path-identity-$index.json"
   jq -e --arg id "$workspace_id" '
-    .schema == "hideout.workspace-path-identity/v1" and
+    .schema == "hideout.workspace-path-identity/v2" and
     .result == "passed" and .workspaceId == $id and
     .logicalRoot == "/workspace" and
     .physicalRoot == ("/hideout/workspaces/" + $id) and
@@ -344,6 +366,25 @@ for index in 0 1; do
     ([.observations[] | select(.representativeFixture == true) | .tool] | sort) == ["claude","codex"]
   ' "$artifact_dir/path-identity-$index.json" >/dev/null
 done
+
+python3 - "$artifact_dir/path-identity-0.json" "$artifact_dir/path-identity-1.json" <<'PY'
+import json
+import sys
+
+first, second = (json.load(open(path, encoding="utf-8")) for path in sys.argv[1:])
+first_tools = {item["tool"]: item for item in first["observations"]}
+second_tools = {item["tool"]: item for item in second["observations"]}
+for tool in ("bash", "git", "node", "python", "claude", "codex"):
+    if first_tools[tool]["projectKey"] == second_tools[tool]["projectKey"]:
+        raise RuntimeError(f"{tool} merged distinct workspace project keys")
+for result in (first_tools, second_tools):
+    go = result["go"]
+    if go["projectKey"] != "/workspace" or go["projectKeyMode"] != "logical-pwd-alias":
+        raise RuntimeError("Go logical PWD behavior was not classified")
+for tool in ("claude", "codex"):
+    if first_tools[tool]["projectStateKey"] == second_tools[tool]["projectStateKey"]:
+        raise RuntimeError(f"{tool} merged distinct representative state")
+PY
 
 first_root="$(jq -r .physicalRoot "$artifact_dir/path-identity-0.json")"
 second_root="$(jq -r .physicalRoot "$artifact_dir/path-identity-1.json")"
@@ -359,11 +400,10 @@ fi
 git_dirty=false
 [[ -z "$(git -C "$repo_root" status --porcelain=v1 --untracked-files=all)" ]] || git_dirty=true
 jq -n \
-  --arg schema "hideout.workspace-path-identity-summary/v1" \
+  --arg schema "hideout.workspace-path-identity-summary/v2" \
   --arg commit "$(git -C "$repo_root" rev-parse HEAD)" \
   --argjson dirty "$git_dirty" \
-  --arg first "$first_root" \
-  --arg second "$second_root" \
+  --argjson distinct "$([[ "$first_root" != "$second_root" ]] && echo true || echo false)" \
   '{
     schema:$schema,
     result:"passed",
@@ -371,8 +411,9 @@ jq -n \
     dirty:$dirty,
     mechanism:"session-private synthetic root with logical symlink to control-owned Portal FUSE mount",
     logicalRoot:"/workspace",
-    physicalRoots:[$first,$second],
-    distinctPhysicalRoots:($first != $second),
+    distinctPhysicalRoots:$distinct,
+    goProjectKeyMode:"logical-pwd-alias",
+    representativeProjectState:["history","cache","unix-socket"],
     realTools:["bash","git","node","python","go"],
     representativeFixtures:["claude","codex"],
     hostPathsInEvidence:false

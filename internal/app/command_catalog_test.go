@@ -36,6 +36,7 @@ func TestCommandCatalogCoversEveryTopLevelRoute(t *testing.T) {
 		"hostfsd",
 		"init",
 		"lab",
+		"migrate",
 		"notice",
 		"package",
 		"profile",

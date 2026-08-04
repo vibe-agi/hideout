@@ -248,6 +248,102 @@
     return post("profile/transaction/apply", applyRequest);
   }
 
+  /** @param {string} resource @param {Object} payload */
+  async function migrationPost(resource, payload) {
+    const allowed = new Set([
+      "migration/secret-input",
+      "migration/export/plan",
+      "migration/export/apply",
+      "migration/import/inspect",
+      "migration/import/plan",
+      "migration/import/apply"
+    ]);
+    if (!allowed.has(resource)) {
+      throw new Error("unsupported browser migration resource");
+    }
+    const envelope = await request(`/api/v1/${resource}`, {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify(payload)
+    });
+    if (envelope.version !== "hideout.manager-api/v1" ||
+        envelope.resource !== resource ||
+        !envelope.data) {
+      throw new Error(`${resource} response contract mismatch`);
+    }
+    return envelope.data;
+  }
+
+  /** @param {Object} payload */
+  function migrationSecretInput(payload) {
+    return migrationPost("migration/secret-input", payload);
+  }
+
+  /** @param {Object} payload */
+  function migrationExportPlan(payload) {
+    return migrationPost("migration/export/plan", payload);
+  }
+
+  /** @param {Object} payload */
+  function migrationExportApply(payload) {
+    return migrationPost("migration/export/apply", payload);
+  }
+
+  /** @param {Object} payload */
+  function migrationImportInspect(payload) {
+    return migrationPost("migration/import/inspect", payload);
+  }
+
+  /** @param {Object} payload */
+  function migrationImportPlan(payload) {
+    return migrationPost("migration/import/plan", payload);
+  }
+
+  /** @param {Object} payload */
+  function migrationImportApply(payload) {
+    return migrationPost("migration/import/apply", payload);
+  }
+
+  /** @param {string} operationID */
+  async function migrationOperation(operationID) {
+    if (!/^op_[A-Za-z0-9_-]{8,124}$/.test(operationID)) {
+      throw new Error("migration operation identity is invalid");
+    }
+    const envelope = await request(
+      `/api/v1/migration/operations/${encodeURIComponent(operationID)}`
+    );
+    if (envelope.version !== "hideout.manager-api/v1" ||
+        envelope.resource !== "migration/operation" ||
+        !envelope.data) {
+      throw new Error("migration operation response contract mismatch");
+    }
+    return envelope.data;
+  }
+
+  /**
+   * @param {string} operationID
+   * @param {"resume"|"cancel"|"recover"} action
+   * @param {Object} payload
+   */
+  async function migrationAction(operationID, action, payload) {
+    if (!/^op_[A-Za-z0-9_-]{8,124}$/.test(operationID) ||
+        !["resume", "cancel", "recover"].includes(action)) {
+      throw new Error("migration operation action is invalid");
+    }
+    const resource = `migration/operations/${operationID}/${action}`;
+    const envelope = await request(`/api/v1/${resource}`, {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify(payload)
+    });
+    if (envelope.version !== "hideout.manager-api/v1" ||
+        envelope.resource !== "migration/operation" ||
+        !envelope.data) {
+      throw new Error("migration action response contract mismatch");
+    }
+    return envelope.data;
+  }
+
   /** @param {string} operationID */
   async function operation(operationID) {
     if (!/^op_[A-Za-z0-9_-]{8,124}$/.test(operationID)) {
@@ -356,6 +452,14 @@
     activity,
     configurationPlan,
     configurationApply,
+    migrationSecretInput,
+    migrationExportPlan,
+    migrationExportApply,
+    migrationImportInspect,
+    migrationImportPlan,
+    migrationImportApply,
+    migrationOperation,
+    migrationAction,
     operation,
     profileProjection,
     events

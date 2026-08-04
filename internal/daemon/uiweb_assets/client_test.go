@@ -2,6 +2,7 @@ package uiweb_assets
 
 import (
 	"encoding/json"
+	"net/http"
 	"regexp"
 	"strings"
 	"testing"
@@ -319,6 +320,152 @@ oldRequest.then(
 		proof.Epoch != 2 ||
 		!proof.Available {
 		t.Fatalf("superseded response retained authority: %+v", proof)
+	}
+}
+
+func TestBrowserMigrationClientUsesExactManagerRoutesAndKeepsSecretsOutOfURLs(
+	t *testing.T,
+) {
+	runtime := goja.New()
+	value, err := runtime.RunString(`
+const operatorToken = "ui_" + "f".repeat(48);
+const passphrase = "socks5://user:secret@proxy.example";
+const operationID = "op_migrationwebclient1";
+const requests = [];
+var document = {title:"Hideout"};
+var window = {
+  HideoutConsole:{},
+  location:{hash:"#token=" + operatorToken,pathname:"/",search:""},
+  history:{replaceState:function() { window.location.hash = ""; }},
+  addEventListener:function() {}
+};
+class URLSearchParams {
+  constructor(raw) {
+    this.value = String(raw || "").startsWith("token=") ?
+      decodeURIComponent(String(raw).slice(6)) : "";
+  }
+  get(name) { return name === "token" ? this.value : null; }
+}
+class Headers {
+  constructor(initial) {
+    this.values = {};
+    for (const [name,value] of Object.entries(initial || {})) {
+      this.set(name,value);
+    }
+  }
+  set(name,value) { this.values[String(name).toLowerCase()] = String(value); }
+  get(name) { return this.values[String(name).toLowerCase()] || ""; }
+}
+class AbortController {
+  constructor() { this.signal = {}; }
+  abort() {}
+}
+var EventSource = function() {};
+var fetch = function(path,init) {
+  const method = init && init.method || "GET";
+  const body = init && init.body || "";
+  requests.push({
+    path,method,body,
+    tokenMatched:init.headers.get("X-Hideout-UI-Token") === operatorToken,
+    contentType:init.headers.get("Content-Type"),
+    credentials:init.credentials,
+    cache:init.cache
+  });
+  let resource = String(path).slice("/api/v1/".length);
+  if (resource.startsWith("migration/operations/")) {
+    resource = "migration/operation";
+  }
+  return Promise.resolve({
+    ok:true,status:200,statusText:"OK",
+    text:function() {
+      return Promise.resolve(JSON.stringify({
+        version:"hideout.manager-api/v1",resource,data:{accepted:true},errors:[]
+      }));
+    }
+  });
+};
+` + mustAsset("client.js") + `
+const Client = window.HideoutConsole.Client;
+Client.migrationSecretInput({
+  purpose:"inspect",bundlePath:"/tmp/source.bundle",passphrase
+}).then(() => Client.migrationExportPlan({schema:"hideout.migration-export-request/v1"}))
+  .then(() => Client.migrationExportApply({plan:{planDigest:"sha256:abc"}}))
+  .then(() => Client.migrationImportInspect({
+    bundlePath:"/tmp/source.bundle",secretInputHandle:"migh_handle0001"
+  }))
+  .then(() => Client.migrationImportPlan({
+    importDraft:{schema:"hideout.migration-import-draft/v1"},
+    secretInputHandle:"migh_handle0002"
+  }))
+  .then(() => Client.migrationImportApply({
+    plan:{planDigest:"sha256:def"},secretInputHandle:"migh_handle0003"
+  }))
+  .then(() => Client.migrationOperation(operationID))
+  .then(() => Client.migrationAction(operationID,"recover",{
+    revision:7,recoveryAction:"rollback"
+  }))
+  .then(() => JSON.stringify({requests,passphrase}));
+`)
+	if err != nil {
+		t.Fatalf("run browser migration client: %v", err)
+	}
+	promise, ok := value.Export().(*goja.Promise)
+	if !ok || promise.State() != goja.PromiseStateFulfilled {
+		t.Fatalf("migration request promise=%T state=%v", value.Export(), promise)
+	}
+	var proof struct {
+		Passphrase string `json:"passphrase"`
+		Requests   []struct {
+			Path         string `json:"path"`
+			Method       string `json:"method"`
+			Body         string `json:"body"`
+			TokenMatched bool   `json:"tokenMatched"`
+			ContentType  string `json:"contentType"`
+			Credentials  string `json:"credentials"`
+			Cache        string `json:"cache"`
+		} `json:"requests"`
+	}
+	if err := json.Unmarshal([]byte(promise.Result().String()), &proof); err != nil {
+		t.Fatal(err)
+	}
+	wantPaths := []string{
+		"/api/v1/migration/secret-input",
+		"/api/v1/migration/export/plan",
+		"/api/v1/migration/export/apply",
+		"/api/v1/migration/import/inspect",
+		"/api/v1/migration/import/plan",
+		"/api/v1/migration/import/apply",
+		"/api/v1/migration/operations/op_migrationwebclient1",
+		"/api/v1/migration/operations/op_migrationwebclient1/recover",
+	}
+	if len(proof.Requests) != len(wantPaths) {
+		t.Fatalf("migration requests=%+v", proof.Requests)
+	}
+	for i, request := range proof.Requests {
+		if request.Path != wantPaths[i] ||
+			strings.Contains(request.Path, proof.Passphrase) ||
+			!request.TokenMatched || request.Credentials != "omit" ||
+			request.Cache != "no-store" {
+			t.Fatalf("migration request[%d]=%+v", i, request)
+		}
+		if i == 6 {
+			if request.Method != http.MethodGet || request.Body != "" {
+				t.Fatalf("migration operation request=%+v", request)
+			}
+			continue
+		}
+		if request.Method != http.MethodPost ||
+			request.ContentType != "application/json" {
+			t.Fatalf("migration mutation request[%d]=%+v", i, request)
+		}
+	}
+	if !strings.Contains(proof.Requests[0].Body, proof.Passphrase) {
+		t.Fatalf("protected input was not carried in the one-shot request body")
+	}
+	for _, request := range proof.Requests[1:] {
+		if strings.Contains(request.Body, proof.Passphrase) {
+			t.Fatalf("protected input escaped one-shot route: %+v", request)
+		}
 	}
 }
 

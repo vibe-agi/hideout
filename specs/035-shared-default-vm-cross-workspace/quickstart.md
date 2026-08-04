@@ -222,13 +222,52 @@ Probe `PWD`, `getcwd`, `realpath`, `cd .`, `cd /workspace`, subprocesses, Git
 safe-directory, and project-scoped state for Bash, Git, Node, Python, Go,
 Claude and Codex fixtures. Test preserve mode and linked external Git metadata.
 
+The non-performance packaged-product stage runs this matrix independently of
+the performance samples:
+
+```sh
+scripts/test-shared-workspace-lima-e2e.sh \
+  --require-real \
+  --non-performance \
+  --out .hideout-release-evidence/035-shared-workspace-path
+```
+
+If that checkpoint passes and performance must be measured later, reuse the
+same exact package and retained digests instead of rerunning correctness:
+
+```sh
+scripts/test-shared-workspace-lima-e2e.sh \
+  --require-real \
+  --performance-only \
+  --samples 30 \
+  --out .hideout-release-evidence/035-shared-workspace-path
+```
+
 Expected:
 
-- distinct projects keep distinct physical/trust/history/cache/socket keys;
+- logical and exact physical aliases have the same device/inode and preserve
+  bidirectional create/read/write/rename/chmod/fsync/delete behavior;
+- Bash, Git, Node and Python observe the opaque physical cwd, while Go's
+  same-inode `$PWD` behavior is classified explicitly when `go env GOMOD`
+  remains under logical `/workspace`; no distinct Go project-state claim is
+  fabricated;
+- representative Claude and Codex state fixtures keep distinct
+  trust/history/cache/socket keys across roots and stable keys for the same
+  root;
 - logical `/workspace` remains usable;
 - only verified logical/physical Git paths are trusted;
-- preserve mode and incompatible external metadata fail before target start
-  with executable dedicated guidance.
+- guessed sibling roots and parent traversal are denied; resolved workspace
+  file paths are projected to `/workspace`, while relative paths from
+  path-oriented file hooks remain explicitly `aliased`; process cwd is marked
+  `cwd-unavailable` when the kernel does not supply it; and production-shaped
+  physical or sibling argv paths that exceed
+  the kernel capture width either become the fixed unbound placeholder with
+  `argv-truncated` or are omitted with `argv-unavailable`, without exposing
+  `/hideout/workspaces`;
+- shared preserve mode and linked external Git metadata fail before target
+  start, and ambient Git safe-directory entries cannot add an unbound or
+  wildcard path; and
+- incompatible path modes fail with executable dedicated-environment guidance.
 
 **Covers**: FR-035, FR-041; SC-019, SC-023.
 

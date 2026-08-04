@@ -281,3 +281,26 @@ labels, history or lifecycle metadata into authority.
 All tasks use `- [ ] TNNN [P?] [US?] description with file path`. IDs are
 continuous T001-T106. Setup, Phase R, Foundational and Polish tasks have no story
 label; user-story tasks use the matching `[US1]` through `[US5]` label.
+
+---
+
+## Phase 10: Convergence - Workspace Path Identity And Release Evidence
+
+**Purpose**: Close the post-implementation path-identity gaps discovered while
+reviewing the logical `/workspace` alias against the opaque per-attachment
+physical root. This phase is additive: it does not weaken the accepted Portal
+or shared-machine design and keeps performance measurement separate.
+
+- [X] T107 [US1] Make path-identity planning accept only the production `wrk_` plus 64-hex workspace identity, replace short synthetic IDs in `internal/workspaceattach/path_identity_probe.go`, `internal/workspaceattach/path_identity_probe_test.go`, `internal/backend/lima/workspace_path_test.go`, and `scripts/test-workspace-path-identity-lima.sh`, and prove the old length guard fails against a real identity (FR-005, FR-041; SC-023)
+- [X] T108 [US2] Add a fail-closed structured guest-path alias resolver and tests proving `/workspace` and the exact attachment physical root select the same relative object while traversal, malformed IDs, host paths, and guessed sibling roots are rejected in `internal/workspaceattach/` (FR-004, FR-007, FR-039; SC-002, SC-003, SC-004)
+- [X] T109 [US2] Extend actual-session tests with logical/physical dev+inode equality, bidirectional create/read/write/rename/chmod/fsync/delete, nested `cd`, `pwd -L`, `pwd -P`, `realpath`, subprocess inheritance, same-root reuse, and different-root denial in `internal/backend/lima/` and `scripts/lib/gate2-shared-workspace.sh` (FR-004, FR-007, FR-041; SC-002, SC-003, SC-004, SC-023)
+- [X] T110 [US5] Bind audit normalization and broker/Host App path projection to the immutable attachment identity so exact logical and physical aliases produce one structured workspace-relative path without generic string replacement; add positive, sibling-denial, malformed, and mutation-proof tests in `cmd/hideout-observer/`, `internal/broker/`, `internal/manager/`, and `internal/workspaceattach/` (FR-017, FR-019, FR-039; SC-010, SC-023)
+- [X] T111 [US2] Replace the shared `getcwd` pseudo-agent fixture with a truthful Bash, Git, Node, Python, Go, Claude, and Codex behavior matrix: require distinct trust/history/cache/socket keys for stateful physical-cwd consumers, stable keys for the same root, and explicitly classify Go's logical `$PWD` module path without fabricating a distinct project-state claim in `scripts/test-workspace-path-identity-lima.sh` and the real product gate (FR-041; SC-023)
+- [X] T112 Split stale path-correctness assertions out of `scripts/lib/gate2-shared-workspace-product-performance.sh`, run them through the installed candidate's actual session view in a resumable non-performance stage, and retain a negative fixture proving the judge rejects a missing alias, sibling exposure, or divergent inode (SC-003, SC-004, SC-015, SC-023)
+- [X] T113 Wire the independent non-performance workspace-path stage into `scripts/test-shared-workspace-lima-e2e.sh`, its release-evidence manifest, and `docs/privacy-run-test-plan.md` without making successful performance measurement a prerequisite for retaining correctness evidence (SC-015)
+- [X] T114 Run focused Go tests, Linux cross-vet, script lint/checks, the non-performance real Lima workspace-path stage, and adversarial mutation/negative-fixture checks; record fresh-eyes evidence and update `docs/STATUS.md`, `docs/DEBT.md`, and the 035 quickstart only from retained artifacts (SC-015, SC-023)
+
+**Checkpoint**: A release candidate may claim workspace path identity only when
+the installed product proves logical/physical file equivalence, project-state
+separation, sibling denial, and attachment-bound audit/projection behavior. The
+performance gate remains an independent promotion input.

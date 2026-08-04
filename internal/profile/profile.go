@@ -362,7 +362,7 @@ func (s Store) Load(name string) (Profile, error) {
 	if err != nil {
 		return Profile{}, err
 	}
-	data, err := os.ReadFile(s.ProfilePath(name))
+	data, err := s.readProfileData(name)
 	if err != nil {
 		return Profile{}, err
 	}
@@ -497,7 +497,19 @@ func profileNeedsMetadata(p Profile) bool {
 }
 
 func (s Store) Save(p Profile) error {
+	lock, err := s.lockCatalog(true)
+	if err != nil {
+		return err
+	}
+	defer lock.Unlock()
+	return s.saveUnlocked(p)
+}
+
+func (s Store) saveUnlocked(p Profile) error {
 	if err := p.Validate(); err != nil {
+		return err
+	}
+	if err := s.pendingBatchMutationCheckUnlocked(p.Name); err != nil {
 		return err
 	}
 	if err := ensureMetadata(&p, "create", ""); err != nil {
@@ -586,13 +598,18 @@ func (s Store) Create(p Profile) error {
 		return err
 	}
 	p.Name = name
+	lock, err := s.lockCatalog(true)
+	if err != nil {
+		return err
+	}
+	defer lock.Unlock()
 	dir := s.ProfileDir(name)
-	if _, err := os.Stat(dir); err == nil {
+	if _, err := os.Lstat(dir); err == nil {
 		return fmt.Errorf("profile %q already exists", name)
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
-	return s.Save(p)
+	return s.saveUnlocked(p)
 }
 
 func (s Store) RotateIdentity(name string) (Profile, error) {

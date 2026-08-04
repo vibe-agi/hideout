@@ -80,6 +80,7 @@ type app struct {
 	activitySnapshot       func(context.Context, string, manager.OperatorSnapshotQuery) (manager.OperatorSnapshot, error)
 	secretClient           secretCommandClient
 	secretReadPassword     func() ([]byte, error)
+	migrationRequest       func(string, string, string, io.Reader) ([]byte, error)
 	configurationAuthority func(manager.Core) configurationCommandAuthority
 }
 
@@ -2883,6 +2884,7 @@ func (a app) doctor(args []string) error {
 	}
 	report("store", "ok", "writable")
 	checkManager(store, report)
+	addDoctorMigrationStatus(store, report)
 	report("guest-privilege", "ok", doctorGuestPrivilegeMessage(context.Background(), store, opts.profileName))
 	report("support-matrix", doctorSupportMatrixStatus(doctorReq.Backend), doctorSupportMatrixMessage(doctorReq.Backend))
 
@@ -7550,6 +7552,8 @@ func environmentTrustDomain(mode environment.Mode) string {
 		return "shared-vm+profile"
 	case environment.ModeDedicated:
 		return "dedicated-vm+shared-profile"
+	case environment.ModeDedicatedPortal:
+		return "dedicated-vm+session-workspace"
 	case environment.ModeWorkspaceBound:
 		return "workspace-bound"
 	default:
@@ -7571,6 +7575,9 @@ func writeEnvironmentTrustGuidance(w io.Writer, rec environment.Record, indent s
 	case environment.ModeDedicated:
 		fmt.Fprintf(w, "%strust-domain: dedicated guest kernel and root disk; profile-owned home/config/cache state remains shared with profile %s\n", indent, rec.Profile)
 		fmt.Fprintf(w, "%sseparate-profile-state: hideout profile clone %s isolated && hideout env create isolated --workspace \"$PWD\" --profile isolated --backend %s\n", indent, rec.Profile, backendName)
+	case environment.ModeDedicatedPortal:
+		fmt.Fprintf(w, "%strust-domain: dedicated guest kernel and preserved root disk; no host workspace is retained in the machine configuration\n", indent)
+		fmt.Fprintf(w, "%sworkspace-views: the selected host directory is granted privately for each run through Workspace Portal\n", indent)
 	case environment.ModeWorkspaceBound:
 		fmt.Fprintf(w, "%strust-domain: project-pinned workspace-bound machine; shared cross-workspace mode is not active on this backend/platform\n", indent)
 	}
@@ -8353,8 +8360,15 @@ func (a app) daemonOptions(store profile.Store, ttl time.Duration) daemon.Option
 			return provider
 		}
 	}
+	var migrationProvider backend.MigrationProvider
+	if candidate, ok := backendForRun(
+		"lima", runOptions{backendName: "lima"},
+	).(backend.MigrationProvider); ok {
+		migrationProvider = candidate
+	}
 	return daemon.Options{
 		Store: store, TTL: ttl, BuildID: daemonBuildID(),
+		ProductVersion: Version, MigrationProvider: migrationProvider,
 		RunBackend: func(req manager.RunAPIRequest, plan manager.RunPlan) (backend.Backend, error) {
 			return backendForRun(plan.Backend, runOptions{backendName: plan.Backend, allowWeakIsolation: req.AllowWeakIsolation}), nil
 		},

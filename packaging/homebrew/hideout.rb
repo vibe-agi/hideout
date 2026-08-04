@@ -15,6 +15,7 @@ class Hideout < Formula
   # helpers must retain their execute bits so Hideout can copy them into Lima.
   skip_clean "bin/hideout-dns-stub-linux-arm64",
              "bin/hideout-hostfsd-linux-arm64",
+             "bin/hideout-migration-adopt-linux-arm64",
              "bin/hideout-observer-linux-arm64",
              "bin/hideout-session-supervisor-linux-arm64",
              "bin/hideout-workspace-portal-linux-arm64",
@@ -29,6 +30,8 @@ class Hideout < Formula
     odie "Hideout package installer is missing" unless (package_root/"install.sh").executable?
 
     system "/usr/bin/codesign", "--verify", "--strict", package_root/"bin/hideout"
+    system "/usr/bin/codesign", "--verify", "--strict",
+           package_root/"bin/hideout-migration-vz-adopt-darwin-arm64"
     system package_root/"install.sh",
            "--prefix", prefix,
            "--store", install_store,

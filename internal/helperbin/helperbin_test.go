@@ -20,6 +20,7 @@ func TestFindSourceRootWalksUpFromPackageDirectory(t *testing.T) {
 		filepath.Join(root, "cmd", LinuxSessionSupervisorCommand),
 		filepath.Join(root, "cmd", LinuxObserverCommand),
 		filepath.Join(root, "cmd", LinuxWorkspacePortalCommand),
+		filepath.Join(root, "cmd", LinuxMigrationAdoptCommand),
 	} {
 		if _, err := os.Stat(path); err != nil {
 			t.Fatalf("source root %q missing %s: %v", root, path, err)
@@ -43,6 +44,176 @@ func TestDefaultLinuxHelperPathsUseStoreBin(t *testing.T) {
 	}
 	if got, want := DefaultLinuxWorkspacePortalPath(root, "arm64"), filepath.Join(root, "bin", "hideout-workspace-portal-linux-arm64"); got != want {
 		t.Fatalf("DefaultLinuxWorkspacePortalPath=%q want %q", got, want)
+	}
+	if got, want := DefaultLinuxMigrationAdoptPath(root, "arm64"), filepath.Join(root, "bin", "hideout-migration-adopt-linux-arm64"); got != want {
+		t.Fatalf("DefaultLinuxMigrationAdoptPath=%q want %q", got, want)
+	}
+}
+
+func TestResolveLinuxMigrationAdoptRequiresStrictPackageManifest(t *testing.T) {
+	t.Setenv(LinuxMigrationAdoptPathEnvironment, "")
+	t.Setenv("PATH", t.TempDir())
+	root := t.TempDir()
+	path := DefaultLinuxMigrationAdoptPath(root, "arm64")
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("adoption-helper"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := WriteStoreHelperManifest(path, LinuxMigrationAdoptCommand, "arm64"); err != nil {
+		t.Fatal(err)
+	}
+	if resolution, err := ResolveLinuxMigrationAdopt(root, "arm64"); err != nil || resolution.Path != "" {
+		t.Fatalf("generic manifest resolution=%+v error=%v", resolution, err)
+	}
+	if err := WriteLinuxMigrationAdoptManifest(path, "arm64"); err != nil {
+		t.Fatal(err)
+	}
+	resolution, err := ResolveLinuxMigrationAdopt(root, "arm64")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resolution.Path != path ||
+		resolution.ExpectedDigest != "sha256:"+resolution.Manifest.SHA256 ||
+		resolution.Manifest.Command != LinuxMigrationAdoptCommand ||
+		resolution.Manifest.License != LinuxMigrationAdoptLicense ||
+		resolution.Manifest.BuildMode != LinuxMigrationAdoptBuildMode ||
+		!resolution.Manifest.PackageOwned {
+		t.Fatalf("unexpected adoption resolution: %+v", resolution)
+	}
+	if err := os.WriteFile(path, []byte("replaced-helper"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if resolution, err := ResolveLinuxMigrationAdopt(root, "arm64"); err != nil || resolution.Path != "" {
+		t.Fatalf("digest-drifted resolution=%+v error=%v", resolution, err)
+	}
+}
+
+func TestResolveLinuxMigrationAdoptExplicitInvalidPathFailsClosed(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, LinuxMigrationAdoptCommand+"-linux-arm64")
+	if err := os.WriteFile(path, []byte("unmanifested"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(LinuxMigrationAdoptPathEnvironment, path)
+	if resolution, err := ResolveLinuxMigrationAdopt("", "arm64"); err == nil || resolution.Path != "" {
+		t.Fatalf("invalid explicit resolution=%+v error=%v", resolution, err)
+	}
+}
+
+func TestHostMigrationVZAdoptRequiresPinnedPackageManifest(t *testing.T) {
+	root := t.TempDir()
+	path := DefaultHostMigrationVZAdoptPath(root, "darwin", "arm64")
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("fixture-vz-executor"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if resolution, err := ResolveHostMigrationVZAdopt(path, "darwin", "arm64"); err == nil || resolution.Path != "" {
+		t.Fatalf("executor without manifest resolution=%+v error=%v", resolution, err)
+	}
+	if err := WriteHostMigrationVZAdoptManifest(path, "darwin", "arm64"); err != nil {
+		t.Fatal(err)
+	}
+	resolution, err := ResolveHostMigrationVZAdopt(path, "darwin", "arm64")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resolution.Path != path || resolution.ExpectedDigest == "" ||
+		resolution.Manifest.UpstreamModule != HostMigrationVZAdoptUpstreamModule ||
+		resolution.Manifest.UpstreamVersion != HostMigrationVZAdoptUpstreamVersion ||
+		resolution.Manifest.BuildMode != HostMigrationVZAdoptBuildMode {
+		t.Fatalf("executor resolution=%+v", resolution)
+	}
+	if err := os.WriteFile(path, []byte("replaced-vz-executor"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if resolution, err := ResolveHostMigrationVZAdopt(path, "darwin", "arm64"); err == nil || resolution.Path != "" {
+		t.Fatalf("drifted executor resolution=%+v error=%v", resolution, err)
+	}
+}
+
+func TestHostMigrationVZAdoptRejectsUnsupportedPlatformAndProvenanceMutation(t *testing.T) {
+	root := t.TempDir()
+	path := DefaultHostMigrationVZAdoptPath(root, "darwin", "arm64")
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("fixture-vz-executor"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := WriteHostMigrationVZAdoptManifest(path, "darwin", "arm64"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ResolveHostMigrationVZAdopt(path, "linux", "arm64"); err == nil {
+		t.Fatal("Linux host accepted the Darwin VZ executor")
+	}
+	manifest, err := ReadManifest(ManifestPath(path))
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifest.UpstreamVersion = "v0.0.0"
+	data, err := json.Marshal(manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(ManifestPath(path), data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := HostMigrationVZAdoptHelperCurrent(path, "darwin", "arm64"); ok {
+		t.Fatal("executor with mutated upstream provenance was accepted")
+	}
+}
+
+func TestLinuxMigrationAdoptManifestRejectsProvenanceMutations(t *testing.T) {
+	mutations := map[string]func(*Manifest){
+		"not package owned": func(manifest *Manifest) {
+			manifest.PackageOwned = false
+		},
+		"generic builder": func(manifest *Manifest) {
+			manifest.Builder = "go build"
+		},
+		"generic build mode": func(manifest *Manifest) {
+			manifest.BuildMode = "generic"
+		},
+		"wrong license": func(manifest *Manifest) {
+			manifest.License = "MIT"
+		},
+		"unexpected upstream": func(manifest *Manifest) {
+			manifest.UpstreamModule = "example.invalid/helper"
+		},
+	}
+	for name, mutate := range mutations {
+		t.Run(name, func(t *testing.T) {
+			root := t.TempDir()
+			path := DefaultLinuxMigrationAdoptPath(root, "arm64")
+			if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(path, []byte("adoption-helper"), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if err := WriteLinuxMigrationAdoptManifest(path, "arm64"); err != nil {
+				t.Fatal(err)
+			}
+			manifest, err := ReadManifest(ManifestPath(path))
+			if err != nil {
+				t.Fatal(err)
+			}
+			mutate(&manifest)
+			data, err := json.MarshalIndent(manifest, "", "  ")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(ManifestPath(path), append(data, '\n'), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if _, ok := LinuxMigrationAdoptHelperCurrent(path, "arm64"); ok {
+				t.Fatal("mutated adoption helper manifest was accepted")
+			}
+		})
 	}
 }
 
@@ -399,6 +570,12 @@ func TestHelperManifestSourceDateEpochIsDeterministic(t *testing.T) {
 			},
 		},
 		{
+			name: "migration-adopt",
+			write: func(path string) error {
+				return WriteLinuxMigrationAdoptManifest(path, "arm64")
+			},
+		},
+		{
 			name: "tun2socks",
 			write: func(path string) error {
 				return WriteTun2SocksManifest(path, "arm64", true)
@@ -628,6 +805,15 @@ func TestBuildLinuxWorkspacePortalRejectsUnsupportedArchitecture(t *testing.T) {
 	err := BuildLinuxWorkspacePortal(BuildOptions{Out: filepath.Join(t.TempDir(), "helper"), GOARCH: "386", Source: "."})
 	if err == nil {
 		t.Fatal("BuildLinuxWorkspacePortal accepted unsupported architecture")
+	}
+}
+
+func TestBuildLinuxMigrationAdoptRejectsUnsupportedArchitecture(t *testing.T) {
+	err := BuildLinuxMigrationAdopt(BuildOptions{
+		Out: filepath.Join(t.TempDir(), "helper"), GOARCH: "386", Source: ".",
+	})
+	if err == nil {
+		t.Fatal("BuildLinuxMigrationAdopt accepted unsupported architecture")
 	}
 }
 

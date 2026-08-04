@@ -14,17 +14,20 @@
 all(.package.files[];
   if .executable then (.mode == "0700" or .mode == "0755")
   else (.mode == "0600" or .mode == "0644") end) and
-(.package.helpers | length) == 13 and
-([.package.helpers[] | select(.kind == "helper-manifest")] | length) == 6 and
-([.package.helpers[] | select(.kind == "linux-helper")] | length) == 7 and
-(.package.browserConsole.inventory.assets | length) == 8 and
-.formal.configurationCount == 12 and
-.formal.moduleCount == 10 and
-.formal.invariantCount == 76 and
-.formal.propertyCount == 19 and
-.formal.goTestCount == 12 and
-(.gates | length) == 11 and
-([.gates[].id] | unique | length) == 11 and
+(.package.helpers | length) == 17 and
+([.package.helpers[] | select(.kind == "helper-manifest")] | length) == 8 and
+([.package.helpers[] | select(.kind == "linux-helper")] | length) == 8 and
+([.package.helpers[] |
+  select(.kind == "binary" and
+    .path == "bin/hideout-migration-vz-adopt-darwin-arm64")] | length) == 1 and
+(.package.browserConsole.inventory.assets | length) == 9 and
+.formal.configurationCount == 16 and
+.formal.moduleCount == 12 and
+.formal.invariantCount == 122 and
+.formal.propertyCount == 28 and
+.formal.goTestCount == 27 and
+(.gates | length) == 12 and
+([.gates[].id] | unique | length) == 12 and
 all(.gates[]; .result == "passed") and
 all(.gates[] | select(.scope == "candidate");
   .candidateAcceptance == true) and

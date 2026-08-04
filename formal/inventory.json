@@ -25,6 +25,30 @@
       "kind": "safety"
     },
     {
+      "id": "MigrationAdoption",
+      "module": "formal/MigrationAdoption.tla",
+      "config": "formal/MigrationAdoption.cfg",
+      "kind": "safety"
+    },
+    {
+      "id": "MigrationAdoptionLiveness",
+      "module": "formal/MigrationAdoption.tla",
+      "config": "formal/cfg/MigrationAdoptionLiveness.cfg",
+      "kind": "safety-liveness"
+    },
+    {
+      "id": "MigrationBundle",
+      "module": "formal/MigrationBundle.tla",
+      "config": "formal/MigrationBundle.cfg",
+      "kind": "safety"
+    },
+    {
+      "id": "MigrationBundleLiveness",
+      "module": "formal/MigrationBundle.tla",
+      "config": "formal/cfg/MigrationBundleLiveness.cfg",
+      "kind": "safety-liveness"
+    },
+    {
       "id": "NetworkTransition",
       "module": "formal/NetworkTransition.tla",
       "config": "formal/NetworkTransition.cfg",
@@ -88,6 +112,14 @@
       {
         "path": "./internal/daemon",
         "importPath": "github.com/vibe-agi/hideout/internal/daemon"
+      },
+      {
+        "path": "./internal/migration",
+        "importPath": "github.com/vibe-agi/hideout/internal/migration"
+      },
+      {
+        "path": "./internal/backend/lima",
+        "importPath": "github.com/vibe-agi/hideout/internal/backend/lima"
       }
     ],
     "tests": [
@@ -161,6 +193,96 @@
         "package": "github.com/vibe-agi/hideout/internal/manager",
         "name": "TestOperationRecoveryCrashMatrix",
         "source": "internal/manager/operation_recovery_test.go",
+        "classification": "crash-matrix"
+      },
+      {
+        "package": "github.com/vibe-agi/hideout/internal/migration",
+        "name": "TestBundleTransitionTraceRefinesMigrationBundle",
+        "source": "internal/migration/state_refinement_test.go",
+        "classification": "refinement"
+      },
+      {
+        "package": "github.com/vibe-agi/hideout/internal/migration",
+        "name": "TestBundleCancellationNeverPublishes",
+        "source": "internal/migration/state_refinement_test.go",
+        "classification": "refinement"
+      },
+      {
+        "package": "github.com/vibe-agi/hideout/internal/migration",
+        "name": "TestAdoptionTraceRefinesIndependentMultiDestinationImports",
+        "source": "internal/migration/state_refinement_test.go",
+        "classification": "refinement"
+      },
+      {
+        "package": "github.com/vibe-agi/hideout/internal/migration",
+        "name": "TestAdoptionConflictRollbackAndInvalidBundleStayNonRunnable",
+        "source": "internal/migration/state_refinement_test.go",
+        "classification": "refinement"
+      },
+      {
+        "package": "github.com/vibe-agi/hideout/internal/migration",
+        "name": "TestAdoptionReplacementRequiresIndependentConfirmationAndFreshReplan",
+        "source": "internal/migration/state_refinement_test.go",
+        "classification": "refinement"
+      },
+      {
+        "package": "github.com/vibe-agi/hideout/internal/migration",
+        "name": "TestAdoptionRenameAndRefusalNeverDeleteExistingOwner",
+        "source": "internal/migration/state_refinement_test.go",
+        "classification": "refinement"
+      },
+      {
+        "package": "github.com/vibe-agi/hideout/internal/migration",
+        "name": "TestStateInvariantNegativeFixtures",
+        "source": "internal/migration/state_refinement_test.go",
+        "classification": "refinement"
+      },
+      {
+        "package": "github.com/vibe-agi/hideout/internal/manager",
+        "name": "TestMigrationImportMaterializationResumesProviderCheckpointWithoutRecountingCapacity",
+        "source": "internal/manager/migration_materialize_test.go",
+        "classification": "crash-matrix"
+      },
+      {
+        "package": "github.com/vibe-agi/hideout/internal/manager",
+        "name": "TestMigrationImportRollbackResumesFromProviderFailureWithoutRepeatingLocalWork",
+        "source": "internal/manager/migration_import_verify_test.go",
+        "classification": "crash-matrix"
+      },
+      {
+        "package": "github.com/vibe-agi/hideout/internal/manager",
+        "name": "TestMigrationImportCommitRaceAfterDecisionRequiresFinish",
+        "source": "internal/manager/migration_import_commit_test.go",
+        "classification": "crash-matrix"
+      },
+      {
+        "package": "github.com/vibe-agi/hideout/internal/manager",
+        "name": "TestMigrationImportCommitResumesSameOneWayDecision",
+        "source": "internal/manager/migration_import_commit_test.go",
+        "classification": "crash-matrix"
+      },
+      {
+        "package": "github.com/vibe-agi/hideout/internal/manager",
+        "name": "TestConfigOnlyMigrationRoundTripUsesNoDiskProvider",
+        "source": "internal/manager/migration_config_only_test.go",
+        "classification": "crash-matrix"
+      },
+      {
+        "package": "github.com/vibe-agi/hideout/internal/daemon",
+        "name": "TestMigrationImportWorkerCrashCutRouting",
+        "source": "internal/daemon/migration_test.go",
+        "classification": "crash-matrix"
+      },
+      {
+        "package": "github.com/vibe-agi/hideout/internal/backend/lima",
+        "name": "TestStageMigrationDestinationMaterializesBoundConfigAndResumesByComponent",
+        "source": "internal/backend/lima/migration_stage_test.go",
+        "classification": "crash-matrix"
+      },
+      {
+        "package": "github.com/vibe-agi/hideout/internal/backend/lima",
+        "name": "TestActivateMigrationDestinationResumesAfterCommittedPartialPromotion",
+        "source": "internal/backend/lima/migration_activate_test.go",
         "classification": "crash-matrix"
       }
     ]

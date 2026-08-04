@@ -1,4 +1,9 @@
 #!/usr/bin/env bash
+# shellcheck disable=SC2016,SC2329
+
+# The single-quoted programs and predicates below execute in the guest or are
+# passed verbatim to jq. Cleanup functions are installed indirectly as traps by
+# callers of this sourced Gate 2 library.
 
 # Real macOS arm64/Lima relation probes for feature 035. The caller owns the
 # installed binary, isolated store, Lima home, and initialized profile. This
@@ -17,10 +22,24 @@ EOF
 }
 
 gate2_035_wait_file() {
-  local path="$1" description="$2" attempts="${3:-6000}" i
-  for i in $(seq 1 "$attempts"); do
+  local path="$1" description="$2" attempts="${3:-6000}" pid="${4:-}" i state status
+  i=0
+  while [ "$i" -lt "$attempts" ]; do
     [ -f "$path" ] && return 0
+    if [ -n "$pid" ]; then
+      state="$(ps -o state= -p "$pid" 2>/dev/null | tr -d '[:space:]')"
+      if [ -z "$state" ] || [ "${state#Z}" != "$state" ]; then
+        if wait "$pid"; then
+          status=0
+        else
+          status=$?
+        fi
+        echo "shared-workspace gate2: $description owner exited before readiness (status=$status)" >&2
+        return 1
+      fi
+    fi
     sleep 0.1
+    i=$((i + 1))
   done
   echo "shared-workspace gate2: timed out waiting for $description" >&2
   return 1
@@ -117,7 +136,9 @@ PY
     --guest-workspace /workspace -- sh -eu -c '
 test "$(cat only-a.txt)" = "disjoint-a-035"
 test ! -e only-b.txt
-test ! -e /hideout/workspaces
+test -L /workspace
+case "$(pwd -P)" in /hideout/workspaces/wrk_*) ;; *) exit 1 ;; esac
+pwd -P > physical-project-key
 cat /proc/sys/kernel/random/boot_id > boot.id
 touch ready
 while [ ! -f release ]; do sleep 0.05; done
@@ -129,7 +150,9 @@ while [ ! -f release ]; do sleep 0.05; done
     --guest-workspace /workspace -- sh -eu -c '
 test "$(cat only-b.txt)" = "disjoint-b-035"
 test ! -e only-a.txt
-test ! -e /hideout/workspaces
+test -L /workspace
+case "$(pwd -P)" in /hideout/workspaces/wrk_*) ;; *) exit 1 ;; esac
+pwd -P > physical-project-key
 cat /proc/sys/kernel/random/boot_id > boot.id
 touch ready
 while [ ! -f release ]; do
@@ -143,23 +166,24 @@ done
 ' >"$out/logs/disjoint-b.out" 2>"$out/logs/disjoint-b.err" &
   disjoint_b_pid=$!
 
-  gate2_035_wait_file "$disjoint_a/ready" "disjoint A readiness"
-  gate2_035_wait_file "$disjoint_b/ready" "disjoint B readiness"
+  gate2_035_wait_file "$disjoint_a/ready" "disjoint A readiness" 6000 "$disjoint_a_pid"
+  gate2_035_wait_file "$disjoint_b/ready" "disjoint B readiness" 6000 "$disjoint_b_pid"
   cmp "$disjoint_a/boot.id" "$disjoint_b/boot.id"
+  test "$(cat "$disjoint_a/physical-project-key")" != "$(cat "$disjoint_b/physical-project-key")"
 
   HIDEOUT_STORE_ROOT="$store" LIMA_HOME="$lima_home" "$hideout" run \
     --profile "$profile" --backend lima --network direct --workspace "$same" \
     --guest-workspace /workspace -- python3 ./lock-owner.py \
     >"$out/logs/same-owner.out" 2>"$out/logs/same-owner.err" &
   same_owner_pid=$!
-  gate2_035_wait_file "$same/owner.ready" "same-root lock owner"
+  gate2_035_wait_file "$same/owner.ready" "same-root lock owner" 6000 "$same_owner_pid"
 
   HIDEOUT_STORE_ROOT="$store" LIMA_HOME="$lima_home" "$hideout" run \
     --profile "$profile" --backend lima --network direct --workspace "$same" \
     --guest-workspace /workspace -- python3 ./lock-contender.py \
     >"$out/logs/same-contender.out" 2>"$out/logs/same-contender.err" &
   same_contender_pid=$!
-  gate2_035_wait_file "$same/contender.blocked" "same-root independent lock conflict"
+  gate2_035_wait_file "$same/contender.blocked" "same-root independent lock conflict" 6000 "$same_contender_pid"
   touch "$same/owner.release"
   gate2_035_wait_process "$same_owner_pid" "same-root owner"
   same_owner_pid=""
@@ -190,8 +214,8 @@ while [ ! -f release ]; do sleep 0.05; done
 ' >"$out/logs/descendant.out" 2>"$out/logs/descendant.err" &
   descendant_pid=$!
 
-  gate2_035_wait_file "$ancestor/ancestor.ready" "ancestor readiness"
-  gate2_035_wait_file "$descendant/descendant.ready" "descendant readiness"
+  gate2_035_wait_file "$ancestor/ancestor.ready" "ancestor readiness" 6000 "$ancestor_pid"
+  gate2_035_wait_file "$descendant/descendant.ready" "descendant readiness" 6000 "$descendant_pid"
   cmp "$ancestor/ancestor.boot" "$descendant/descendant.boot"
   cmp "$disjoint_a/boot.id" "$ancestor/ancestor.boot"
 
@@ -205,7 +229,7 @@ while [ ! -f release ]; do sleep 0.05; done
   gate2_035_wait_process "$disjoint_a_pid" "disjoint A sibling detach"
   disjoint_a_pid=""
   touch "$disjoint_b/probe"
-  gate2_035_wait_file "$disjoint_b/probe.ack" "disjoint B post-detach execution probe"
+  gate2_035_wait_file "$disjoint_b/probe.ack" "disjoint B post-detach execution probe" 6000 "$disjoint_b_pid"
 
 	  jq -n \
 	    --argjson environments "$environment_count" \
@@ -219,6 +243,7 @@ while [ ! -f release ]; do sleep 0.05; done
 	        oneEnvironment: true,
 	        oneInstance: true,
 	        sameBootAcrossDisjointRoots: true,
+	        distinctPhysicalProjectKeys: true,
 	        sameBootAcrossNestedRoots: true,
 	        disjointBidirectionalUnavailable: true,
 	        siblingDetachPreservedExecution: true,
@@ -251,10 +276,10 @@ gate2_shared_workspace_lifecycle() (
   local out="$1" store="$2" lima_home="$3" hideout="$4" profile="$5" fixture_root="$6"
   local workspace_a="$fixture_root/lifecycle-a" workspace_b="$fixture_root/lifecycle-b"
   local workspace_bridge="$fixture_root/lifecycle-bridge" workspace_cancel="$fixture_root/lifecycle-cancel"
-  local workspace_restart="$fixture_root/lifecycle-restart" record="" environment_id="" environment_name=""
+  local workspace_restart="$fixture_root/lifecycle-restart" record="" environment_id=""
   local instance_name="" daemon_pid="" a_pid="" b_pid="" bridge_pid="" cancel_pid="" restart_pid=""
   local browser_capture="$fixture_root/browser-capture" preview_url_file="$fixture_root/preview-url.private"
-  local generation_before="" generation_after="" original_boot="" stopped_generation="" old_refs="[]"
+  local generation_before="" generation_after="" stopped_generation="" old_refs="[]"
   local preview_port preview_url lifecycle_started lifecycle_stopped
 
   mkdir -p "$out/logs" "$workspace_a" "$workspace_b" "$workspace_bridge" \
@@ -288,13 +313,15 @@ EOF
 
   gate2_035_lifecycle_wait_status() {
     local expression="$1" description="$2" attempts="${3:-700}" i
-    for i in $(seq 1 "$attempts"); do
+    i=0
+    while [ "$i" -lt "$attempts" ]; do
       if gate2_035_lifecycle_status >"$out/logs/lifecycle-current.json" 2>/dev/null &&
         jq -e --arg environmentId "$environment_id" "$expression" \
           "$out/logs/lifecycle-current.json" >/dev/null; then
         return 0
       fi
       sleep 0.1
+      i=$((i + 1))
     done
     echo "shared-workspace gate2: timed out waiting for $description" >&2
     cat "$out/logs/lifecycle-current.json" >&2 2>/dev/null || true
@@ -302,8 +329,7 @@ EOF
   }
 
   gate2_035_lifecycle_wait_daemon() {
-    local i
-    for i in $(seq 1 300); do
+    for _ in $(seq 1 300); do
       if gate2_035_lifecycle_status >"$out/logs/daemon-status.json" 2>/dev/null &&
         jq -e '.state == "serving"' "$out/logs/daemon-status.json" >/dev/null; then
         return 0
@@ -356,14 +382,20 @@ done
       lifecycle-restart) restart_pid="$pid" ;;
       *) echo "shared-workspace gate2: unsupported marker $label" >&2; return 2 ;;
     esac
-    gate2_035_wait_file "$workspace/.hideout-035-$label-ready" "$label readiness"
+    gate2_035_wait_file "$workspace/.hideout-035-$label-ready" "$label readiness" 6000 "$pid"
   }
 
   gate2_035_lifecycle_probe_marker() {
-    local label="$1" workspace="$2"
+    local label="$1" workspace="$2" pid=""
+    case "$label" in
+      lifecycle-a) pid="$a_pid" ;;
+      lifecycle-b) pid="$b_pid" ;;
+      lifecycle-cancel) pid="$cancel_pid" ;;
+      lifecycle-restart) pid="$restart_pid" ;;
+    esac
     rm -f "$workspace/.hideout-035-$label-probe" "$workspace/.hideout-035-$label-probe-ack"
     touch "$workspace/.hideout-035-$label-probe"
-    gate2_035_wait_file "$workspace/.hideout-035-$label-probe-ack" "$label execution probe"
+    gate2_035_wait_file "$workspace/.hideout-035-$label-probe-ack" "$label execution probe" 6000 "$pid"
   }
 
   gate2_035_lifecycle_release_marker() {
@@ -394,8 +426,8 @@ done
   }
 
   gate2_035_lifecycle_wait_lima_state() {
-    local wanted="$1" i
-    for i in $(seq 1 600); do
+    local wanted="$1"
+    for _ in $(seq 1 600); do
       gate2_035_lifecycle_lima_state "$wanted" && return 0
       sleep 0.1
     done
@@ -445,10 +477,8 @@ PY
   done
   [ -f "$record" ]
   environment_id="$(jq -r '.id' "$record")"
-  environment_name="$(jq -r '.name' "$record")"
   instance_name="$(jq -r '.instanceName' "$record")"
   gate2_035_lifecycle_start_marker lifecycle-b "$workspace_b"
-  original_boot="$(cat "$workspace_a/.hideout-035-lifecycle-a-boot")"
   cmp "$workspace_a/.hideout-035-lifecycle-a-boot" "$workspace_b/.hideout-035-lifecycle-b-boot"
   gate2_035_lifecycle_wait_status '
     any(.lifecycle[]?; .environmentId == $environmentId and
@@ -478,8 +508,8 @@ touch .hideout-035-bridge-ready
 while [ ! -f .hideout-035-bridge-release ]; do sleep 0.05; done
 ' gate2-preview "$preview_port" >"$out/logs/bridge.out" 2>"$out/logs/bridge.err" &
   bridge_pid=$!
-  gate2_035_wait_file "$workspace_bridge/.hideout-035-bridge-ready" "bridge session readiness"
-  gate2_035_wait_file "$preview_url_file" "captured preview URL"
+  gate2_035_wait_file "$workspace_bridge/.hideout-035-bridge-ready" "bridge session readiness" 6000 "$bridge_pid"
+  gate2_035_wait_file "$preview_url_file" "captured preview URL" 6000 "$bridge_pid"
   preview_url="$(tail -n 1 "$preview_url_file")"
   preview_port="${preview_url%/}"
   preview_port="${preview_port##*:}"

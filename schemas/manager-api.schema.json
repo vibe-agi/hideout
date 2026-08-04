@@ -88,7 +88,19 @@
         "runtime/verify/apply",
         "operator/snapshot",
         "operation/inspect",
-        "profile/projection"
+        "profile/projection",
+        "migration/capabilities",
+        "migration/secret-input",
+        "migration/export/plan",
+        "migration/export/apply",
+        "migration/import/inspect",
+        "migration/import/plan",
+        "migration/import/apply",
+        "migration/operations",
+        "migration/operation",
+        "migration/operation/resume",
+        "migration/operation/cancel",
+        "migration/operation/recover"
       ]
     },
     "data": {

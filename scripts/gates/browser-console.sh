@@ -147,7 +147,7 @@ done
 if ! jq -e '
   .panelsVisible == [
     "Overview", "Timeline", "Executions", "Files", "Network & DNS",
-    "Coverage", "Risks", "Operations", "Configuration", "Help"
+    "Coverage", "Risks", "Operations", "Migration", "Configuration", "Help"
   ] and
   .liveUpdateObserved == true and
   .hiddenPollingDetected == false and

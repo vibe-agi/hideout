@@ -19,6 +19,7 @@ var browserConsoleAssets = []EmbeddedAsset{
 	{Path: "client.js", MediaType: "text/javascript; charset=utf-8"},
 	{Path: "activity.js", MediaType: "text/javascript; charset=utf-8"},
 	{Path: "config.js", MediaType: "text/javascript; charset=utf-8"},
+	{Path: "migration.js", MediaType: "text/javascript; charset=utf-8"},
 	{Path: "presentation.js", MediaType: "text/javascript; charset=utf-8"},
 	{Path: "app.js", MediaType: "text/javascript; charset=utf-8"},
 }

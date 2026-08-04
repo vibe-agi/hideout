@@ -104,6 +104,28 @@ func TestPackageVerificationRejectsSelfConsistentOuterManifestWithInvalidObserve
 	}
 }
 
+func TestPackageVerificationRejectsSelfConsistentOuterManifestWithInvalidMigrationAdoptIdentity(t *testing.T) {
+	rel := "bin/" + helperbin.LinuxMigrationAdoptCommand + "-linux-" +
+		runtime.GOARCH + ".manifest.json"
+	root := writeTestArtifact(t, map[string]string{rel: "{}\n"})
+	if _, err := Verify(root); err == nil ||
+		!strings.Contains(err.Error(), "hideout-migration-adopt") {
+		t.Fatalf("Verify invalid nested migration adoption identity error=%v", err)
+	}
+}
+
+func TestPackageVerificationRejectsSelfConsistentOuterManifestWithInvalidMigrationVZExecutorIdentity(t *testing.T) {
+	if runtime.GOOS != "darwin" || runtime.GOARCH != "arm64" {
+		t.Skip("packaged VZ adoption executor is a Darwin arm64 component")
+	}
+	rel := "bin/" + helperbin.HostMigrationVZAdoptCommand + "-darwin-arm64.manifest.json"
+	root := writeTestArtifact(t, map[string]string{rel: "{}\n"})
+	if _, err := Verify(root); err == nil ||
+		!strings.Contains(err.Error(), "hideout-migration-vz-adopt") {
+		t.Fatalf("Verify invalid nested migration VZ executor identity error=%v", err)
+	}
+}
+
 func TestPackageVerificationRejectsInvalidEmbeddedBrowserManifest(t *testing.T) {
 	root := writeTestArtifact(t, map[string]string{
 		BrowserConsoleManifestPath: "{}\n",
@@ -179,6 +201,27 @@ func TestInstalledPackageVerifiesObserverAndEmbeddedBrowserManifest(t *testing.T
 		runtime.GOARCH,
 	); !ok {
 		t.Fatal("installed observer helper identity is not current")
+	}
+	adoption := filepath.Join(
+		prefix,
+		"bin",
+		helperbin.LinuxMigrationAdoptCommand+"-linux-"+runtime.GOARCH,
+	)
+	if _, ok := helperbin.LinuxMigrationAdoptHelperCurrent(
+		adoption,
+		runtime.GOARCH,
+	); !ok {
+		t.Fatal("installed migration adoption helper identity is not current")
+	}
+	if runtime.GOOS == "darwin" && runtime.GOARCH == "arm64" {
+		executor := filepath.Join(
+			prefix, "bin", helperbin.HostMigrationVZAdoptCommand+"-darwin-arm64",
+		)
+		if _, ok := helperbin.HostMigrationVZAdoptHelperCurrent(
+			executor, "darwin", "arm64",
+		); !ok {
+			t.Fatal("installed migration VZ adoption executor identity is not current")
+		}
 	}
 	if _, err := os.Stat(filepath.Join(
 		prefix,
@@ -604,6 +647,7 @@ func writeTestArtifact(t *testing.T, overrides map[string]string) string {
 		"bin/hideout-hostfsd-linux-" + runtime.GOARCH:                                 {kind: "linux-helper", executable: true, data: "#!/bin/sh\n"},
 		"bin/" + helperbin.LinuxSessionSupervisorCommand + "-linux-" + runtime.GOARCH: {kind: "linux-helper", executable: true, data: "#!/bin/sh\n"},
 		"bin/" + helperbin.LinuxObserverCommand + "-linux-" + runtime.GOARCH:          {kind: "linux-helper", executable: true, data: "#!/bin/sh\n"},
+		"bin/" + helperbin.LinuxMigrationAdoptCommand + "-linux-" + runtime.GOARCH:    {kind: "linux-helper", executable: true, data: "#!/bin/sh\n"},
 		"bin/" + helperbin.LinuxWorkspacePortalCommand + "-linux-" + runtime.GOARCH:   {kind: "linux-helper", executable: true, data: "#!/bin/sh\n"},
 		"bin/" + helperbin.LinuxTun2SocksCommand + "-linux-" + runtime.GOARCH:         {kind: "linux-helper", executable: true, data: "#!/bin/sh\n"},
 		"install.sh":                           {kind: "installer", executable: true, data: "#!/bin/sh\n"},
@@ -614,12 +658,21 @@ func writeTestArtifact(t *testing.T, overrides map[string]string) string {
 		"THIRD_PARTY_NOTICES.md":               {kind: "doc", executable: false, data: "notices\n"},
 		"SECURITY.md":                          {kind: "doc", executable: false, data: "security\n"},
 		"third_party/tun2socks/LICENSE":        {kind: "doc", executable: false, data: "MIT license\n"},
+		"third_party/vz/LICENSE":               {kind: "doc", executable: false, data: "MIT license\n"},
 		"schemas/package-manifest.schema.json": {kind: "schema", executable: false, data: "{}\n"},
 		"schemas/release-dogfood.schema.json":  {kind: "schema", executable: false, data: "{}\n"},
 		"docs/README.md":                       {kind: "doc", executable: false, data: "docs\n"},
 		"docs/STATUS.md":                       {kind: "doc", executable: false, data: "status\n"},
 		"runtime/catalog.json":                 {kind: "runtime-catalog", executable: false, data: "{}\n"},
 		"runtime/contract.json":                {kind: "runtime-contract", executable: false, data: "{}\n"},
+	}
+	if runtime.GOOS == "darwin" && runtime.GOARCH == "arm64" {
+		executorRel := "bin/" + helperbin.HostMigrationVZAdoptCommand + "-darwin-arm64"
+		files[executorRel] = struct {
+			kind       string
+			executable bool
+			data       string
+		}{kind: "binary", executable: true, data: "#!/bin/sh\n"}
 	}
 	componentContract, err := json.MarshalIndent(
 		ExpectedPackageComponentContract(),
@@ -695,6 +748,49 @@ func writeTestArtifact(t *testing.T, overrides map[string]string) string {
 		executable bool
 		data       string
 	}{kind: "helper-manifest", data: string(observerManifest) + "\n"}
+	migrationBinaryRel := "bin/" + helperbin.LinuxMigrationAdoptCommand + "-linux-" + runtime.GOARCH
+	migrationSum := sha256.Sum256([]byte(files[migrationBinaryRel].data))
+	migrationManifest, err := json.MarshalIndent(helperbin.Manifest{
+		Version: helperbin.ManifestVersion, Command: helperbin.LinuxMigrationAdoptCommand,
+		TargetOS: "linux", TargetArch: runtime.GOARCH,
+		Artifact: filepath.Base(migrationBinaryRel),
+		SHA256:   hex.EncodeToString(migrationSum[:]),
+		Builder:  "go build -trimpath", BuiltAt: "2026-07-09T00:00:00Z",
+		License:      helperbin.LinuxMigrationAdoptLicense,
+		BuildMode:    helperbin.LinuxMigrationAdoptBuildMode,
+		PackageOwned: true,
+	}, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	files[migrationBinaryRel+".manifest.json"] = struct {
+		kind       string
+		executable bool
+		data       string
+	}{kind: "helper-manifest", data: string(migrationManifest) + "\n"}
+	if runtime.GOOS == "darwin" && runtime.GOARCH == "arm64" {
+		executorRel := "bin/" + helperbin.HostMigrationVZAdoptCommand + "-darwin-arm64"
+		executorSum := sha256.Sum256([]byte(files[executorRel].data))
+		executorManifest, err := json.MarshalIndent(helperbin.Manifest{
+			Version: helperbin.ManifestVersion, Command: helperbin.HostMigrationVZAdoptCommand,
+			TargetOS: "darwin", TargetArch: "arm64", Artifact: filepath.Base(executorRel),
+			SHA256:  hex.EncodeToString(executorSum[:]),
+			Builder: "go build -mod=readonly -trimpath", BuiltAt: "2026-07-09T00:00:00Z",
+			UpstreamModule:  helperbin.HostMigrationVZAdoptUpstreamModule,
+			UpstreamVersion: helperbin.HostMigrationVZAdoptUpstreamVersion,
+			License:         helperbin.HostMigrationVZAdoptLicense,
+			BuildMode:       helperbin.HostMigrationVZAdoptBuildMode,
+			PackageOwned:    true,
+		}, "", "  ")
+		if err != nil {
+			t.Fatal(err)
+		}
+		files[executorRel+".manifest.json"] = struct {
+			kind       string
+			executable bool
+			data       string
+		}{kind: "helper-manifest", data: string(executorManifest) + "\n"}
+	}
 	for rel, data := range overrides {
 		spec := files[rel]
 		spec.data = data

@@ -14,6 +14,26 @@
       "packageOwned": true
     },
     {
+      "id": "linux-migration-adopt",
+      "kind": "linux-helper",
+      "artifactTemplate": "bin/hideout-migration-adopt-linux-{linuxGuestArch}",
+      "manifestTemplate": "bin/hideout-migration-adopt-linux-{linuxGuestArch}.manifest.json",
+      "license": "Apache-2.0",
+      "buildMode": "strict-data-only-adoption-v1",
+      "packageOwned": true
+    },
+    {
+      "id": "host-migration-vz-adopt",
+      "kind": "host-helper",
+      "artifactTemplate": "bin/hideout-migration-vz-adopt-{hostOS}-{hostArch}",
+      "manifestTemplate": "bin/hideout-migration-vz-adopt-{hostOS}-{hostArch}.manifest.json",
+      "license": "Apache-2.0",
+      "buildMode": "apple-vz-zero-network-adoption-v1",
+      "upstreamModule": "github.com/Code-Hex/vz/v3",
+      "upstreamVersion": "v3.7.1",
+      "packageOwned": true
+    },
+    {
       "id": "browser-console",
       "kind": "embedded-assets",
       "container": "bin/hideout",
@@ -43,6 +63,10 @@
         },
         {
           "path": "config.js",
+          "mediaType": "text/javascript; charset=utf-8"
+        },
+        {
+          "path": "migration.js",
           "mediaType": "text/javascript; charset=utf-8"
         },
         {

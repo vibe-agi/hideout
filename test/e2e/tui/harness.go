@@ -42,6 +42,10 @@ func runTUIProof(t *testing.T, prereq Prerequisites, fixture webui.Fixture, outD
 	root := repoRoot(t)
 	binary := buildHideoutBinary(t, prereq, root, outDir)
 	rawTranscript := filepath.Join(outDir, "terminal.raw.txt")
+	if err := os.Remove(rawTranscript); err != nil &&
+		!errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("remove stale TUI transcript: %v", err)
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cmd, stderr := tuiCommand(ctx, prereq, root, rawTranscript, fixture.StoreRoot, binary, 10*time.Millisecond)
 	if err := cmd.Start(); err != nil {
@@ -120,7 +124,9 @@ func runTUIProof(t *testing.T, prereq Prerequisites, fixture webui.Fixture, outD
 	}
 	stopCancel()
 	waitForTranscript(t, rawTranscript, func(s string) bool {
-		return strings.Contains(s, "Stream: disconnected") || strings.Contains(s, "event stream closed")
+		return strings.Contains(s, "Stream: disconnected") ||
+			strings.Contains(s, "event stream closed") ||
+			strings.Contains(s, "DAEMONLESS | read-only")
 	}, 10*time.Second)
 
 	cancel()

@@ -129,7 +129,7 @@ func MachineBootConfigurationForProfile(p profile.Profile, backendName string, m
 		machine.TargetUID = 1000
 		machine.VMType = "vz"
 		machine.MountType = "virtiofs"
-		if mode == environment.ModeShared {
+		if environment.UsesWorkspacePortal(mode) {
 			machine.WorkspaceIsolation = "workspace-portal"
 		} else {
 			machine.StaticWorkspace = &environment.StaticWorkspaceIdentity{

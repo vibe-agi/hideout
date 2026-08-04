@@ -524,6 +524,95 @@ func TestOperatorSnapshotBuilderNeverClaimsMissingObservationIsAvailable(t *test
 	}
 }
 
+func TestOperatorSnapshotUsesSharedMigrationProjectionAndRecoveryAction(t *testing.T) {
+	now := time.Date(2026, 8, 3, 12, 0, 0, 0, time.UTC)
+	older := operatorMigrationProjectionFixture(
+		now.Add(-time.Minute), "op_migrationolder1", false,
+	)
+	recovery := operatorMigrationProjectionFixture(
+		now, "op_migrationrecover1", true,
+	)
+	service := OperatorSnapshotService{
+		Core: Core{Store: profile.Store{Root: t.TempDir()}},
+		Overview: OperatorOverviewProviderFunc(func(context.Context) (Overview, error) {
+			return Overview{Version: "hideout.manager/v1"}, nil
+		}),
+		Connection: OperatorConnectionProviderFunc(func(context.Context) (OperatorConnectionProjection, error) {
+			return OperatorConnectionProjection{
+				InstanceID: "daemon_migration", CredentialGeneration: 2, Sequence: 4,
+				StreamHealth: OperatorStreamHealth{State: OperatorHealthLive},
+			}, nil
+		}),
+		OperationHistory: OperatorOperationProviderFunc(func(int) ([]Operation, error) {
+			return []Operation{}, nil
+		}),
+		MigrationHistory: OperatorMigrationProviderFunc(
+			func(limit int) ([]MigrationOperationProjection, error) {
+				if limit != DefaultOperatorMigrationLimit {
+					t.Fatalf("migration limit=%d", limit)
+				}
+				return []MigrationOperationProjection{older, recovery}, nil
+			},
+		),
+		Now: func() time.Time { return now },
+	}
+
+	snapshot, err := service.Build(
+		context.Background(), OperatorSnapshotQuery{ActivityLimit: 100},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(snapshot.Migrations) != 2 ||
+		snapshot.Migrations[0].OperationID != recovery.OperationID ||
+		snapshot.Migrations[1].OperationID != older.OperationID {
+		t.Fatalf("migration projection order=%+v", snapshot.Migrations)
+	}
+	if !slices.Contains(snapshot.NextActions, "migration.recover") ||
+		capabilityState(snapshot.Capabilities, "migration.manage") !=
+			OperatorCapabilityAvailable {
+		t.Fatalf(
+			"migration action/capability=%v %+v",
+			snapshot.NextActions,
+			snapshot.Capabilities,
+		)
+	}
+}
+
+func TestOperatorSnapshotRejectsInvalidMigrationHistoryAsUnavailable(t *testing.T) {
+	now := time.Date(2026, 8, 3, 12, 0, 0, 0, time.UTC)
+	invalid := operatorMigrationProjectionFixture(now, "op_migrationinvalid1", false)
+	invalid.Progress.CurrentItem = "socks5://user:password@example.test"
+	service := OperatorSnapshotService{
+		Core: Core{Store: profile.Store{Root: t.TempDir()}},
+		Overview: OperatorOverviewProviderFunc(func(context.Context) (Overview, error) {
+			return Overview{Version: "hideout.manager/v1"}, nil
+		}),
+		OperationHistory: OperatorOperationProviderFunc(func(int) ([]Operation, error) {
+			return []Operation{}, nil
+		}),
+		MigrationHistory: OperatorMigrationProviderFunc(
+			func(int) ([]MigrationOperationProjection, error) {
+				return []MigrationOperationProjection{invalid}, nil
+			},
+		),
+		Now: func() time.Time { return now },
+	}
+
+	snapshot, err := service.Build(
+		context.Background(), OperatorSnapshotQuery{ActivityLimit: 100},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(snapshot.Migrations) != 0 ||
+		capabilityState(snapshot.Capabilities, "migration.manage") !=
+			OperatorCapabilityUnavailable ||
+		!slices.Contains(snapshot.NextActions, "doctor.migration") {
+		t.Fatalf("invalid migration history did not fail closed: %+v", snapshot)
+	}
+}
+
 func TestOperatorSnapshotSurfacesScopedCoverageHistoryAndActivityRetention(t *testing.T) {
 	now := time.Date(2026, 7, 29, 12, 0, 0, 0, time.UTC)
 	overview := operatorSnapshotOverviewFixture(now)
@@ -664,6 +753,43 @@ func operatorProfileProjectionFixture(name string, now time.Time) ProfileProject
 		Effective: ProfileEffective{Status: EffectiveNotObserved, Sessions: []EffectiveSessionSnapshot{}},
 		UpdatedAt: now,
 	}
+}
+
+func operatorMigrationProjectionFixture(
+	now time.Time,
+	operationID string,
+	recovery bool,
+) MigrationOperationProjection {
+	projection := MigrationOperationProjection{
+		Schema:      MigrationOperationProjectionSchema,
+		OperationID: operationID,
+		Revision:    1,
+		BundleID:    "migb_projection1234",
+		Kind:        MigrationOperationImport,
+		State:       MigrationPhaseMaterializing,
+		PhaseLabel:  migrationPhaseLabel(MigrationPhaseMaterializing),
+		Progress: MigrationProgressProjection{
+			LogicalTotalKnown: true, CompletedLogicalBytes: 1,
+			TotalLogicalBytes: 2, ComponentsComplete: 1, ComponentsTotal: 2,
+			PhaseStartedAt: now, CheckpointAt: now,
+			ElapsedSeconds: 1, RemainingKnown: true, RemainingSeconds: 1,
+		},
+		Recovery: MigrationRecoveryProjection{
+			Code: "migration.operation.none", AllowedActions: []MigrationRecoveryAction{},
+		},
+		Warnings: []MigrationNotice{}, Effects: []MigrationEffectProjection{},
+	}
+	if recovery {
+		projection.State = MigrationPhaseRecoverableFailure
+		projection.PhaseLabel = migrationPhaseLabel(projection.State)
+		projection.Recovery = MigrationRecoveryProjection{
+			Required: true, Code: migrationRecoveryCodeResume,
+			AllowedActions: []MigrationRecoveryAction{MigrationRecoveryResume},
+			NextAction:     migrationRecoveryNextAction(MigrationRecoveryResume),
+		}
+		projection.LastErrorCode = migrationRecoveryCodeResume
+	}
+	return projection
 }
 
 func operatorActivityFixture(

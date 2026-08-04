@@ -16,7 +16,7 @@ import (
 	"github.com/vibe-agi/hideout/internal/packagekit"
 )
 
-//go:embed index.html style.css state.js client.js activity.js config.js presentation.js app.js
+//go:embed index.html style.css state.js client.js activity.js config.js migration.js presentation.js app.js
 var files embed.FS
 
 var indexTemplate = template.Must(
@@ -109,6 +109,8 @@ func (handler Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		serveAsset(w, "text/javascript; charset=utf-8", "activity.js")
 	case "/assets/config.js":
 		serveAsset(w, "text/javascript; charset=utf-8", "config.js")
+	case "/assets/migration.js":
+		serveAsset(w, "text/javascript; charset=utf-8", "migration.js")
 	case "/assets/presentation.js":
 		serveAsset(w, "text/javascript; charset=utf-8", "presentation.js")
 	case "/assets/app.js":

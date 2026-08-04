@@ -1,0 +1,14 @@
+# Durable crash-cut ID package top-level-test subtest-or--
+export-bundle-header-synced ./internal/migration TestDurableExportFormatCrashCuts bundle_header_synced
+export-footer-written-before-final-rename ./internal/manager TestDurableExportPublishCrashCut -
+export-manifest-written ./internal/migration TestDurableExportFormatCrashCuts manifest_written
+export-payload-checkpoint-record-synced ./internal/migration TestResumeWriterAuthenticatesCheckpointTruncatesTailAndContinues -
+export-provider-snapshot-created ./internal/manager TestDurableExportOrchestrationCrashCuts provider_snapshot_created
+export-source-claims-acquired ./internal/manager TestDurableExportOrchestrationCrashCuts source_claims_acquired
+import-activation-decision-recorded ./internal/manager TestMigrationImportCommitResumesSameOneWayDecision -
+import-adoption-helper-completed ./internal/daemon TestMigrationImportWorkerCrashCutRouting adoption_receipt_persisted_before_response_loss
+import-claims-acquired ./internal/manager TestMigrationStoreReservesImmutableOperationAndRecoversClaimPrefix -
+import-disk-component-synced ./internal/manager TestMigrationImportMaterializationResumesProviderCheckpointWithoutRecountingCapacity -
+import-manager-visibility-committed ./internal/manager TestMigrationImportCommitPublishesProfilesAndEnvironmentsOnce -
+import-provider-verification-completed ./internal/daemon TestMigrationImportWorkerCrashCutRouting verification_receipt_persisted_before_response_loss
+import-provisional-secret-prepared ./internal/manager TestConfigOnlyMigrationRoundTripUsesNoDiskProvider -
