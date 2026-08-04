@@ -163,6 +163,43 @@ func TestAdoptMigrationDestinationRecoversDurableStoppedResponseWithoutSecondBoo
 	}
 }
 
+func TestAdoptMigrationDestinationRefusesReplayWithoutDurableStoppedResponse(t *testing.T) {
+	fixture := newMigrationSourceFixture(t, []migrationSourceInstanceFixture{{
+		name: "hideout-source", environmentRef: "environment_source1", status: "Stopped",
+	}})
+	stageRequest, _, _ := migrationDestinationStageFixture(t, fixture, "ambiguous")
+	stageRequest.Binding.OperationID = "op_migrationambiguous1"
+	stage, err := fixture.provider.StageMigrationDestination(context.Background(), stageRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	executor := migrationVZAdoptionExecutorFixture(t, "executor-v1")
+	runner := &migrationAdoptionRunner{
+		version: "limactl version 2.2.0\n", failBeforeResponse: true,
+	}
+	fixture.provider.Runner = runner
+	fixture.provider.Migration.AdoptionExecutorPath = executor
+	request := migrationDestinationAdoptionFixture(
+		t, fixture.provider, stageRequest, stage, migration.GuestIdentitySafeClone,
+	)
+	_, err = fixture.provider.AdoptMigrationDestination(context.Background(), request)
+	var providerErr *backend.MigrationProviderError
+	if !errors.As(err, &providerErr) ||
+		providerErr.Code != "migration.provider.adoption_executor_invalid" ||
+		!providerErr.RecoveryRequired || runner.executions != 1 {
+		t.Fatalf("first ambiguous adoption error=%v executions=%d", err, runner.executions)
+	}
+
+	runner.failBeforeResponse = false
+	_, err = fixture.provider.AdoptMigrationDestination(context.Background(), request)
+	providerErr = nil
+	if !errors.As(err, &providerErr) ||
+		providerErr.Code != "migration.provider.adoption_recovery_required" ||
+		!providerErr.RecoveryRequired || runner.executions != 1 {
+		t.Fatalf("ambiguous replay error=%v executions=%d", err, runner.executions)
+	}
+}
+
 func TestAdoptMigrationDestinationExactRestorePreservesReceiptIdentity(t *testing.T) {
 	fixture := newMigrationSourceFixture(t, []migrationSourceInstanceFixture{{
 		name: "hideout-source", environmentRef: "environment_source1", status: "Stopped",
@@ -233,6 +270,7 @@ type migrationAdoptionRunner struct {
 	executions             int
 	responseNetworkDevices uint8
 	leaveUnexpectedControl bool
+	failBeforeResponse     bool
 }
 
 func (runner *migrationAdoptionRunner) LookPath(string) (string, error) {
@@ -259,6 +297,9 @@ func (runner *migrationAdoptionRunner) Run(
 		return errors.New("unexpected adoption executor arguments")
 	}
 	runner.executions++
+	if runner.failBeforeResponse {
+		return errors.New("injected executor exit before durable stopped response")
+	}
 	var execution vzexecutor.ExecutionRequest
 	decoder := json.NewDecoder(stdin)
 	decoder.DisallowUnknownFields()

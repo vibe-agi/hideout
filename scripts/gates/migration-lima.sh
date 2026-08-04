@@ -118,7 +118,8 @@ usage() {
     "into a private prefix, and exercises one real stopped Lima source with root and" \
     "attached disks. The same encrypted bundle is imported into three independent Safe" \
     "Clone stores and one Exact Guest Restore store. The third Safe Clone is killed" \
-    "during materialization and adoption to prove daemon-restart recovery." \
+    "during materialization and after a durable stopped-adoption response to prove" \
+    "daemon-restart recovery without replaying an ambiguous guest mutation." \
     "" \
     "The gate verifies data fidelity, source immutability, fresh control/backend" \
     "identities, guest identity policy, disabled host-workspace authority, terminal" \
@@ -425,7 +426,7 @@ if [ "$preflight_only" -eq 1 ]; then
   exit 0
 fi
 
-for command in awk cp date find grep jq limactl lsof mktemp mv openssl sed shasum sort ssh stat tail tar tr uname; do
+for command in awk cp date find grep jq limactl lsof mktemp mv openssl ps sed shasum sort ssh stat tail tar tr uname; do
   require_command "$command"
 done
 
@@ -962,6 +963,116 @@ kill_daemon_at_phase() {
   return 1
 }
 
+crash_daemon_after_adoption_response() {
+  local store="$1" operation="$2" label="$3"
+  local operation_path="$store/migration/operations/$operation.json"
+  local socket="$store/daemon/hideoutd.sock"
+  local executor="$prefix/bin/hideout-migration-vz-adopt-darwin-arm64"
+  local stage environment control response receipt
+  local instance owner_pids pid child_pids attempt started now
+  local response_sha stopped=0 ready=0
+
+  instance="$(daemon_instance_for_store "$store" "$label-before-cut")" || return 1
+  [ "$(jq -er '.phase' "$operation_path")" = "adopting" ] || return 1
+  stage="$(jq -er '
+    .destinationStage.stageHandle |
+    select(type == "string" and test("^stage_[a-z0-9_-]{8,120}$"))
+  ' "$operation_path")" || return 1
+  environment="$(jq -er '
+    .identityActions |
+    select(length == 1) | .[0].sourceRef |
+    select(type == "string" and test("^[a-z0-9][a-z0-9_-]{7,127}$"))
+  ' "$operation_path")" || return 1
+  control="$lima_home/_hideout-migration/stages/$stage/adoption/$environment/control"
+  response="$control/executor-response.json"
+  receipt="$control/receipt/receipt.json"
+  [ -x "$executor" ] || return 1
+
+  owner_pids="$(lsof -n -t -- "$socket" 2>/dev/null | LC_ALL=C sort -u || true)"
+  case "$owner_pids" in
+    "" | *$'\n'*) return 1 ;;
+  esac
+  pid="$owner_pids"
+  case "$pid" in
+    *[!0-9]*) return 1 ;;
+  esac
+  [ "$pid" -ne "$$" ] && kill -0 "$pid" 2>/dev/null || return 1
+
+  started="$(date +%s)"
+  while :; do
+    child_pids="$(
+      ps -axo pid=,ppid=,command= |
+        awk -v parent="$pid" -v executable="$executor" \
+          '$2 == parent && $3 == executable { print $1 }'
+    )"
+    case "$child_pids" in
+      *$'\n'*) return 1 ;;
+      "") ;;
+      *) break ;;
+    esac
+    [ "$(jq -er '.phase' "$operation_path" 2>/dev/null || true)" = "adopting" ] ||
+      return 1
+    kill -0 "$pid" 2>/dev/null || return 1
+    now="$(date +%s)"
+    [ $((now - started)) -lt "$timeout_seconds" ] || return 1
+    sleep 0.01
+  done
+
+  kill -STOP "$pid" 2>/dev/null || return 1
+  stopped=1
+  if [ "$(jq -er '.phase' "$operation_path" 2>/dev/null || true)" != "adopting" ]; then
+    kill -KILL "$pid" 2>/dev/null || true
+    return 1
+  fi
+
+  while :; do
+    if jq -e '
+      .schema == "hideout.migration-vz-adopt-response/v1" and
+      .started == true and .stopped == true and
+      .networkDeviceCount == 0 and .receiptObserved == true and
+      .stopReason == "receipt-and-guest-shutdown" and
+      (.executionNonce | type == "string") and
+      (.shutdownProof | test("^sha256:[a-f0-9]{64}$"))
+    ' "$response" >/dev/null 2>&1 &&
+      jq -e --arg operation "$operation" --arg environment "$environment" '
+        .schema == "hideout.migration-adoption-receipt/v1" and
+        .operationId == $operation and .environmentRef == $environment and
+        .status == "completed" and .completionMarker == true and
+        (.postIdentity | type == "object") and
+        all(.actionResults[]; .status == "completed")
+      ' "$receipt" >/dev/null 2>&1; then
+      response_sha="$(sha256_file "$response")"
+      sleep 0.05
+      if [ "$response_sha" = "$(sha256_file "$response" 2>/dev/null || true)" ]; then
+        ready=1
+        break
+      fi
+    fi
+    kill -0 "$pid" 2>/dev/null || break
+    now="$(date +%s)"
+    [ $((now - started)) -lt "$timeout_seconds" ] || break
+    sleep 0.05
+  done
+
+  if [ "$ready" -ne 1 ] || [ "$stopped" -ne 1 ]; then
+    kill -KILL "$pid" 2>/dev/null || true
+    return 1
+  fi
+  [ "$(jq -er '.phase' "$operation_path" 2>/dev/null || true)" = "adopting" ] || {
+    kill -KILL "$pid" 2>/dev/null || true
+    return 1
+  }
+  kill -KILL "$pid" 2>/dev/null || return 1
+  for ((attempt = 0; attempt < 200; attempt++)); do
+    if ! lsof -n -t -- "$socket" >/dev/null 2>&1; then
+      printf '%s\n' "$instance"
+      return 0
+    fi
+    sleep 0.05
+  done
+  return 1
+}
+
 wait_for_resume_action() {
   local store="$1" operation="$2" status_path="$3"
   local started now
@@ -1008,9 +1119,9 @@ hideout_for_store "$safe_three_store" migrate resume "$safe_three_operation" \
 wait_operation_phase "$safe_three_store" "$safe_three_operation" adopting ||
   fail "resumed third Safe Clone never reached durable adoption"
 second_crash_instance="$(
-  kill_daemon_at_phase \
-    "$safe_three_store" "$safe_three_operation" safe-three-adopting adopting
-)" || fail "crash daemon during third Safe Clone adoption"
+  crash_daemon_after_adoption_response \
+    "$safe_three_store" "$safe_three_operation" safe-three-adopting
+)" || fail "crash daemon after third Safe Clone durable adoption response"
 wait_migration \
   "$safe_three_store" "$safe_three_operation" import \
   "$scratch/import-safe-three-status.json" ||
