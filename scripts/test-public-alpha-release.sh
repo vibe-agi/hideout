@@ -3,6 +3,11 @@ set -euo pipefail
 
 ROOT="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
 cd "$ROOT"
+# This contract inspects the complete module graph, which is intentionally
+# broader than the tidy build graph. Keep that read-only: with Go 1.25,
+# `go list -m all` otherwise appends out-of-graph go.mod checksums to go.sum and
+# lets a passing release test dirty the exact candidate source.
+export GOFLAGS="-mod=readonly"
 . "$ROOT/scripts/lib/public-alpha-cleanup.sh"
 . "$ROOT/scripts/lib/verified-runtime-cache.sh"
 . "$ROOT/scripts/lib/gate-result.sh"

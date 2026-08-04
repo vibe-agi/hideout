@@ -29,6 +29,38 @@ if [ "${1:-}" = "--quick" ]; then
   exit 0
 fi
 
+gate0_source_fingerprint() {
+  {
+    git status --porcelain=v1 --untracked-files=all -z
+    git diff --binary --no-ext-diff HEAD --
+    while IFS= read -r -d '' path; do
+      printf 'untracked:%s\0' "$path"
+      if [ -L "$path" ]; then
+        printf 'symlink:%s\0' "$(readlink "$path")"
+      elif [ -f "$path" ]; then
+        printf 'blob:%s\0' "$(git hash-object --no-filters -- "$path")"
+      else
+        printf 'special\0'
+      fi
+    done < <(git ls-files --others --exclude-standard -z)
+  } | git hash-object --stdin
+}
+
+gate0_source_before="$(gate0_source_fingerprint)"
+gate0_verify_source_unchanged() {
+  local exit_status=$?
+  local source_after
+  trap - EXIT
+  source_after="$(gate0_source_fingerprint)"
+  if [ "$source_after" != "$gate0_source_before" ]; then
+    printf 'gate0: source worktree changed while the gate was running:\n' >&2
+    git status --short >&2
+    exit 1
+  fi
+  exit "$exit_status"
+}
+trap gate0_verify_source_unchanged EXIT
+
 go build ./...
 go vet ./...
 # The Linux guest helpers and the Linux test binaries the real backend lanes
