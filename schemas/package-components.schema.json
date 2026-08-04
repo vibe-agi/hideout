@@ -103,7 +103,7 @@
           "const": "bin/hideout-migration-vz-adopt-{hostOS}-{hostArch}.manifest.json"
         },
         "license": {"const": "Apache-2.0"},
-        "buildMode": {"const": "apple-vz-zero-network-adoption-v1"},
+        "buildMode": {"const": "apple-vz-zero-network-adoption-entitled-v1"},
         "upstreamModule": {"const": "github.com/Code-Hex/vz/v3"},
         "upstreamVersion": {"const": "v3.7.1"},
         "packageOwned": {"const": true}

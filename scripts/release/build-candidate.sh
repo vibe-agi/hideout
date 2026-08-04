@@ -897,7 +897,7 @@ verify_package() {
     .upstreamModule == "github.com/Code-Hex/vz/v3" and
     .upstreamVersion == "v3.7.1" and
     .license == "Apache-2.0" and
-    .buildMode == "apple-vz-zero-network-adoption-v1" and
+    .buildMode == "apple-vz-zero-network-adoption-entitled-v1" and
     .packageOwned == true
   ' "$host_adoption_manifest" >/dev/null ||
     ! "$package_root/bin/hideout-migration-vz-adopt-darwin-arm64" --probe |

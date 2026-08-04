@@ -14,9 +14,10 @@ import (
 const (
 	HostMigrationVZAdoptCommand         = "hideout-migration-vz-adopt"
 	HostMigrationVZAdoptLicense         = "Apache-2.0"
-	HostMigrationVZAdoptBuildMode       = "apple-vz-zero-network-adoption-v1"
+	HostMigrationVZAdoptBuildMode       = "apple-vz-zero-network-adoption-entitled-v1"
 	HostMigrationVZAdoptUpstreamModule  = "github.com/Code-Hex/vz/v3"
 	HostMigrationVZAdoptUpstreamVersion = "v3.7.1"
+	hostMigrationVZEntitlementsPath     = "packaging/macos/hideout-migration-vz-adopt.entitlements.plist"
 )
 
 type HostMigrationVZAdoptResolution struct {
@@ -198,6 +199,36 @@ func BuildHostMigrationVZAdopt(opts BuildOptions) error {
 	}
 	if err := os.Chmod(opts.Out, 0o700); err != nil {
 		return err
+	}
+	entitlements := filepath.Join(source, filepath.FromSlash(hostMigrationVZEntitlementsPath))
+	entitlementsInfo, err := os.Lstat(entitlements)
+	if err != nil || entitlementsInfo.Mode()&os.ModeSymlink != 0 ||
+		!entitlementsInfo.Mode().IsRegular() {
+		return errors.New("migration VZ executor entitlement declaration is unavailable")
+	}
+	sign := exec.Command(
+		"/usr/bin/codesign", "--force", "--sign", "-", "--timestamp=none",
+		"--options", "runtime", "--entitlements", entitlements, opts.Out,
+	)
+	if data, err := sign.CombinedOutput(); err != nil {
+		return fmt.Errorf(
+			"sign migration VZ executor: %w\n%s", err, strings.TrimSpace(string(data)),
+		)
+	}
+	verify := exec.Command("/usr/bin/codesign", "--verify", "--strict", opts.Out)
+	if data, err := verify.CombinedOutput(); err != nil {
+		return fmt.Errorf(
+			"verify migration VZ executor signature: %w\n%s",
+			err, strings.TrimSpace(string(data)),
+		)
+	}
+	probe := exec.Command(opts.Out, "--probe")
+	probe.Env = []string{"LANG=C", "LC_ALL=C", "PATH=/usr/bin:/bin"}
+	if data, err := probe.CombinedOutput(); err != nil {
+		return fmt.Errorf(
+			"validate migration VZ executor capability: %w\n%s",
+			err, strings.TrimSpace(string(data)),
+		)
 	}
 	return WriteHostMigrationVZAdoptManifest(opts.Out, "darwin", "arm64")
 }

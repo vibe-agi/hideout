@@ -207,7 +207,7 @@ jq -e --arg os "$host_os" --arg arch "$arch" '
   .upstreamModule == "github.com/Code-Hex/vz/v3" and
   .upstreamVersion == "v3.7.1" and
   .license == "Apache-2.0" and
-  .buildMode == "apple-vz-zero-network-adoption-v1" and
+  .buildMode == "apple-vz-zero-network-adoption-entitled-v1" and
   .packageOwned == true and
   (.sha256 | test("^[a-f0-9]{64}$"))
 ' "$prefix/bin/hideout-migration-vz-adopt-$host_os-$arch.manifest.json" >/dev/null

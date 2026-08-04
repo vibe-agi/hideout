@@ -34,18 +34,54 @@ retain_failure_diagnostics() {
   [ -n "${scratch:-}" ] && [ -d "$scratch" ] || return 0
   [ -n "${run_dir:-}" ] && [ -d "$run_dir" ] || return 0
   local diagnostic_dir=""
-  local diagnostic_name source destination
-  for diagnostic_name in package-verify.log install.log; do
-    source="$scratch/$diagnostic_name"
+  local source diagnostic_name destination diagnostic_bytes
+  local store_path store_label relative
+  for source in \
+    "$scratch"/*.log "$scratch"/*.txt "$scratch"/*.json \
+    "$scratch"/*.err "$scratch"/*.out; do
     [ -f "$source" ] && [ ! -L "$source" ] || continue
+    diagnostic_bytes="$(stat -f '%z' "$source" 2>/dev/null || stat -c '%s' "$source")"
+    case "$diagnostic_bytes" in
+      "" | *[!0-9]*) continue ;;
+    esac
+    [ "$diagnostic_bytes" -le 1048576 ] || continue
     if [ -z "$diagnostic_dir" ]; then
       diagnostic_dir="$run_dir/diagnostics"
       mkdir -p "$diagnostic_dir"
       chmod 0700 "$diagnostic_dir"
     fi
+    diagnostic_name="${source##*/}"
     destination="$diagnostic_dir/$diagnostic_name"
     cp "$source" "$destination"
     chmod 0600 "$destination"
+  done
+  for store_path in \
+    "${source_store:-}" "${safe_one_store:-}" "${safe_two_store:-}" \
+    "${safe_three_store:-}" "${exact_store:-}" "${wrong_store:-}" \
+    "${compat_store:-}"; do
+    [ -n "$store_path" ] && [ -d "$store_path" ] || continue
+    store_label="${store_path##*/}"
+    for source in \
+      "$store_path"/daemon/*.log "$store_path"/daemon/*.jsonl \
+      "$store_path"/migration/operations/*.json \
+      "$store_path"/logs/*.jsonl; do
+      [ -f "$source" ] && [ ! -L "$source" ] || continue
+      diagnostic_bytes="$(stat -f '%z' "$source" 2>/dev/null || stat -c '%s' "$source")"
+      case "$diagnostic_bytes" in
+        "" | *[!0-9]*) continue ;;
+      esac
+      [ "$diagnostic_bytes" -le 1048576 ] || continue
+      if [ -z "$diagnostic_dir" ]; then
+        diagnostic_dir="$run_dir/diagnostics"
+        mkdir -p "$diagnostic_dir"
+        chmod 0700 "$diagnostic_dir"
+      fi
+      relative="${source#"$store_path"/}"
+      diagnostic_name="$store_label--${relative//\//--}"
+      destination="$diagnostic_dir/$diagnostic_name"
+      cp "$source" "$destination"
+      chmod 0600 "$destination"
+    done
   done
 }
 
@@ -60,6 +96,17 @@ scratch_supports_daemon_sockets() {
     [ "${#control_socket}" -le "$daemon_socket_path_max" ] &&
       [ "${#session_socket}" -le "$daemon_socket_path_max" ] || return 1
   done
+}
+
+install_candidate_package() {
+  local package_root_value="$1"
+  local prefix_value="$2"
+  local store_value="$3"
+  local lima_home_value="$4"
+  local log_value="$5"
+  LIMA_HOME="$lima_home_value" "$package_root_value/install.sh" \
+    --prefix "$prefix_value" --store "$store_value" \
+    --backend lima --network direct >"$log_value" 2>&1
 }
 
 usage() {
@@ -295,6 +342,7 @@ if [ "$preflight_only" -eq 1 ]; then
   require_command cmp
   require_command cp
   require_command find
+  require_command grep
   require_command jq
   require_command mktemp
   require_command shellcheck
@@ -323,8 +371,12 @@ if [ "$preflight_only" -eq 1 ]; then
   diagnostic_fixture="$(mktemp -d "${TMPDIR:-/tmp}/ho-mig-preflight.XXXXXX")"
   scratch="$diagnostic_fixture/scratch"
   run_dir="$diagnostic_fixture/evidence"
-  mkdir -p "$scratch" "$run_dir"
+  source_store="$scratch/source-store"
+  mkdir -p "$scratch" "$run_dir" "$source_store/daemon"
   printf 'candidate install diagnostic fixture\n' >"$scratch/install.log"
+  printf 'must not be retained\n' >"$scratch/passphrase"
+  printf 'migration worker diagnostic fixture\n' \
+    >"$source_store/daemon/daemon-audit.jsonl"
   retain_failure_diagnostics
   cmp -s "$scratch/install.log" "$run_dir/diagnostics/install.log" || {
     find "$diagnostic_fixture" -depth -delete
@@ -335,14 +387,45 @@ if [ "$preflight_only" -eq 1 ]; then
     find "$diagnostic_fixture" -depth -delete
     fail "retained failure diagnostic is not private"
   }
+  [ ! -e "$run_dir/diagnostics/passphrase" ] || {
+    find "$diagnostic_fixture" -depth -delete
+    fail "non-diagnostic secret fixture was retained"
+  }
+  cmp -s "$source_store/daemon/daemon-audit.jsonl" \
+    "$run_dir/diagnostics/source-store--daemon--daemon-audit.jsonl" || {
+    find "$diagnostic_fixture" -depth -delete
+    fail "nested migration diagnostic fixture was not retained"
+  }
+  install_fixture_root="$diagnostic_fixture/package"
+  mkdir -p "$install_fixture_root"
+  shell_dollar='$'
+  printf '%s\n' \
+    '#!/bin/sh' \
+    'set -eu' \
+    "printf \"lima=%s\\\\n\" \"${shell_dollar}LIMA_HOME\"" \
+    'printf "args=%s\\n" "$*"' >"$install_fixture_root/install.sh"
+  chmod 0700 "$install_fixture_root/install.sh"
+  install_candidate_package \
+    "$install_fixture_root" "$diagnostic_fixture/prefix" \
+    "$diagnostic_fixture/store" "$diagnostic_fixture/lima" \
+    "$diagnostic_fixture/install-environment.log"
+  if ! grep -Fxq "lima=$diagnostic_fixture/lima" \
+    "$diagnostic_fixture/install-environment.log" ||
+    ! grep -Fxq \
+      "args=--prefix $diagnostic_fixture/prefix --store $diagnostic_fixture/store --backend lima --network direct" \
+      "$diagnostic_fixture/install-environment.log"; then
+    find "$diagnostic_fixture" -depth -delete
+    fail "candidate installer did not inherit the isolated Lima home and exact arguments"
+  fi
   find "$diagnostic_fixture" -depth -delete
   scratch=""
   run_dir=""
-  printf 'migration-lima: preflight=passed semantic-fixtures=9\n'
+  source_store=""
+  printf 'migration-lima: preflight=passed semantic-fixtures=12\n'
   exit 0
 fi
 
-for command in awk cp date find grep jq limactl lsof mktemp mv openssl sed shasum sort stat tail tar tr uname; do
+for command in awk cp date find grep jq limactl lsof mktemp mv openssl sed shasum sort ssh stat tail tar tr uname; do
   require_command "$command"
 done
 
@@ -521,9 +604,9 @@ package_root="$package_extract/hideout"
 "$package_root/bin/hideout" package verify "$package_root" \
   >"$scratch/package-verify.log" 2>&1 ||
   fail "candidate package verification failed"
-"$package_root/install.sh" \
-  --prefix "$prefix" --store "$source_store" --backend lima --network direct \
-  >"$scratch/install.log" 2>&1 ||
+install_candidate_package \
+  "$package_root" "$prefix" "$source_store" "$lima_home" \
+  "$scratch/install.log" ||
   fail "candidate installation failed"
 hideout_binary="$prefix/bin/hideout"
 [ -x "$hideout_binary" ] || fail "installed candidate binary is missing"
@@ -574,8 +657,25 @@ lima edit --tty=false \
   fail "attach Lima disk to source"
 lima start "$source_instance" >"$scratch/source-start-attached.log" 2>&1 ||
   fail "start source with attached disk"
-# shellcheck disable=SC2016 # evaluated by the guest shell
-lima shell --tty=false "$source_instance" -- sh -c '
+source_ssh_config="$(
+  lima list --format '{{.SSHConfigFile}}' "$source_instance"
+)"
+case "$source_ssh_config" in
+  "$lima_home/$source_instance"/*) ;;
+  *) fail "source root-control SSH config escaped the isolated Lima home" ;;
+esac
+[ -f "$source_ssh_config" ] && [ ! -L "$source_ssh_config" ] ||
+  fail "source root-control SSH config is missing or unsafe"
+if ! ssh \
+  -F "$source_ssh_config" \
+  -o BatchMode=yes \
+  -o User=root \
+  -o ControlMaster=no \
+  -o ControlPath=none \
+  -o ConnectionAttempts=1 \
+  -o ConnectTimeout=15 \
+  "lima-$source_instance" -- sh -s -- "$source_disk" "$attached_canary" \
+  >"$scratch/source-attached-write.log" 2>&1 <<'ROOTSH'
   set -eu
   path="/mnt/lima-$1"
   count=0
@@ -585,19 +685,23 @@ lima shell --tty=false "$source_instance" -- sh -c '
   done
   [ -d "$path" ]
   printf "%s\n" "$2" >"$path/migration-attached-proof"
+  chmod 0644 "$path/migration-attached-proof"
   sync
-' hideout-migration-attached "$source_disk" "$attached_canary" \
-  >"$scratch/source-attached-write.log" 2>&1 ||
+ROOTSH
+then
   fail "write attached-disk sentinel"
-source_machine_id="$(
-  lima shell --tty=false "$source_instance" -- cat /etc/machine-id | tr -d '[:space:]'
-)"
+fi
+if ! lima shell --tty=false "$source_instance" -- cat /etc/machine-id \
+  >"$scratch/source-machine-id.txt" 2>&1; then
+  fail "read source guest machine identity"
+fi
 # shellcheck disable=SC2016 # evaluated by the guest shell
-source_ssh_digest="$(
-  lima shell --tty=false "$source_instance" -- sh -c \
-    'set -eu; set -- /etc/ssh/ssh_host_*_key.pub; [ -e "$1" ]; cat "$@" | sha256sum | sed "s/ .*//"' |
-    tr -d '[:space:]'
-)"
+lima shell --tty=false "$source_instance" -- sh -c \
+  'set -eu; set -- /etc/ssh/ssh_host_*_key.pub; [ -e "$1" ]; cat "$@" | sha256sum | sed "s/ .*//"' \
+  >"$scratch/source-ssh-digest.txt" 2>&1 ||
+  fail "read source guest SSH identity"
+source_machine_id="$(tr -d '[:space:]' <"$scratch/source-machine-id.txt")"
+source_ssh_digest="$(tr -d '[:space:]' <"$scratch/source-ssh-digest.txt")"
 if ! printf '%s\n' "$source_machine_id" | grep -Eq '^[a-f0-9]{32}$' ||
   ! printf '%s\n' "$source_ssh_digest" | grep -Eq '^[a-f0-9]{64}$'; then
   fail "observe source guest identity"

@@ -28,7 +28,7 @@
       "artifactTemplate": "bin/hideout-migration-vz-adopt-{hostOS}-{hostArch}",
       "manifestTemplate": "bin/hideout-migration-vz-adopt-{hostOS}-{hostArch}.manifest.json",
       "license": "Apache-2.0",
-      "buildMode": "apple-vz-zero-network-adoption-v1",
+      "buildMode": "apple-vz-zero-network-adoption-entitled-v1",
       "upstreamModule": "github.com/Code-Hex/vz/v3",
       "upstreamVersion": "v3.7.1",
       "packageOwned": true

@@ -2289,7 +2289,7 @@ The source-bound non-performance gate is `scripts/gates/migration.sh`. Its
 checked-in `scripts/gates/migration-tests.txt` inventory is sorted, unique, and
 fail-on-drift: the gate discovers every top-level test containing `Migration`,
 `Migrate`, or `ConfigOnly` in the 13 declared packages and requires the exact
-191-test set to pass. The separate sorted
+192-test set to pass. The separate sorted
 `scripts/gates/migration-hostile-tests.txt` matrix requires exactly nine
 categories—wrong key, truncation, duplication, reordering, sparse abuse,
 traversal, special files, expansion, and trailing content—and records their

@@ -5132,7 +5132,7 @@ noncanonical, or trailing data fails closed with re-export/recreate guidance.
 This clean boundary is possible because no user installation depends on a
 development format.
 
-Source mechanics are gated by the explicit 13-package/191-test inventory in
+Source mechanics are gated by the explicit 13-package/192-test inventory in
 `scripts/gates/migration.sh`. A full-state release additionally requires
 `scripts/gates/migration-lima.sh` against the exact clean package candidate and
 the physical cross-computer acceptance described in the test plan. Performance

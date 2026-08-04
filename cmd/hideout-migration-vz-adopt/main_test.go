@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 
@@ -11,7 +12,9 @@ import (
 
 func TestProbeReportsPinnedZeroNetworkExecutorContract(t *testing.T) {
 	var output bytes.Buffer
-	if err := runCLI([]string{"--probe"}, strings.NewReader(""), &output); err != nil {
+	if err := runCLIWithCapabilityProbe(
+		[]string{"--probe"}, strings.NewReader(""), &output, func() error { return nil },
+	); err != nil {
 		t.Fatal(err)
 	}
 	var probe vzexecutor.Probe
@@ -25,6 +28,17 @@ func TestProbeReportsPinnedZeroNetworkExecutorContract(t *testing.T) {
 	}
 	if probe.NetworkDeviceCount != 0 || probe.ControlChannel != "virtiofs-private" {
 		t.Fatalf("probe=%+v", probe)
+	}
+}
+
+func TestProbeFailsClosedWhenVirtualizationCapabilityIsUnavailable(t *testing.T) {
+	var output bytes.Buffer
+	err := runCLIWithCapabilityProbe(
+		[]string{"--probe"}, strings.NewReader(""), &output,
+		func() error { return errors.New("private detail") },
+	)
+	if err == nil || strings.Contains(err.Error(), "private detail") || output.Len() != 0 {
+		t.Fatalf("probe error=%v output=%q", err, output.String())
 	}
 }
 

@@ -648,7 +648,7 @@ if ! jq -e '
   .result == "passed" and
   .checks.schemas.count == 4 and
   .checks.portablePackages.count == 13 and
-  .checks.migrationTests.count == 191 and
+  .checks.migrationTests.count == 192 and
   .checks.hostileMutations.count == 9 and
   .checks.durableCrashCuts.count == 13 and
   .checks.fuzzTargets.count == 6 and

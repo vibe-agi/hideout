@@ -239,7 +239,7 @@ helper_manifest_binding_valid() {
         .upstreamModule == "github.com/Code-Hex/vz/v3" and
         .upstreamVersion == "v3.7.1" and
         .license == "Apache-2.0" and
-        .buildMode == "apple-vz-zero-network-adoption-v1" and
+        .buildMode == "apple-vz-zero-network-adoption-entitled-v1" and
         .packageOwned == true
       elif $command == "hideout-migration-adopt" then
         .builder == "go build -trimpath" and
@@ -929,7 +929,7 @@ run_preflight() {
         upstreamModule:"github.com/Code-Hex/vz/v3",
         upstreamVersion:"v3.7.1",
         license:"Apache-2.0",
-        buildMode:"apple-vz-zero-network-adoption-v1",
+        buildMode:"apple-vz-zero-network-adoption-entitled-v1",
         packageOwned:true
       }
     ' >"$host_adoption_manifest"

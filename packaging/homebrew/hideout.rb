@@ -13,6 +13,7 @@ class Hideout < Formula
 
   # Homebrew's macOS cleaner recognizes Mach-O and scripts, but these ELF
   # helpers must retain their execute bits so Hideout can copy them into Lima.
+  # The Darwin VZ executor is preserved to keep its entitlement-bearing signature.
   skip_clean "bin/hideout-dns-stub-linux-arm64",
              "bin/hideout-hostfsd-linux-arm64",
              "bin/hideout-migration-adopt-linux-arm64",
@@ -20,6 +21,7 @@ class Hideout < Formula
              "bin/hideout-session-supervisor-linux-arm64",
              "bin/hideout-workspace-portal-linux-arm64",
              "bin/hideout-shim-linux-arm64",
+             "bin/hideout-migration-vz-adopt-darwin-arm64",
              "bin/tun2socks-linux-arm64"
 
   def install

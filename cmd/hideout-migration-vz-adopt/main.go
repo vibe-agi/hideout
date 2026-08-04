@@ -36,7 +36,21 @@ func main() {
 }
 
 func runCLI(args []string, stdin io.Reader, stdout io.Writer) error {
+	return runCLIWithCapabilityProbe(
+		args, stdin, stdout, validateAdoptionExecutorCapability,
+	)
+}
+
+func runCLIWithCapabilityProbe(
+	args []string,
+	stdin io.Reader,
+	stdout io.Writer,
+	capabilityProbe func() error,
+) error {
 	if len(args) == 1 && args[0] == "--probe" {
+		if capabilityProbe == nil || capabilityProbe() != nil {
+			return errors.New("VZ adoption executor capability is unavailable")
+		}
 		probe := vzexecutor.CurrentProbe()
 		if err := probe.Validate(); err != nil {
 			return err

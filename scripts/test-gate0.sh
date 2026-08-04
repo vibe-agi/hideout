@@ -161,6 +161,8 @@ grep -q 'depends_on "lima"' packaging/homebrew/hideout.rb
 grep -q 'skip_clean "bin/hideout-dns-stub-linux-arm64"' packaging/homebrew/hideout.rb
 grep -q '"bin/hideout-observer-linux-arm64"' packaging/homebrew/hideout.rb
 grep -q '"bin/hideout-migration-adopt-linux-arm64"' packaging/homebrew/hideout.rb
+grep -Fq '             "bin/hideout-migration-vz-adopt-darwin-arm64",' \
+  packaging/homebrew/hideout.rb
 grep -q 'package_root/"bin/hideout-migration-vz-adopt-darwin-arm64"' \
   packaging/homebrew/hideout.rb
 grep -q 'system "/usr/bin/codesign", "--verify", "--strict"' packaging/homebrew/hideout.rb

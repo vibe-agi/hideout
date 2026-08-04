@@ -26,6 +26,52 @@ const (
 	receiptShareTag = "hideout-migration-receipt"
 )
 
+func validateAdoptionExecutorCapability() error {
+	executable, err := os.Executable()
+	if err != nil {
+		return errors.New("VZ executor identity is unavailable")
+	}
+	if resolved, resolveErr := filepath.EvalSymlinks(executable); resolveErr == nil {
+		executable = resolved
+	}
+	info, err := os.Lstat(executable)
+	if err != nil || info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
+		return errors.New("VZ executor identity is unsafe")
+	}
+
+	var verifyOutput boundedCommandOutput
+	verify := exec.Command("/usr/bin/codesign", "--verify", "--strict", executable)
+	verify.Stdout = &verifyOutput
+	verify.Stderr = &verifyOutput
+	if err := verify.Run(); err != nil || verifyOutput.truncated {
+		return errors.New("VZ executor signature is invalid")
+	}
+
+	var entitlementXML, entitlementErrors boundedCommandOutput
+	display := exec.Command(
+		"/usr/bin/codesign", "--display", "--xml", "--entitlements", "-", executable,
+	)
+	display.Stdout = &entitlementXML
+	display.Stderr = &entitlementErrors
+	if err := display.Run(); err != nil || entitlementXML.truncated || entitlementErrors.truncated {
+		return errors.New("VZ executor entitlements are unavailable")
+	}
+	var entitlementJSON boundedCommandOutput
+	convert := exec.Command("/usr/bin/plutil", "-convert", "json", "-o", "-", "--", "-")
+	convert.Stdin = strings.NewReader(entitlementXML.String())
+	convert.Stdout = &entitlementJSON
+	convert.Stderr = &entitlementErrors
+	if err := convert.Run(); err != nil || entitlementJSON.truncated || entitlementErrors.truncated {
+		return errors.New("VZ executor entitlements are invalid")
+	}
+	entitlements := make(map[string]bool)
+	if err := json.Unmarshal([]byte(entitlementJSON.String()), &entitlements); err != nil ||
+		len(entitlements) != 1 || !entitlements["com.apple.security.virtualization"] {
+		return errors.New("VZ executor virtualization entitlement is absent or non-minimal")
+	}
+	return nil
+}
+
 func runAdoptionExecutor(
 	request vzexecutor.ExecutionRequest,
 ) (vzexecutor.ExecutionResponse, error) {

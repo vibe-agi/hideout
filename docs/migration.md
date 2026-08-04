@@ -207,7 +207,7 @@ The portable, schema, fuzz, refinement, and no-side-effect inventory gate is:
 scripts/gates/migration.sh
 ```
 
-It fail-closes on drift from the exact 191 migration tests across 13 packages,
+It fail-closes on drift from the exact 192 migration tests across 13 packages,
 the separate nine-category hostile-input matrix, and an exact 13-cut durable
 restart inventory covering every export/import boundary listed in the feature
 quickstart. Six migration fuzz targets consume checked-in wrong-shape,
