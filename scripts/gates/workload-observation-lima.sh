@@ -13,6 +13,7 @@ gate_timeout="${HIDEOUT_WORKLOAD_OBSERVATION_TIMEOUT:-20m}"
 gate_completed=0
 current_stage="bootstrap"
 work_root=""
+failure_reason=""
 source_commit="$(git rev-parse HEAD)"
 if [ -n "$(git status --porcelain --untracked-files=normal)" ]; then
   source_dirty=true
@@ -59,6 +60,7 @@ while [ "$#" -gt 0 ]; do
 done
 
 fail() {
+  failure_reason="$*"
   printf 'workload-observation-lima: %s\n' "$*" >&2
   exit 1
 }
@@ -223,6 +225,28 @@ run_lima_root() {
     -- "$1"
 }
 
+retain_failure_diagnostics() {
+  [ -n "${work_root:-}" ] && [ -d "$work_root" ] || return 0
+  local evidence_root="${1:-${out:-}}"
+  [ -n "$evidence_root" ] || return 0
+  local diagnostic_dir="$evidence_root/failure"
+  local relative source destination
+  mkdir -p "$diagnostic_dir"
+  chmod 0700 "$diagnostic_dir"
+  for relative in \
+    session-a.err session-b.err session-a.out session-b.out \
+    session-supervisor-shutdown.log file-observer-kernel-test.log \
+    store/daemon/daemon-autostart.log; do
+    source="$work_root/$relative"
+    [ -f "$source" ] && [ ! -L "$source" ] || continue
+    destination="$diagnostic_dir/${relative##*/}"
+    # Retain only the bounded tail. These private files are for diagnosis and
+    # are never public evidence or an excuse to continue later aggregate lanes.
+    tail -c 131072 "$source" >"$destination"
+    chmod 0600 "$destination"
+  done
+}
+
 cleanup() {
   local status=$?
   trap - EXIT
@@ -235,6 +259,9 @@ cleanup() {
   if [ -x "${hideout:-}" ] && [ -n "${store_root:-}" ]; then
     run_hideout clean >/dev/null 2>&1 || true
     run_hideout daemon stop >/dev/null 2>&1 || true
+  fi
+  if [ "$gate_completed" != "1" ] || [ "$status" -ne 0 ]; then
+    retain_failure_diagnostics || status=1
   fi
   if [ -n "${lima_home:-}" ] && [ -d "$lima_home" ] &&
     command -v limactl >/dev/null 2>&1; then
@@ -278,6 +305,22 @@ cleanup() {
   fi
   if { [ "$gate_completed" != "1" ] || [ "$status" -ne 0 ]; } &&
     [ -n "${out:-}" ]; then
+    local diagnostics_json='[]'
+    if [ -d "$out/failure" ]; then
+      diagnostics_json="$(
+        find "$out/failure" -type f -print |
+          LC_ALL=C sort |
+          while IFS= read -r diagnostic; do
+            jq -cn \
+              --arg path "failure/${diagnostic##*/}" \
+              --arg sha256 "$(shasum -a 256 "$diagnostic" | awk '{print $1}')" \
+              --argjson bytes "$(wc -c <"$diagnostic" | tr -d '[:space:]')" '
+                {path:$path,sha256:$sha256,bytes:$bytes,mode:"0600"}
+              '
+          done |
+          jq -sc '.'
+      )" || diagnostics_json='[]'
+    fi
     mkdir -p "$out"
     chmod 0700 "$out" 2>/dev/null || true
     jq -n \
@@ -285,13 +328,20 @@ cleanup() {
       --arg commit "$source_commit" \
       --argjson dirty "$source_dirty" \
       --arg stage "${current_stage:-unknown}" \
+      --arg reason "${failure_reason:-gate did not reach completion}" \
       --argjson exitCode "$status" \
+      --argjson diagnostics "$diagnostics_json" \
       '{
         schema: "hideout.workload-observation-lima-evidence/v1",
         generatedAt: $generatedAt,
         source: {commit: $commit, dirty: $dirty},
         result: "failed",
-        failure: {stage: $stage, exitCode: $exitCode}
+        failure: {
+          stage: $stage,
+          exitCode: $exitCode,
+          reason: $reason,
+          diagnostics: $diagnostics
+        }
       }' >"$out/result.json" 2>/dev/null || true
     chmod 0600 "$out/result.json" 2>/dev/null || true
   fi
@@ -354,6 +404,18 @@ if [ ! -d cmd/hideout-observer ]; then
 fi
 
 if [ "$preflight_only" -eq 1 ]; then
+  preflight_evidence="$work_root/preflight-evidence"
+  mkdir -p "$preflight_evidence"
+  chmod 0700 "$preflight_evidence"
+  awk 'BEGIN { for (i = 0; i < 140000; i++) printf "x" }' \
+    >"$work_root/session-a.err"
+  retain_failure_diagnostics "$preflight_evidence"
+  [ -f "$preflight_evidence/failure/session-a.err" ] &&
+    [ ! -L "$preflight_evidence/failure/session-a.err" ] &&
+    [ "$(wc -c <"$preflight_evidence/failure/session-a.err" | tr -d '[:space:]')" \
+      -eq 131072 ] ||
+    fail "bounded failure diagnostic preflight failed"
+  find "$preflight_evidence" -depth -delete
   gate_completed=1
   printf 'workload-observation-lima: preflight=passed\n'
   exit 0

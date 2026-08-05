@@ -150,6 +150,44 @@ assert_before 'migration before mutations' "$candidate_migration" "$candidate_mu
 assert_before 'lane status propagation before lane execution' \
   "$candidate_fail_fast" "$candidate_schema"
 
+lima_candidate="scripts/gates/release-candidate-lima.sh"
+lima_blocked_guard="$(line_of "$lima_candidate" '  if [ -n "$blocked_by_lane" ]; then')"
+lima_reuse_guard="$(line_of "$lima_candidate" '  if lane_reusable "$lane_id"; then')"
+lima_workload="$(line_of "$lima_candidate" \
+  "run_or_reuse_lane workload-observation workload \"\$workload_result\" \\")"
+lima_rotation="$(line_of "$lima_candidate" \
+  "run_or_reuse_lane network-rotation network-rotation \"\$rotation_result\" \\")"
+lima_privacy="$(line_of "$lima_candidate" \
+  "run_or_reuse_lane workload-privacy privacy \"\$privacy_result\" \\")"
+lima_concurrent="$(line_of "$lima_candidate" \
+  "run_or_reuse_lane concurrent-crash-recovery concurrent \"\$concurrent_result\" \\")"
+assert_before 'real-Lima failure guard before reuse decision' \
+  "$lima_blocked_guard" "$lima_reuse_guard"
+assert_before 'real-Lima workload before network rotation' \
+  "$lima_workload" "$lima_rotation"
+assert_before 'real-Lima network rotation before privacy' \
+  "$lima_rotation" "$lima_privacy"
+assert_before 'real-Lima privacy before concurrency recovery' \
+  "$lima_privacy" "$lima_concurrent"
+for lima_fail_fast_marker in \
+  'record_blocked_lane "$lane_id"' \
+  'execution:"not-run"' \
+  'reason "blocked-by-prior-failure:$blocked_by_lane"' \
+  'all(range($failedIndex + 1; .lanes | length);'; do
+  if ! grep -Fq "$lima_fail_fast_marker" "$lima_candidate"; then
+    printf 'validation-ladder: real-Lima fail-fast contract missing: %s\n' \
+      "$lima_fail_fast_marker" >&2
+    exit 1
+  fi
+done
+if ! grep -Fq 'retain_failure_diagnostics || status=1' \
+    scripts/gates/workload-observation-lima.sh; then
+  printf '%s\n' \
+    'validation-ladder: workload failure diagnostics are not retained before cleanup' \
+    >&2
+  exit 1
+fi
+
 wired_lanes="$(awk '$1 == "run_lane" { print $2 }' "$candidate")"
 inventoried_lanes="$(jq -r '.requiredLanes[]' "$candidate_inventory")"
 if [ "$wired_lanes" != "$inventoried_lanes" ]; then

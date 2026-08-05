@@ -80,17 +80,37 @@ release_lima_resume_validate() {
         "concurrent-crash-recovery"
       ] and
       (.lanes | length) == 4 and
-      any(.lanes[]; .result == "passed") and
       any(.lanes[]; .result == "failed") and
+      (([.lanes[].result] | index("failed")) as $failedIndex |
+        $failedIndex != null and
+        (.lanes[$failedIndex].id as $failedID |
+         all(range(0; $failedIndex);
+           $summary.lanes[.].result == "passed") and
+         .lanes[$failedIndex].result == "failed" and
+         all(range($failedIndex + 1; .lanes | length);
+           $summary.lanes[.].result == "not-run" and
+           $summary.lanes[.].reason ==
+             ("blocked-by-prior-failure:" + $failedID)))) and
       all(.lanes[];
-        (.result == "passed" or .result == "failed") and
-        (.exitCode | type) == "number" and
+        (.execution == "executed" or
+         .execution == "reused" or
+         .execution == "not-run") and
         .log.path == ("lanes/" + .id + ".log") and
         (.log.sha256 | test("^[a-f0-9]{64}$")) and
         (if .result == "passed"
          then .exitCode == 0 and .evidence != null and
-           (.evidence.sha256 | test("^[a-f0-9]{64}$"))
-         else .exitCode != 0
+           (.evidence.sha256 | test("^[a-f0-9]{64}$")) and
+           (if .execution == "reused"
+            then (.reuse.sourceRunId | type) == "string" and
+              (.reuse.sourceSummarySHA256 | test("^[a-f0-9]{64}$"))
+            else .execution == "executed" and (.reuse // null) == null
+            end)
+         elif .result == "failed"
+         then (.exitCode | type) == "number" and .exitCode != 0 and
+           .execution == "executed"
+         else .result == "not-run" and .execution == "not-run" and
+           .exitCode == null and .evidence == null and
+           (.reason | test("^blocked-by-prior-failure:"))
          end)) and
       (.validation | keys | sort) == ([
         "workloadObservation",
@@ -258,19 +278,24 @@ release_lima_resume_preflight() {
   local run_dir="$out/$run_id"
   local commit="0123456789abcdef0123456789abcdef01234567"
   local rows="$root/artifacts.jsonl" lane_id lane_result lane_exit lane_log
-  local lane_evidence lane_evidence_sha lane_log_sha artifacts_json summary_sha
+  local lane_evidence lane_evidence_path lane_evidence_sha lane_log_sha
+  local lane_execution lane_reason artifacts_json summary_sha
   local pointer_saved result_saved
-  mkdir -p "$run_dir/lanes" "$run_dir/network-rotation"
-  chmod 0700 "$root" "$out" "$run_dir" "$run_dir/lanes" \
+  mkdir -p "$run_dir/lanes" "$run_dir/workload" \
     "$run_dir/network-rotation"
+  chmod 0700 "$root" "$out" "$run_dir" "$run_dir/lanes" \
+    "$run_dir/workload" "$run_dir/network-rotation"
   for lane_id in workload-observation network-rotation workload-privacy \
     concurrent-crash-recovery; do
     printf 'synthetic lane %s\n' "$lane_id" >"$run_dir/lanes/$lane_id.log"
     chmod 0600 "$run_dir/lanes/$lane_id.log"
   done
+  printf '%s\n' '{"schema":"synthetic-workload-result/v1","result":"passed"}' \
+    >"$run_dir/workload/result.json"
   printf '%s\n' '{"schema":"synthetic-network-result/v1","result":"passed"}' \
     >"$run_dir/network-rotation/result.json"
-  chmod 0600 "$run_dir/network-rotation/result.json"
+  chmod 0600 "$run_dir/workload/result.json" \
+    "$run_dir/network-rotation/result.json"
 
   : >"$rows"
   find "$run_dir" -type f -print | LC_ALL=C sort |
@@ -286,18 +311,33 @@ release_lima_resume_preflight() {
   local lanes='[]'
   for lane_id in workload-observation network-rotation workload-privacy \
     concurrent-crash-recovery; do
-    lane_result=failed
-    lane_exit=1
+    lane_result=not-run
+    lane_exit=null
     lane_evidence=null
-    if [ "$lane_id" = "network-rotation" ]; then
+    lane_execution=not-run
+    lane_reason="blocked-by-prior-failure:workload-privacy"
+    if [ "$lane_id" = "workload-observation" ] ||
+      [ "$lane_id" = "network-rotation" ]; then
       lane_result=passed
       lane_exit=0
+      lane_execution=executed
+      lane_reason=""
+      if [ "$lane_id" = "workload-observation" ]; then
+        lane_evidence_path="workload/result.json"
+      else
+        lane_evidence_path="network-rotation/result.json"
+      fi
       lane_evidence_sha="$(release_lima_resume_sha256 \
-        "$run_dir/network-rotation/result.json")"
+        "$run_dir/$lane_evidence_path")"
       lane_evidence="$(jq -cn \
-        --arg path 'network-rotation/result.json' \
+        --arg path "$lane_evidence_path" \
         --arg sha256 "$lane_evidence_sha" \
         '{path:$path,sha256:$sha256}')"
+    elif [ "$lane_id" = "workload-privacy" ]; then
+      lane_result=failed
+      lane_exit=1
+      lane_execution=executed
+      lane_reason=""
     fi
     lane_log="lanes/$lane_id.log"
     lane_log_sha="$(release_lima_resume_sha256 "$run_dir/$lane_log")"
@@ -305,16 +345,18 @@ release_lima_resume_preflight() {
       --argjson current "$lanes" \
       --arg id "$lane_id" \
       --arg result "$lane_result" \
+      --arg execution "$lane_execution" \
+      --arg reason "$lane_reason" \
       --argjson exitCode "$lane_exit" \
       --arg log "$lane_log" \
       --arg logSHA256 "$lane_log_sha" \
       --argjson evidence "$lane_evidence" '
         $current + [{
-          id:$id,result:$result,exitCode:$exitCode,
+          id:$id,execution:$execution,result:$result,exitCode:$exitCode,
           startedAt:"2026-08-02T00:00:00Z",
           finishedAt:"2026-08-02T00:00:01Z",
           log:{path:$log,sha256:$logSHA256},evidence:$evidence
-        }]
+        } + (if $reason == "" then {} else {reason:$reason} end)]
       ')"
   done
   jq -n \
@@ -329,7 +371,7 @@ release_lima_resume_preflight() {
         source:{commit:$commit,dirty:false},runId:$runId,
         lanes:$lanes,
         validation:{
-          workloadObservation:false,networkRotation:true,
+          workloadObservation:true,networkRotation:true,
           workloadPrivacy:false,concurrentCrashRecovery:false
         },
         claims:{},artifacts:$artifacts,limitations:[]

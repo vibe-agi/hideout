@@ -71,6 +71,13 @@ package-bound migration, and lifecycle lanes in the order fixed by
 `specs/045-operator-observability-console/gate-matrix.md`. Then consume the
 same package bytes on this machine:
 
+The real-Lima aggregate stops at its first failed lane and records every later
+lane as `not-run`. If investigation establishes an external or transient cause
+and the repository is still at the identical clean commit, retry with
+`scripts/gates/release-candidate-lima.sh --resume-passed`; it reauthenticates
+the immediately preceding failed receipt and reuses only its passed lanes. A
+source change invalidates all such reuse and starts a fresh aggregate.
+
 ```sh
 scripts/release/install-local-candidate.sh \
   --yes-discard-legacy-data

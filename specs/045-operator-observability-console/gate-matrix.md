@@ -26,7 +26,7 @@ or implicitly passing check.
 | Browser | `scripts/gates/browser-console.sh` | `.artifacts/045/ui/browser/`; current child proof is digest-bound by the T154 aggregate | Active and passing in the current T154 aggregate with real Chrome; exact installed-candidate binding remains T171 |
 | Lifecycle/recovery | `scripts/test-lifecycle-smoke.sh && scripts/gates/recovery.sh && scripts/test-lifecycle-lima-e2e.sh` | `.artifacts/045/recovery/` and real-Lima lifecycle evidence | Active and passing in T152/T153: the crash matrix, exact-operation reconciliation, stop/clean proof, and real-Lima lifecycle lanes are covered; exact clean-candidate binding remains T163/T171 |
 | Workload observation, real Lima | `scripts/gates/workload-observation-lima.sh && scripts/gates/workload-privacy-lima.sh` | `.artifacts/045/workload/` and `.artifacts/045/privacy/` | Active |
-| Complete real-Lima candidate | `scripts/gates/release-candidate-lima.sh` | `.artifacts/045/lima-current/result.json` and `.artifacts/045/lima-current/run-20260730T165516Z-92214/summary.json` | Active and passing for the current dirty source tree (T153); exact clean-candidate binding remains T163 |
+| Complete real-Lima candidate | `scripts/gates/release-candidate-lima.sh` | `.artifacts/045/lima-current/result.json` and its digest-bound run summary | Active and fail-fast: the first failed lane stops scheduling, later lanes are recorded as `not-run`, and `--resume-passed` may authenticate and reuse only passed lanes from the immediately preceding failed aggregate at the same clean commit; exact clean-candidate binding remains required |
 | Dependency/license/advisory | `scripts/gates/dependencies.sh` | `.artifacts/045/dependencies/` | Active |
 | Package component inventory | `scripts/gates/package-components.sh` | `.artifacts/045/package-components/` | Active |
 | Mutation proofs and local static/race gates | `scripts/mutation/045/run-negative-fixtures.sh` then `scripts/gates/release-candidate.sh` | `.artifacts/045/local/` | Active and passing locally (T152): 46 source-overlay production mutants and 46 judge-negative fixtures; exact clean-candidate binding remains T163 |
@@ -61,6 +61,13 @@ scripts/release/install-local-candidate.sh --yes-discard-legacy-data
 scripts/release/verify-publication-absence.sh
 scripts/release/collect-evidence.sh --require-closure
 ```
+
+If the real-Lima aggregate fails, inspect its summary before retrying. When the
+cause is external or transient and the source remains the same clean commit,
+rerun it with `--resume-passed`; the gate authenticates the immediately
+preceding pointer, artifact inventory, modes, and digests before reusing only
+passed lanes. Any source change invalidates that evidence and requires a fresh
+aggregate, while the first new failure still prevents later lanes from running.
 
 The package is built only after source-level gates pass. Portable migration,
 package lifecycle tests, and installed-machine closure consume that exact

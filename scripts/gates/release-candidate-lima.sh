@@ -31,7 +31,8 @@ usage() {
     "" \
     "--resume-passed revalidates and reuses passed lanes from the immediately" \
     "preceding clean failed aggregate only when commit, digests, modes, and inventory" \
-    "remain exact; failed or unproved lanes execute normally." \
+    "remain exact. The aggregate stops scheduling after the first failed lane;" \
+    "later lanes are recorded as not-run and execute on the next authenticated resume." \
     "" \
     "This command writes private digest-bound evidence and never publishes."
 }
@@ -221,6 +222,7 @@ file_mode() {
 
 lanes_json='[]'
 failed_lanes=0
+blocked_by_lane=""
 run_lane() {
   local lane_id="$1"
   local lane_result_path="$2"
@@ -247,6 +249,7 @@ run_lane() {
   else
     lane_state="failed"
     failed_lanes=$((failed_lanes + 1))
+    blocked_by_lane="$lane_id"
     printf 'release-candidate-lima: %s failed (exit=%d)\n' \
       "$lane_id" "$lane_exit" >&2
     tail -30 "$lane_log" >&2
@@ -278,6 +281,37 @@ run_lane() {
           (if $evidence == "" then null
            else {path:$evidence,sha256:$evidenceSHA256}
            end)
+      }]' <<<"$lanes_json"
+  )"
+}
+
+record_blocked_lane() {
+  local lane_id="$1"
+  local lane_log="$run_dir/lanes/$lane_id.log"
+  local now
+  now="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+  printf 'not-run: blocked by prior failed lane %s\n' \
+    "$blocked_by_lane" >"$lane_log"
+  chmod 0600 "$lane_log"
+  printf 'release-candidate-lima: %s not-run (blocked by %s)\n' \
+    "$lane_id" "$blocked_by_lane"
+  lanes_json="$(
+    jq -c \
+      --arg id "$lane_id" \
+      --arg at "$now" \
+      --arg log "lanes/$lane_id.log" \
+      --arg logSHA256 "$(sha256_file "$lane_log")" \
+      --arg reason "blocked-by-prior-failure:$blocked_by_lane" '
+      . + [{
+        id:$id,
+        execution:"not-run",
+        result:"not-run",
+        exitCode:null,
+        startedAt:$at,
+        finishedAt:$at,
+        log:{path:$log,sha256:$logSHA256},
+        evidence:null,
+        reason:$reason
       }]' <<<"$lanes_json"
   )"
 }
@@ -375,6 +409,10 @@ reuse_lane() {
 run_or_reuse_lane() {
   local lane_id="$1" lane_dir="$2" lane_result_path="$3"
   shift 3
+  if [ -n "$blocked_by_lane" ]; then
+    record_blocked_lane "$lane_id"
+    return
+  fi
   if lane_reusable "$lane_id"; then
     reuse_lane "$lane_id" "$lane_dir" "$lane_result_path"
     return
@@ -728,16 +766,45 @@ jq -n \
 chmod 0600 "$summary_path"
 
 jq -e '
+  . as $summary |
+  [.lanes[].id] == [
+    "workload-observation",
+    "network-rotation",
+    "workload-privacy",
+    "concurrent-crash-recovery"
+  ] and
   (.result == "passed") ==
     (all(.validation[]; . == true) and
      all(.lanes[]; .result == "passed")) and
   all(.lanes[];
-    (.execution == "executed" or .execution == "reused") and
-    (if .execution == "reused"
-     then (.reuse.sourceRunId | type) == "string" and
-       (.reuse.sourceSummarySHA256 | test("^[a-f0-9]{64}$"))
-     else (.reuse // null) == null
-     end)) and
+    if .execution == "reused" then
+      .result == "passed" and .exitCode == 0 and .evidence != null and
+      (.reuse.sourceRunId | type) == "string" and
+      (.reuse.sourceSummarySHA256 | test("^[a-f0-9]{64}$"))
+    elif .execution == "executed" then
+      (.result == "passed" or .result == "failed") and
+      (.exitCode | type) == "number" and
+      ((.result == "passed") == (.exitCode == 0)) and
+      (.reuse // null) == null
+    elif .execution == "not-run" then
+      .result == "not-run" and .exitCode == null and .evidence == null and
+      (.reason | test("^blocked-by-prior-failure:")) and
+      (.reuse // null) == null
+    else false
+    end) and
+  (([.lanes[].result] | index("failed")) as $failedIndex |
+    (if $failedIndex == null then
+      all(.lanes[]; .result == "passed")
+    else
+      (.lanes[$failedIndex].id as $failedID |
+       all(range(0; $failedIndex);
+         $summary.lanes[.].result == "passed") and
+       .lanes[$failedIndex].result == "failed" and
+       all(range($failedIndex + 1; .lanes | length);
+         $summary.lanes[.].result == "not-run" and
+         $summary.lanes[.].reason ==
+           ("blocked-by-prior-failure:" + $failedID)))
+    end)) and
   ([.lanes[] | select(.execution == "reused") | .id] ==
     .progressiveReuse.reusedLanes) and
   (if .progressiveReuse.mode == "none"
@@ -787,5 +854,7 @@ if [ "$aggregate_result" != "passed" ]; then
   printf 'release-candidate-lima: failed\n' >&2
   exit 1
 fi
+# Read by the sourced gate completion guard at process exit.
+# shellcheck disable=SC2034
 gate_completed=1
 printf 'release-candidate-lima: passed\n'
