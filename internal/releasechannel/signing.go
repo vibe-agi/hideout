@@ -14,8 +14,9 @@ import (
 )
 
 const (
-	SigningObservationSchema      = "hideout.release-signing-observation/v1"
-	NotarizationObservationSchema = "hideout.release-notarization-observation/v1"
+	SigningObservationSchema       = "hideout.release-signing-observation/v1"
+	NotarizationObservationSchema  = "hideout.release-notarization-observation/v1"
+	darwinVirtualizationHelperPath = "bin/hideout-migration-vz-adopt-darwin-arm64"
 )
 
 var codeDirectoryRuntimeRE = regexp.MustCompile(`(?m)^CodeDirectory [^\r\n]*\bflags=0x[0-9A-Fa-f]+\([^\r\n)]*\bruntime\b[^\r\n)]*\)`)
@@ -32,13 +33,14 @@ type SigningObservation struct {
 }
 
 type BinarySignature struct {
-	Path                    string `json:"path"`
-	Identifier              string `json:"identifier"`
-	CDHash                  string `json:"cdHash"`
-	SecureTimestamp         bool   `json:"secureTimestamp"`
-	HardenedRuntime         bool   `json:"hardenedRuntime"`
-	StrictVerified          bool   `json:"strictVerified"`
-	OnlineNotarizationValid bool   `json:"onlineNotarizationValid"`
+	Path                         string `json:"path"`
+	Identifier                   string `json:"identifier"`
+	CDHash                       string `json:"cdHash"`
+	SecureTimestamp              bool   `json:"secureTimestamp"`
+	HardenedRuntime              bool   `json:"hardenedRuntime"`
+	StrictVerified               bool   `json:"strictVerified"`
+	OnlineNotarizationValid      bool   `json:"onlineNotarizationValid"`
+	RequiredEntitlementsVerified bool   `json:"requiredEntitlementsVerified,omitempty"`
 }
 
 func codeDirectoryHasHardenedRuntime(output string) bool {
@@ -94,6 +96,13 @@ func (o SigningObservation) Validate(public bool) error {
 		}
 		if !binary.OnlineNotarizationValid {
 			return fmt.Errorf("binary signing observation for %q failed the online notarization check", binary.Path)
+		}
+		requiresEntitlements := binary.Path == darwinVirtualizationHelperPath
+		if binary.RequiredEntitlementsVerified != requiresEntitlements {
+			return fmt.Errorf(
+				"binary signing observation for %q does not prove its declared entitlement policy",
+				binary.Path,
+			)
 		}
 		seen[binary.Path] = true
 	}

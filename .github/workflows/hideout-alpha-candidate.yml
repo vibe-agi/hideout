@@ -163,17 +163,10 @@ jobs:
             --version "$HIDEOUT_ALPHA_VERSION" --channel alpha \
             --tag "$HIDEOUT_ALPHA_TAG" --workflow "$GITHUB_WORKFLOW_REF" \
             --ref "$GITHUB_REF" --signing-mode developer-id-observed >/dev/null
-          signed=0
-          while IFS= read -r -d '' path; do
-            if /usr/bin/file -b "$path" | grep -q 'Mach-O'; then
-              echo "candidate: signing ${path#"$stage/hideout/"}"
-              /usr/bin/codesign --force --options runtime --timestamp \
-                --keychain "$HIDEOUT_SIGNING_KEYCHAIN" \
-                --sign "$HIDEOUT_SIGNING_IDENTITY" "$path"
-              signed=$((signed + 1))
-            fi
-          done < <(find "$stage/hideout" -type f -perm -111 -print0)
-          test "$signed" -gt 0
+          scripts/sign-staged-package-darwin.sh \
+            --stage "$stage" \
+            --identity "$HIDEOUT_SIGNING_IDENTITY" \
+            --keychain "$HIDEOUT_SIGNING_KEYCHAIN"
           scripts/package-local.sh --finalize "$stage" --out "$package" \
             --signing-mode developer-id-observed >/dev/null
           "$stage/hideout/bin/hideout" package verify "$stage/hideout" >/dev/null

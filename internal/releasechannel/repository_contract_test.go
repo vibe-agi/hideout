@@ -172,8 +172,14 @@ func TestCandidateWorkflowSelectsImportedSigningIdentityByHash(t *testing.T) {
 			t.Errorf("candidate credential import must contain %q", required)
 		}
 	}
-	if !strings.Contains(signingStep, `--sign "$HIDEOUT_SIGNING_IDENTITY"`) {
-		t.Fatal("candidate signing must use the validated identity hash")
+	for _, required := range []string{
+		`scripts/sign-staged-package-darwin.sh`,
+		`--identity "$HIDEOUT_SIGNING_IDENTITY"`,
+		`--keychain "$HIDEOUT_SIGNING_KEYCHAIN"`,
+	} {
+		if !strings.Contains(signingStep, required) {
+			t.Errorf("candidate signing transform must contain %q", required)
+		}
 	}
 }
 

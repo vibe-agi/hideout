@@ -44,6 +44,36 @@ func TestDeveloperPreviewCannotSatisfyPublicSigning(t *testing.T) {
 	}
 }
 
+func TestSigningObservationRequiresExactDeclaredEntitlementProof(t *testing.T) {
+	base := BinarySignature{
+		Path: "bin/hideout", Identifier: "hideout", CDHash: "ABC",
+		SecureTimestamp: true, HardenedRuntime: true, StrictVerified: true,
+		OnlineNotarizationValid: true,
+	}
+	helper := base
+	helper.Path = darwinVirtualizationHelperPath
+	helper.Identifier = "hideout-migration-vz-adopt"
+	helper.RequiredEntitlementsVerified = true
+	observation := SigningObservation{
+		Schema: SigningObservationSchema, Status: "developer-id-verified",
+		TeamID: "TEAM", CommonName: "Developer ID Application: Test (TEAM)",
+		ObservedAt: time.Now(), HostOS: "darwin", PackageManifestSHA256: testDigest,
+		Binaries: []BinarySignature{base, helper},
+	}
+	if err := observation.Validate(true); err != nil {
+		t.Fatal(err)
+	}
+	observation.Binaries[1].RequiredEntitlementsVerified = false
+	if err := observation.Validate(true); err == nil {
+		t.Fatal("VZ helper without entitlement proof passed validation")
+	}
+	observation.Binaries = []BinarySignature{base}
+	observation.Binaries[0].RequiredEntitlementsVerified = true
+	if err := observation.Validate(true); err == nil {
+		t.Fatal("undeclared entitlement proof on the main binary passed validation")
+	}
+}
+
 func TestCodeDirectoryHardenedRuntimeParsing(t *testing.T) {
 	valid := "CodeDirectory v=20500 size=241 flags=0x10000(runtime) hashes=2+2 location=embedded\n"
 	if !codeDirectoryHasHardenedRuntime(valid) {

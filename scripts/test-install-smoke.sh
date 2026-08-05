@@ -181,6 +181,17 @@ fi
 grep -q 'required host helper hideout-migration-vz-adopt is missing' \
   "$tmp/missing-migration-vz-adopt-stage.err"
 
+unsigned_host_adoption_sha="$(shasum -a 256 \
+  "$package_stage/hideout/bin/hideout-migration-vz-adopt-$host_os-$arch" | awk '{print $1}')"
+scripts/sign-staged-package-darwin.sh \
+  --stage "$package_stage" --ad-hoc-test-only >"$tmp/package-signing.out"
+signed_host_adoption_sha="$(shasum -a 256 \
+  "$package_stage/hideout/bin/hideout-migration-vz-adopt-$host_os-$arch" | awk '{print $1}')"
+test "$signed_host_adoption_sha" != "$unsigned_host_adoption_sha"
+test "$(jq -er '.sha256' \
+  "$package_stage/hideout/bin/hideout-migration-vz-adopt-$host_os-$arch.manifest.json")" = \
+  "$signed_host_adoption_sha"
+grep -Fq 'passed signed=3 rebound=1 mode=ad-hoc-test' "$tmp/package-signing.out"
 scripts/package-local.sh --finalize "$package_stage" --out "$package_archive" >/dev/null
 jq -e --arg arch "$arch" --arg host_os "$host_os" '
   (.layout.binaries | index("bin/hideout-session-supervisor-linux-" + $arch)) and

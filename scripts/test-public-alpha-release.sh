@@ -544,6 +544,14 @@ grep -F 'public_alpha_cleanup_workflow_state' \
   .github/workflows/hideout-alpha-candidate.yml >/dev/null
 grep -F 'Retain bounded workflow cleanup receipt' \
   .github/workflows/hideout-alpha-candidate.yml >/dev/null
+grep -F 'scripts/sign-staged-package-darwin.sh' \
+  .github/workflows/hideout-alpha-candidate.yml >/dev/null
+if grep -F '/usr/bin/codesign --force' \
+    .github/workflows/hideout-alpha-candidate.yml >/dev/null; then
+  echo "public-alpha-release: candidate must delegate the complete signing transform" >&2
+  exit 1
+fi
+scripts/sign-staged-package-darwin.sh --self-test
 if grep -n 'set +e' .github/workflows/hideout-alpha-candidate.yml >/dev/null; then
   echo "public-alpha-release: hosted cleanup must remain fail closed" >&2
   exit 1
