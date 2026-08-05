@@ -34,6 +34,7 @@
   "maxRevision": 2,
   "maxSecretGeneration": 2,
   "maxSequence": 2,
+  "livenessMaxSequence": 1,
   "maxRecords": 1,
   "maxRetries": 2
 }

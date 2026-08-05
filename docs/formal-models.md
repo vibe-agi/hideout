@@ -49,7 +49,15 @@ each has an explicit Manager plan mapping and behavioral parity tests.
 | `MigrationAdoption` | One immutable bundle may feed several destination operations; name claims remain exclusive; conflicts default to refusal; rename preserves the existing owner; replacement requires a separate confirmation and destructive effect followed by a fresh import plan; staged objects never run; control/backend IDs are fresh; Safe Clone guest IDs are pairwise fresh; Exact Guest Restore preserves identity without a uniqueness claim; and imported authority stays disabled without approval. |
 | `OperatorConfiguration` | Multiple clients share CAS revisions, canonical operation identity, leases, crash recovery, rollback evidence, and fail-closed terminal publication. |
 | `SecretTransition` | Live secret rotation proves route stage/probe/activate/prove/drain before the provider generation changes; daemon authority reset closes connections, exact committed or unchanged generations reconcile without replay, and mismatches remain recovery-required. |
-| `WorkloadObservation` | Workload records remain owner-isolated; known loss, retention truncation, coverage degradation, exact cleanup, and observer tail drain are explicit and make bounded progress. |
+| `WorkloadObservation` / `WorkloadObservationLiveness` | The full boundary proves owner isolation, known loss, retention truncation, coverage degradation, exact cleanup, and observer tail-drain safety. A second configuration checks the same combined state machine's weak-fair transition/progress properties without multiplying the full safety graph. |
+
+`WorkloadObservation` retains both owner kinds, both process identities,
+`MaxSequence = 2`, and every cross-subsystem invariant. Its liveness companion
+retains both owners and processes but uses the separately declared
+`livenessMaxSequence = 1`: one admitted tail covers non-empty relay, loss,
+prune, cleanup, graceful drain, and forced-close progress. The production
+queue refinement still exercises two admitted frames. This is a scheduling
+boundary over one module, not a split into unrelated models.
 
 `StopObservation` pins the stop-path contract behind the 2026-07 false-stop
 fix. Its safety claim is conditional on an explicit environment assumption:
@@ -107,12 +115,15 @@ scripts/gates/formal.sh
 ```
 
 The gate reads `formal/inventory.json`, pins TLA+ tools `v1.7.4` by SHA-256,
-runs all 16 configurations across 12 modules and all 27 inventoried Go tests,
-checks the exact set of 122 safety invariants and 28 liveness properties,
+runs all 17 configurations across 12 modules and all 27 inventoried Go tests,
+checks the exact set of 138 safety invariants and 28 liveness properties,
 verifies the evidence independently, and writes private digest-bound output
 below `.artifacts/045/formal/`. Java is a development dependency only; it is
 not included in the Hideout package and is not required in a target
-environment. Gate 0 invokes this same formal gate.
+environment. Gate 0 invokes this same formal gate. Hosted acceptance uses one
+TLC worker and requests a 3072 MiB heap; evidence records both the request and
+TLC's actual usable heap for every configuration. TLC progress is streamed to
+the job log while the same bytes remain digest-bound in the private artifact.
 
 ## Refinement Discipline
 
@@ -142,7 +153,7 @@ trace boundaries:
 | --- | --- | --- |
 | `OperatorConfiguration` | Manager canonicalizes a plan, binds it to a base revision and operation ID, claims its mutation keys, records ordered effects/evidence, and publishes one terminal result. API, TUI, and WebUI are clients of that same operation model. | Concurrent stale client, identical retry, changed-input operation-ID reuse, daemon exit before/after each durable boundary, rollback, response loss, and terminal reseed. |
 | `SecretTransition` | A managed-secret generation and every eligible live gateway participate in one ordered stage → probe → activate → prove → drain → provider-commit transition. Startup recovery observes exact route and provider generations without replaying an ambiguous effect. | Failure or crash at every network boundary, unchanged/committed/mismatched provider generation, old-authority reset, rollback proof, and idempotent retry. |
-| `WorkloadObservation` | The supervisor establishes one exact cgroup owner; observer frames become owner-bound activity and coverage intervals; target exit seals the producer; completion follows only after the admitted relay tail is durably consumed, an exact final counter receipt fences later observer frames, goodbye is accepted, and the authenticated transport proves clean EOF plus successful bridge exit; the store applies deterministic redaction, bounded retention, and exact lifecycle cleanup. The exit protocol is expanded for one arbitrary owner because relay queues are session-local, while two owners remain in the model for isolation and cleanup interleavings. | Sequence gap, explicit drop, observer/daemon restart, target exit with a pending tail, exact final receipt, post-final observer frame, graceful drain and clean transport close, forced-close degradation, retention pruning before completion, cleanup before forced close, corruption repair/quarantine, ambiguous owner, disposable teardown, and reusable-incarnation replacement. |
+| `WorkloadObservation` | The supervisor establishes one exact cgroup owner; observer frames become owner-bound activity and coverage intervals; target exit seals the producer; completion follows only after the admitted relay tail is durably consumed, an exact final counter receipt fences later observer frames, goodbye is accepted, and the authenticated transport proves clean EOF plus successful bridge exit; the store applies deterministic redaction, bounded retention, and exact lifecycle cleanup. Full safety uses `MaxSequence = 2`; weak-fair transition/progress checking uses `MaxSequence = 1`. Both configurations retain the reusable/disposable owners and parent/reused-PID identities, so cleanup and relay interleavings remain in one combined state machine. | Sequence gap, explicit drop, observer/daemon restart, target exit with a pending tail, exact final receipt, post-final observer frame, graceful drain and clean transport close, forced-close degradation, retention pruning before completion, cleanup before forced close, corruption repair/quarantine, ambiguous owner, disposable teardown, and reusable-incarnation replacement. |
 
 The production tests named in `formal/inventory.json` must remain present and
 green. The formal verifier rejects a missing configuration or test, a changed

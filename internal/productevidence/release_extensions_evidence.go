@@ -260,8 +260,8 @@ func validateReleaseClosureArtifact(data []byte, expectedCommit string, expected
 	if err := validateReleaseClosurePackage(evidence.Package); err != nil {
 		return err
 	}
-	if evidence.Formal.ConfigurationCount != 16 || evidence.Formal.ModuleCount != 12 ||
-		evidence.Formal.InvariantCount != 122 || evidence.Formal.PropertyCount != 28 ||
+	if evidence.Formal.ConfigurationCount != 17 || evidence.Formal.ModuleCount != 12 ||
+		evidence.Formal.InvariantCount != 138 || evidence.Formal.PropertyCount != 28 ||
 		evidence.Formal.GoTestCount != 27 {
 		return errors.New("release closure formal inventory counts are invalid")
 	}

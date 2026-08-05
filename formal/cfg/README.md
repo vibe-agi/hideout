@@ -6,11 +6,13 @@ of truth used by refinement tests and configuration validation. The `.cfg`
 files spell out the same finite values for TLC.
 
 `OperatorConfiguration.cfg`, `OperatorConfigurationLiveness.cfg`,
-`RequestWorkflowLiveness.cfg`, `SecretTransition.cfg`, and
-`WorkloadObservation.cfg` are active and have matching modules and property
-declarations. The operator and request models deliberately separate their
-full concurrent safety spaces from weak-fair single-operation/request crash,
-lease, rollback, and cleanup progress spaces. Configuration drift is checked by
+`RequestWorkflowLiveness.cfg`, `SecretTransition.cfg`,
+`WorkloadObservation.cfg`, and `WorkloadObservationLiveness.cfg` are active and
+have matching modules and property declarations. The operator, request, and
+workload models deliberately separate their full concurrent safety spaces from
+weak-fair progress spaces. Workload liveness retains both owner kinds and
+process identities but uses the separately declared `livenessMaxSequence`; the
+full workload safety boundary retains `maxSequence`. Configuration drift is checked by
 `internal/manager/formal_refinement_test.go` and
 `internal/manager/profile_transaction_refinement_test.go`. The complete
 configuration, secret, route, and observation production traces are part of

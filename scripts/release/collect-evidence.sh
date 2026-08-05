@@ -822,6 +822,9 @@ run_preflight() {
   local performance_bound_fixture performance_snapshot_start
   local performance_snapshot_before performance_snapshot_after
   local sequence_negative_fixture
+  local formal_inventory_path formal_configuration_count formal_module_count
+  local formal_invariant_count formal_property_count formal_go_test_count
+  local formal_config formal_config_path formal_count
   preflight_root="$(
     mktemp -d "$tmp_base/hideout-collect-evidence-preflight.XXXXXX"
   )"
@@ -837,6 +840,39 @@ run_preflight() {
     fi
   }
   trap cleanup_preflight EXIT
+
+  formal_inventory_path="$repo_root/formal/inventory.json"
+  formal_configuration_count="$(
+    jq -er '.configurations | length' "$formal_inventory_path"
+  )" || fail "formal preflight could not count configurations"
+  formal_module_count="$(
+    jq -r '.configurations[].module' "$formal_inventory_path" |
+      LC_ALL=C sort -u | wc -l | tr -d ' '
+  )" || fail "formal preflight could not count modules"
+  formal_go_test_count="$(
+    jq -er '.goRefinement.tests | length' "$formal_inventory_path"
+  )" || fail "formal preflight could not count Go refinement tests"
+  formal_invariant_count=0
+  formal_property_count=0
+  while IFS= read -r formal_config; do
+    case "$formal_config" in
+      formal/*.cfg) ;;
+      *) fail "formal preflight found an unsafe config path: $formal_config" ;;
+    esac
+    formal_config_path="$repo_root/$formal_config"
+    [ -f "$formal_config_path" ] && [ ! -L "$formal_config_path" ] ||
+      fail "formal preflight config is missing or unsafe: $formal_config"
+    formal_count="$(
+      awk '$1 == "INVARIANT" {count++} END {print count + 0}' \
+        "$formal_config_path"
+    )"
+    formal_invariant_count=$((formal_invariant_count + formal_count))
+    formal_count="$(
+      awk '$1 == "PROPERTY" {count++} END {print count + 0}' \
+        "$formal_config_path"
+    )"
+    formal_property_count=$((formal_property_count + formal_count))
+  done < <(jq -r '.configurations[].config' "$formal_inventory_path")
 
   validate_candidate_sequence_contract ||
     fail "release candidate sequence omits exact-package migration evidence"
@@ -1523,7 +1559,12 @@ run_preflight() {
   jq -n \
     --slurpfile browser "$browser_fixture" \
     --argjson closure "$closure_fixture" \
-    --argjson reviewFindingCount "$final_review_count" '
+    --argjson reviewFindingCount "$final_review_count" \
+    --argjson formalConfigurationCount "$formal_configuration_count" \
+    --argjson formalModuleCount "$formal_module_count" \
+    --argjson formalInvariantCount "$formal_invariant_count" \
+    --argjson formalPropertyCount "$formal_property_count" \
+    --argjson formalGoTestCount "$formal_go_test_count" '
       def ref($path; $sha; $mode): {
         path:$path,
         sha256:$sha,
@@ -1633,11 +1674,11 @@ run_preflight() {
         formal:{
           inventory:ref("formal/inventory.json"; $sha; "0600"),
           sourceInventory:ref("formal/source-inventory.json"; $sha; "0644"),
-          configurationCount:16,
-          moduleCount:12,
-          invariantCount:122,
-          propertyCount:28,
-          goTestCount:27
+          configurationCount:$formalConfigurationCount,
+          moduleCount:$formalModuleCount,
+          invariantCount:$formalInvariantCount,
+          propertyCount:$formalPropertyCount,
+          goTestCount:$formalGoTestCount
         },
         gates:[
           $gateIDs[] as $id |
@@ -2134,9 +2175,9 @@ formal_inventory_source="$repo_root/formal/inventory.json"
 validate_simple_summary "$formal_summary" "hideout.formal-gate/v1"
 jq -e '
   .candidateAcceptance == false and
-  .inventory.configurationCount == 16 and
+  .inventory.configurationCount == 17 and
   .inventory.moduleCount == 12 and
-  .inventory.invariantCount == 122 and
+  .inventory.invariantCount == 138 and
   .inventory.propertyCount == 28 and
   .inventory.goTestCount == 27 and
   all(.configurations[]; .result == "passed") and

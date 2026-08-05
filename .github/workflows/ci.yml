@@ -115,10 +115,11 @@ jobs:
       - name: Run the complete formal Gate 0 shard
         id: formal
         env:
-          # WorkloadObservation is memory/coordination bound on the hosted
-          # arm64 runner: two TLC workers took more than 66 minutes for that
-          # model, while the reviewed single-worker run completed normally.
+          # The standard arm64 runner has 7 GiB RAM. Keep TLC at one worker and
+          # a 3 GiB recorded heap; safety/liveness boundaries prevent the
+          # 7.8-million-state safety graph from multiplying liveness work.
           HIDEOUT_TLC_WORKERS: "1"
+          HIDEOUT_TLC_MAX_HEAP_MB: "3072"
         run: scripts/test-gate0.sh --shard formal
 
       - name: Finalize the formal execution review

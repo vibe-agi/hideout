@@ -2140,6 +2140,25 @@ preflights. The review records:
 6. the smallest safe rerun scope, stated explicitly as `from-scratch` when no
    authenticated checkpoint exists.
 
+Human and machine reports use the same compact test receipt. It must state the
+candidate binding, result, elapsed time, failure layer, and these decisions:
+
+- `start`: `from-scratch`, `same-candidate-retry`, or
+  `authenticated-checkpoint`;
+- `host`: `same-boot`, `restart`, `power-cycle`, or `not-comparable`;
+- `reuse`: every retained result/checkpoint, or `none`;
+- `rerun`: the smallest diagnostic scope and the separate release-acceptance
+  scope;
+- `restartRequired` and `powerCycleRequired`: explicit booleans with a reason.
+
+The receipt ends with a process retrospective, even when the test passes. It
+reports time to first useful diagnostic, work performed after that diagnostic,
+repeated passing work, repeated logical/encoded bytes, VM boots, checkpoint hit
+rate, host-noise or flaky-test observations, preventable work, and one concrete
+workflow improvement or `none`. An improvement is considered effective only
+when the next comparable run changes a named metric; “the script passed” is not
+a process-efficiency result.
+
 Expensive gates put syntax, inventory, path-budget, fixture, package-binding,
 and semantic-judge checks before VM creation or bulk I/O, then verify each
 expensive stage before advancing. A harness change does not automatically
@@ -2178,16 +2197,23 @@ diagnostic rerun command. Splitting changes scheduling and visibility only; it
 does not remove a model, invariant, property, refinement test, or evidence
 judge from the complete gate.
 
-The hosted arm64 runner uses one TLC worker. A measured two-worker attempt made
-`WorkloadObservation` exceed 66 minutes even though it improved the smaller
-`SecretTransition` model, so worker count is a per-runner policy rather than an
-assumed monotonic speedup. The formal producer atomically snapshots its review
-before and after each model. An always-run finalizer converts a surviving
-in-progress receipt into an explicit harness failure after cancellation and
-fails closed if no receipt exists; an artifact-upload warning is never accepted
-as a run review. The two dominant models run first, reducing time and repeated
-work when a runner or worker-policy regression affects either one; acceptance
-still verifies the complete inventory independent of execution order.
+The standard hosted arm64 runner has three CPUs and 7 GiB RAM. It uses one TLC
+worker and requests a 3072 MiB heap, leaving bounded headroom for the runner and
+OS. Evidence records the requested heap and each configuration's TLC-reported
+usable heap, which must remain between 75% and 100% of the request. The full
+`WorkloadObservation` safety boundary retains two owners, two process
+identities, and `MaxSequence = 2`; its weak-fair transition/progress companion
+retains both owners and processes at `MaxSequence = 1`. This preserves cleanup
+and relay interleavings while avoiding repeated liveness scans over the full
+7,878,828-state safety graph. The formal producer streams TLC progress to the
+job log and atomically snapshots its review before and after each configuration.
+An always-run finalizer converts a surviving in-progress receipt into an
+explicit harness failure after cancellation and fails closed if no receipt
+exists; an artifact-upload warning is never accepted as a run review. The two
+workload configurations and `SecretTransition` run first, reducing repeated
+work when a runner/heap regression affects a dominant configuration;
+acceptance still verifies the complete inventory independent of execution
+order.
 
 Runner architecture is not accepted as JVM architecture proof. Both remote
 Gate 0 shards and the signed-candidate workflow install the same full-SHA-pinned
@@ -2211,11 +2237,12 @@ Every authority, privacy, attribution, coverage, cleanup, help, UI, and
 recovery claim in `docs/release/045-claim-matrix.md` needs both a positive
 judge and a retained negative fixture that makes that judge fail.
 
-The formal lane reads `formal/inventory.json` and must run exactly 16
-configurations across 12 modules, all 122 inventoried safety invariants, all 28
-liveness properties, and all 12 named Go production-refinement/crash tests.
+The formal lane reads `formal/inventory.json` and must run exactly 17
+configurations across 12 modules, all 138 inventoried safety invariants, all 28
+liveness properties, and all 27 named Go production-refinement/crash tests.
 The independent verifier rejects a missing result, counterexample, incomplete
-pass set, changed source/log digest, or stale inventory.
+pass set, changed source/log digest, stale inventory, worker mismatch, or
+requested/actual heap mismatch.
 
 ### Real Lima workload and recovery acceptance
 

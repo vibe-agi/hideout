@@ -100,6 +100,12 @@
       "id": "WorkloadObservation",
       "module": "formal/WorkloadObservation.tla",
       "config": "formal/cfg/WorkloadObservation.cfg",
+      "kind": "safety"
+    },
+    {
+      "id": "WorkloadObservationLiveness",
+      "module": "formal/WorkloadObservation.tla",
+      "config": "formal/cfg/WorkloadObservationLiveness.cfg",
       "kind": "safety-liveness"
     }
   ],

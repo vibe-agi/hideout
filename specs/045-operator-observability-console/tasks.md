@@ -395,6 +395,8 @@ handoff.
 - [x] T183 Remove the browser SSE credential-rotation subscriber-count race by proving stale unsubscription before fresh non-durable event publication
 - [x] T184 Pin native Temurin 21 in every Gate 0 and signed-candidate macOS job, reject translated or wrong-major Java before test work, and bind the host/JVM architecture identity into formal evidence
 - [x] T185 Bind the release's sorted feature inventory from validated 045/046 proof manifests through evidence, public manifest, promotion, receipt-derived docs, and Homebrew truth; reject stale candidate-specific STATUS claims before publication
+- [x] T186 Split the combined workload model into full safety and bounded liveness configurations without removing owner/process interleavings, stream TLC progress, bind requested/actual heap, update exact inventory consumers, and prove both configurations independently before one exact remote acceptance rerun
+- [x] T187 Derive the release-evidence preflight's formal counts from the checked-in inventory/configs so stale producer and consumer literals fail before candidate work
 
 ---
 

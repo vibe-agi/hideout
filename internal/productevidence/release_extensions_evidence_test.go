@@ -170,9 +170,9 @@ func releaseClosureFixture() releaseClosureEvidence {
 	evidence.Formal = releaseClosureFormal{
 		Inventory:          ref("formal/inventory.json"),
 		SourceInventory:    ref("formal/source-inventory.json"),
-		ConfigurationCount: 16,
+		ConfigurationCount: 17,
 		ModuleCount:        12,
-		InvariantCount:     122,
+		InvariantCount:     138,
 		PropertyCount:      28,
 		GoTestCount:        27,
 	}

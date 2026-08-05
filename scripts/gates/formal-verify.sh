@@ -257,6 +257,8 @@ if ! jq -e --arg version "$(jq -r '.tla2tools.version' "$inventory")" \
       .tools.hostArchitecture == "amd64" or
       .tools.hostArchitecture == "x86_64") and
     .tools.nativeJava == true and
+    (.tools.tlcMaxHeapMB | type == "number" and . >= 512 and
+      . <= 32768 and floor == .) and
     (((.tools.hostArchitecture == "arm64" or
         .tools.hostArchitecture == "aarch64") and
        (.tools.javaArchitecture == "arm64" or
@@ -304,12 +306,18 @@ while IFS= read -r entry; do
     --arg module "$module" \
     --arg config "$config" \
     --arg kind "$kind" \
-    --argjson workers "$(jq -er '.tools.tlcWorkers' "$summary")" '
+    --argjson workers "$(jq -er '.tools.tlcWorkers' "$summary")" \
+    --argjson max_heap_mb "$(jq -er '.tools.tlcMaxHeapMB' "$summary")" '
       .result == "passed" and
       .module == $module and
       .config == $config and
       .kind == $kind and
       .workers == $workers and
+      .maxHeapMB == $max_heap_mb and
+      (.actualHeapMB as $actual |
+        ($actual | type) == "number" and
+        $actual >= (($max_heap_mb * 3 / 4) | floor) and
+        $actual <= $max_heap_mb and ($actual | floor) == $actual) and
       (.elapsedSeconds | type == "number" and . >= 0 and floor == .)
     ' <<<"$result" >/dev/null; then
     fail "configuration-result-invalid:$id"
@@ -360,6 +368,9 @@ while IFS= read -r entry; do
   result_workers="$(jq -er '.workers' <<<"$result")"
   grep -Eq " with ${result_workers} workers? on " "$log" ||
     fail "tlc-worker-marker-mismatch:$id"
+  result_actual_heap_mb="$(jq -er '.actualHeapMB' <<<"$result")"
+  grep -Fq "with ${result_actual_heap_mb}MB heap" "$log" ||
+    fail "tlc-heap-marker-mismatch:$id"
   if grep -Eiq \
     'Invariant .* is violated|Temporal properties were violated|counterexample|^Error:' \
     "$log"; then

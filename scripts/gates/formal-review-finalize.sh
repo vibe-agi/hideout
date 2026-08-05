@@ -80,6 +80,7 @@ finalize_reviews() {
         .execution.currentConfiguration as $configuration |
         .execution.currentConfigurationStartedAt as $configurationStartedAt |
         .execution.workers as $workers |
+        .execution.maxHeapMB as $maxHeapMB |
         .result = "failed" |
         .execution.interruptedOutcome = $outcome |
         .execution.currentConfigurationElapsedSeconds =
@@ -104,7 +105,8 @@ finalize_reviews() {
              end),
           diagnosticCommand:
             (if $configuration == null then null
-             else ("scripts/gates/formal.sh --configuration " +
+             else ("HIDEOUT_TLC_MAX_HEAP_MB=" + ($maxHeapMB | tostring) +
+               " scripts/gates/formal.sh --configuration " +
                $configuration + " --workers " + ($workers | tostring))
              end),
           releaseAcceptanceScope:"full-formal",
@@ -153,6 +155,7 @@ self_test() {
       execution:{
         scope:"full-formal",
         workers:1,
+        maxHeapMB:3072,
         stage:"formal-model",
         currentConfiguration:"WorkloadObservation",
         currentConfigurationStartedAt:"2026-08-04T20:22:04Z",
@@ -177,7 +180,7 @@ self_test() {
     .rerun.minimumDiagnosticScope ==
       "configuration:WorkloadObservation" and
     .rerun.diagnosticCommand ==
-      "scripts/gates/formal.sh --configuration WorkloadObservation --workers 1" and
+      "HIDEOUT_TLC_MAX_HEAP_MB=3072 scripts/gates/formal.sh --configuration WorkloadObservation --workers 1" and
     .timing.finishedAt != null and
     .timing.elapsedSeconds >= 511 and
     .execution.currentConfigurationElapsedSeconds >= 0

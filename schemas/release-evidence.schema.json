@@ -215,13 +215,13 @@
           "$ref": "#/$defs/artifactRef"
         },
         "configurationCount": {
-          "const": 16
+          "const": 17
         },
         "moduleCount": {
           "const": 12
         },
         "invariantCount": {
-          "const": 122
+          "const": 138
         },
         "propertyCount": {
           "const": 28

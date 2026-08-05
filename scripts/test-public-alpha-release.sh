@@ -245,6 +245,7 @@ for workflow in .github/workflows/ci.yml \
   grep -F 'limactl --version' "$workflow" >/dev/null
   grep -F '= "2.2.0"' "$workflow" >/dev/null
   grep -F 'HIDEOUT_TLC_WORKERS: "1"' "$workflow" >/dev/null
+  grep -F 'HIDEOUT_TLC_MAX_HEAP_MB: "3072"' "$workflow" >/dev/null
 done
 test "$(grep -Fc \
   'actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961' \

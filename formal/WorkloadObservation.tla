@@ -441,6 +441,8 @@ RelayFairness ==
     /\ WF_vars(PersistCompletionReceipt)
     /\ WF_vars(CompleteSession)
 
+SafetySpec == Init /\ [][Next]_vars
+
 Spec == Init /\ [][Next]_vars /\ MaintenanceFairness /\ RelayFairness
 
 TypeOK ==

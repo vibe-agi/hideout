@@ -24,6 +24,7 @@ verifier="$root/scripts/gates/formal-verify.sh"
 java_toolchain="$root/scripts/lib/java-toolchain.sh"
 selected_configuration=""
 tlc_workers="${HIDEOUT_TLC_WORKERS:-1}"
+tlc_max_heap_mb="${HIDEOUT_TLC_MAX_HEAP_MB:-3072}"
 
 usage() {
   printf '%s\n' \
@@ -37,7 +38,10 @@ usage() {
     "  --configuration ID  Run one inventoried TLC model for diagnosis only." \
     "                      This never emits full formal acceptance evidence." \
     "  --workers N         Use 1..64 TLC workers (default: 1, or" \
-    "                      HIDEOUT_TLC_WORKERS when set)."
+    "                      HIDEOUT_TLC_WORKERS when set)." \
+    "" \
+    "HIDEOUT_TLC_MAX_HEAP_MB sets the recorded TLC heap in MiB" \
+    "(512..32768; default: 3072)."
 }
 
 while [ "$#" -gt 0 ]; do
@@ -88,8 +92,18 @@ if [ "$tlc_workers" -lt 1 ] || [ "$tlc_workers" -gt 64 ]; then
   printf 'formal-gate: workers must be an integer from 1 through 64\n' >&2
   exit 2
 fi
+case "$tlc_max_heap_mb" in
+  '' | *[!0-9]* | 0 | 0*)
+    printf 'formal-gate: max heap must be an integer from 512 through 32768 MiB\n' >&2
+    exit 2
+    ;;
+esac
+if [ "$tlc_max_heap_mb" -lt 512 ] || [ "$tlc_max_heap_mb" -gt 32768 ]; then
+  printf 'formal-gate: max heap must be an integer from 512 through 32768 MiB\n' >&2
+  exit 2
+fi
 
-for command in awk comm curl git go java jq sed sort; do
+for command in awk comm curl git go java jq sed sort tee; do
   if ! command -v "$command" >/dev/null 2>&1; then
     printf 'formal-gate: missing required command: %s\n' "$command" >&2
     exit 1
@@ -178,6 +192,7 @@ write_formal_run_review() {
     --arg javaArchitecture "$HIDEOUT_JAVA_ARCH" \
     --arg hostArchitecture "$HIDEOUT_JAVA_HOST_ARCH" \
     --argjson workers "$tlc_workers" \
+    --argjson maxHeapMB "$tlc_max_heap_mb" \
     --argjson elapsedSeconds "$elapsed_seconds" \
     --argjson currentElapsedSeconds "$current_elapsed" \
     --argjson configurations "$gate_configuration_timings" '
@@ -206,6 +221,7 @@ write_formal_run_review() {
           scope:(if $selectedConfiguration == "" then "full-formal" else "single-configuration-diagnostic" end),
           selectedConfiguration:(if $selectedConfiguration == "" then null else $selectedConfiguration end),
           workers:$workers,
+          maxHeapMB:$maxHeapMB,
           stage:$stage,
           currentConfiguration:(if $configuration == "" then null else $configuration end),
           currentConfigurationStartedAt:(if $configurationStartedAt == "" then null else $configurationStartedAt end),
@@ -224,14 +240,14 @@ write_formal_run_review() {
         } else null end),
         rerun:(if $result == "failed" then {
           minimumDiagnosticScope:(if $configuration == "" then "failed-stage-only" else ("configuration:" + $configuration) end),
-          diagnosticCommand:(if $configuration == "" then null else ("scripts/gates/formal.sh --configuration " + $configuration + " --workers " + ($workers|tostring)) end),
+          diagnosticCommand:(if $configuration == "" then null else ("HIDEOUT_TLC_MAX_HEAP_MB=" + ($maxHeapMB|tostring) + " scripts/gates/formal.sh --configuration " + $configuration + " --workers " + ($workers|tostring)) end),
           releaseAcceptanceScope:"full-formal",
           afterCandidateChange:"from-scratch"
         } else null end),
         efficiency:{
           authenticatedCheckpointHitRate:0,
           preventableWorkAssessment:"pending-post-run-review",
-          metrics:["elapsedSeconds","completedConfigurations","currentConfigurationElapsedSeconds"]
+          metrics:["elapsedSeconds","completedConfigurations","currentConfigurationElapsedSeconds","maxHeapMB"]
         }
       }
     ' >"$review_tmp"
@@ -339,14 +355,17 @@ configuration_entries() {
       '.configurations[] | select(.id == $id)' "$inventory"
     return
   fi
-  # Run the two dominant models first. This does not change the inventoried
+  # Run the three dominant configurations first. This does not change the inventoried
   # state/property set or verifier, but a runner/worker regression now fails
   # before spending time on fourteen already-fast configurations.
   jq -c '
     (.configurations[] | select(.id == "WorkloadObservation")),
+    (.configurations[] | select(.id == "WorkloadObservationLiveness")),
     (.configurations[] | select(.id == "SecretTransition")),
     (.configurations[] |
-      select(.id != "WorkloadObservation" and .id != "SecretTransition"))
+      select(.id != "WorkloadObservation" and
+        .id != "WorkloadObservationLiveness" and
+        .id != "SecretTransition"))
   ' "$inventory"
 }
 
@@ -377,12 +396,13 @@ while IFS= read -r entry; do
   fi
 
   printf 'formal-gate: checking %s (%s)\n' "$id" "$kind"
-  java -XX:+UseParallelGC -cp "$tla_jar" tlc2.TLC \
+  java "-Xmx${tlc_max_heap_mb}m" -XX:+UseParallelGC \
+    -cp "$tla_jar" tlc2.TLC \
     -deadlock \
     -workers "$tlc_workers" \
     -metadir "$scratch/tlc-$id" \
     -config "$config" \
-    "$module" >"$log" 2>&1
+    "$module" 2>&1 | tee "$log"
 
   if ! grep -Fq \
     'Model checking completed. No error has been found.' "$log"; then
@@ -435,6 +455,28 @@ while IFS= read -r entry; do
   generated="$(safe_numeric_stat "$generated" "generated-state count for $id")"
   distinct="$(safe_numeric_stat "$distinct" "distinct-state count for $id")"
   depth="$(safe_numeric_stat "$depth" "state-graph depth for $id")"
+  actual_heap_mb="$(
+    awk '/Running breadth-first search Model-Checking/ {
+      for (field = 1; field <= NF; field++) {
+        if ($field == "heap") {
+          value = $(field - 1)
+        }
+      }
+    }
+    END {gsub(/MB/, "", value); print value}' "$log"
+  )"
+  actual_heap_mb="$(
+    safe_numeric_stat "$actual_heap_mb" "actual TLC heap for $id"
+  )"
+  minimum_heap_mb=$((tlc_max_heap_mb * 3 / 4))
+  if [ "$actual_heap_mb" -lt "$minimum_heap_mb" ] ||
+    [ "$actual_heap_mb" -gt "$tlc_max_heap_mb" ]; then
+    printf \
+      'formal-gate: TLC actual heap for %s is %s MiB; requested=%s allowed=%s..%s\n' \
+      "$id" "$actual_heap_mb" "$tlc_max_heap_mb" \
+      "$minimum_heap_mb" "$tlc_max_heap_mb" >&2
+    exit 1
+  fi
   configuration_elapsed_seconds=$((
     $(date +%s) - gate_current_configuration_started_epoch
   ))
@@ -456,6 +498,8 @@ while IFS= read -r entry; do
       --argjson distinct "$distinct" \
       --argjson depth "$depth" \
       --argjson workers "$tlc_workers" \
+      --argjson max_heap_mb "$tlc_max_heap_mb" \
+      --argjson actual_heap_mb "$actual_heap_mb" \
       --argjson elapsed_seconds "$configuration_elapsed_seconds" \
       '. + [{
         id: $id,
@@ -469,6 +513,8 @@ while IFS= read -r entry; do
         properties: $properties,
         counterexamples: 0,
         workers: $workers,
+        maxHeapMB: $max_heap_mb,
+        actualHeapMB: $actual_heap_mb,
         elapsedSeconds: $elapsed_seconds,
         states: {
           generated: $generated,
@@ -487,13 +533,16 @@ while IFS= read -r entry; do
       --argjson elapsedSeconds "$configuration_elapsed_seconds" \
       --argjson generated "$generated" \
       --argjson distinct "$distinct" \
+      --argjson actualHeapMB "$actual_heap_mb" \
       '. + [{id:$id,result:"passed",elapsedSeconds:$elapsedSeconds,
-        generatedStates:$generated,distinctStates:$distinct}]' \
+        generatedStates:$generated,distinctStates:$distinct,
+        actualHeapMB:$actualHeapMB}]' \
       <<<"$gate_configuration_timings"
   )"
   printf \
-    'formal-gate: configuration=%s result=passed elapsedSeconds=%s generated=%s distinct=%s\n' \
-    "$id" "$configuration_elapsed_seconds" "$generated" "$distinct"
+    'formal-gate: configuration=%s result=passed elapsedSeconds=%s generated=%s distinct=%s actualHeapMB=%s\n' \
+    "$id" "$configuration_elapsed_seconds" "$generated" "$distinct" \
+    "$actual_heap_mb"
   gate_current_configuration=""
   gate_current_configuration_started_at=""
   gate_current_configuration_started_epoch=0
@@ -505,8 +554,8 @@ if [ -n "$selected_configuration" ]; then
   write_formal_run_review passed "" ""
   gate_completed=1
   printf \
-    'formal-gate: diagnostic=passed configuration=%s workers=%s evidenceAcceptance=false review=%s\n' \
-    "$selected_configuration" "$tlc_workers" "$run_review"
+    'formal-gate: diagnostic=passed configuration=%s workers=%s maxHeapMB=%s evidenceAcceptance=false review=%s\n' \
+    "$selected_configuration" "$tlc_workers" "$tlc_max_heap_mb" "$run_review"
   exit 0
 fi
 
@@ -640,6 +689,7 @@ write_summary() {
     --arg host_architecture "$HIDEOUT_JAVA_HOST_ARCH" \
     --arg go_version "$go_version" \
     --argjson tlc_workers "$tlc_workers" \
+    --argjson tlc_max_heap_mb "$tlc_max_heap_mb" \
     --argjson elapsed_seconds "$(( $(date +%s) - gate_started_epoch ))" \
     --argjson configuration_count "$configuration_count" \
     --argjson module_count "$(wc -l <"$scratch/inventory-modules" | tr -d ' ')" \
@@ -671,6 +721,7 @@ write_summary() {
       tools: {
         tla2tools: {version: $tla_version, sha256: $tla_sha},
         tlcWorkers: $tlc_workers,
+        tlcMaxHeapMB: $tlc_max_heap_mb,
         java: $java_version,
         javaSpecification: $java_specification,
         javaArchitecture: $java_architecture,

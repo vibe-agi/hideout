@@ -618,9 +618,9 @@ func TestFormalReleaseGateEnumeratesEveryTLAConfiguration(t *testing.T) {
 	if inventory.Schema != "hideout.formal-inventory/v1" {
 		t.Fatalf("formal inventory schema=%q", inventory.Schema)
 	}
-	if len(inventory.Configurations) != 16 {
+	if len(inventory.Configurations) != 17 {
 		t.Fatalf(
-			"formal inventory configurations=%d want 16",
+			"formal inventory configurations=%d want 17",
 			len(inventory.Configurations),
 		)
 	}

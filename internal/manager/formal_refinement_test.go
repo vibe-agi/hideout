@@ -34,6 +34,7 @@ type feature045FormalConstants struct {
 	MaxRevision         uint64   `json:"maxRevision"`
 	MaxSecretGeneration uint64   `json:"maxSecretGeneration"`
 	MaxSequence         uint64   `json:"maxSequence"`
+	LivenessMaxSequence uint64   `json:"livenessMaxSequence"`
 	MaxRecords          uint64   `json:"maxRecords"`
 	MaxRetries          uint64   `json:"maxRetries"`
 }
@@ -63,7 +64,7 @@ func TestFormalFoundationConfigurationsMatchSharedConstantsAndInvariants(t *test
 		Owners:       []string{"reusable_environment", "disposable_session"},
 		Processes:    []string{"parent", "reused_pid"},
 		MaxRevision:  2, MaxSecretGeneration: 2, MaxSequence: 2,
-		MaxRecords: 1, MaxRetries: 2,
+		LivenessMaxSequence: 1, MaxRecords: 1, MaxRetries: 2,
 	}
 	if !reflect.DeepEqual(constants, expected) {
 		t.Fatalf("formal shared constants drifted:\ngot  %+v\nwant %+v", constants, expected)
@@ -138,6 +139,7 @@ func TestFormalFoundationConfigurationsMatchSharedConstantsAndInvariants(t *test
 		"PROPERTY SecretResponseEventuallyDelivered",
 	})
 	assertFormalConfig(t, root, "WorkloadObservation", []string{
+		"SPECIFICATION SafetySpec",
 		"Owners = {reusable_environment, disposable_session}",
 		"Processes = {parent, reused_pid}",
 		"MaxSequence = 2",
@@ -151,12 +153,34 @@ func TestFormalFoundationConfigurationsMatchSharedConstantsAndInvariants(t *test
 		"INVARIANT ForcedCloseIsExplicit",
 		"INVARIANT SessionCompletionRequiresPersistedTerminalReceipt",
 		"INVARIANT CleanupCompletionRequiresAbsence",
-		"PROPERTY ExactOwnerPrune",
-		"PROPERTY ExactOwnerCleanup",
-		"PROPERTY RetentionEventuallyCompletes",
-		"PROPERTY CleanupEventuallyCompletes",
-		"PROPERTY TargetExitEventuallyPersistsAndCompletes",
 	})
+	assertFormalConfigForModule(
+		t,
+		root,
+		"WorkloadObservationLiveness",
+		"WorkloadObservation",
+		[]string{
+			"SPECIFICATION Spec",
+			"Owners = {reusable_environment, disposable_session}",
+			"Processes = {parent, reused_pid}",
+			"MaxSequence = 1",
+			"MaxRecords = 1",
+			"INVARIANT OwnerIsolation",
+			"INVARIANT NoFalseAvailableCoverage",
+			"INVARIANT KnownLossIsExplicit",
+			"INVARIANT RetentionGapIsExplicit",
+			"INVARIANT RelayReceiptNeverLeadsAdmission",
+			"INVARIANT GracefulDrainIsComplete",
+			"INVARIANT ForcedCloseIsExplicit",
+			"INVARIANT SessionCompletionRequiresPersistedTerminalReceipt",
+			"INVARIANT CleanupCompletionRequiresAbsence",
+			"PROPERTY ExactOwnerPrune",
+			"PROPERTY ExactOwnerCleanup",
+			"PROPERTY RetentionEventuallyCompletes",
+			"PROPERTY CleanupEventuallyCompletes",
+			"PROPERTY TargetExitEventuallyPersistsAndCompletes",
+		},
+	)
 }
 
 func TestOperatorConfigurationProductionTraceRefinesFoundationModel(t *testing.T) {

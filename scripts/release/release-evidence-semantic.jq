@@ -21,9 +21,9 @@ all(.package.files[];
   select(.kind == "binary" and
     .path == "bin/hideout-migration-vz-adopt-darwin-arm64")] | length) == 1 and
 (.package.browserConsole.inventory.assets | length) == 9 and
-.formal.configurationCount == 16 and
+.formal.configurationCount == 17 and
 .formal.moduleCount == 12 and
-.formal.invariantCount == 122 and
+.formal.invariantCount == 138 and
 .formal.propertyCount == 28 and
 .formal.goTestCount == 27 and
 (.gates | length) == 12 and
