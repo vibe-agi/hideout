@@ -94,7 +94,7 @@ func TestStartLocalServerServesUIAndAPI(t *testing.T) {
 		`tokenExpiryLabel`,
 		`const uiTokenExpiresAt = "2026-07-05T00:01:00Z";`,
 		`tokenExpiresAt`,
-		`connected ·`,
+		`snapshot ·`,
 		`token expires`,
 		`panelRowLimit`,
 		`visibleEnvironmentsForPanel`,

@@ -4547,13 +4547,13 @@ secrets, broker tokens, or raw backend endpoint addresses. User/application
 request data, including callback/open URL query values, is host-local evidence
 and follows the deterministic redaction contract in Audit and Explain.
 
-`hideout ui` starts the local manager HTTP API, generates a short-lived
-`ui_...` token, and opens the local URL with the token in the URL fragment. The
-fragment is for the browser page only; API requests still send the token through
-`Authorization` or `X-Hideout-UI-Token`. By default the server stays alive until
-the user stops it. `--print-url` is a nonblocking diagnostic/test mode: it
-allocates the server, prints the URL/API/token metadata, closes the server, and
-does not promise an interactive UI session.
+`hideout ui` ensures the persistent local daemon is ready and opens that
+daemon's live loopback console. It does not create a second Manager/API server.
+The command reads the daemon's current rotating `ui_...` credential through the
+authenticated store transport and places it only in the URL fragment; API
+requests send it through `Authorization` or `X-Hideout-UI-Token`. The command
+then exits without stopping the daemon. `--no-open` and `--print-url` return a
+still-usable live URL instead of a URL whose server was closed on command exit.
 
 `hideout tui` is the Bubble Tea terminal operator HUD. By default it stays
 alive beside another terminal running an agent or CLI and prioritizes active

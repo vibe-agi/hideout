@@ -6146,56 +6146,45 @@ func TestDoctorReportsAuditRedactionScriptFailure(t *testing.T) {
 	}
 }
 
-func TestUIPrintURLStartsLocalManagerAPIAndExits(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
+func TestUIPrintURLUsesPersistentDaemonConsoleAndExits(t *testing.T) {
+	storeRoot := t.TempDir()
+	t.Setenv("HIDEOUT_STORE_ROOT", storeRoot)
 	var out, errOut bytes.Buffer
-	code := Main([]string{"ui", "--no-open", "--print-url", "--ttl", "1m"}, &out, &errOut)
-	if code != 0 {
-		t.Fatalf("exit=%d stderr=%s stdout=%s", code, errOut.String(), out.String())
+	ensured := false
+	status := daemon.Status{Transport: daemon.StatusTransport{BrowserURL: "http://127.0.0.1:34567/"}}
+	a := app{
+		stdout: &out, stderr: &errOut,
+		daemonExecutable: func() (string, error) { return "/fixture/hideout", nil },
+		ensureDaemon: func(_ context.Context, options daemon.EnsureStartedOptions) (daemon.Status, error) {
+			ensured = true
+			if options.Store.Root != storeRoot || options.Executable != "/fixture/hideout" {
+				t.Fatalf("unexpected ensure options: %+v", options)
+			}
+			return status, nil
+		},
+		daemonBrowserURL: func(root string, got daemon.Status) (string, error) {
+			if root != storeRoot || got.Transport.BrowserURL != status.Transport.BrowserURL {
+				t.Fatalf("unexpected browser URL binding: root=%q status=%+v", root, got)
+			}
+			return "http://127.0.0.1:34567/#token=ui_fixture", nil
+		},
 	}
-	for _, want := range []string{
-		"Hideout UI: http://127.0.0.1:",
-		"/#token=ui_",
-		"Local Hideout API: http://127.0.0.1:",
-		"/api/v1/overview",
-		"Token expires:",
-	} {
-		if !strings.Contains(out.String(), want) {
-			t.Fatalf("ui output missing %q:\n%s", want, out.String())
-		}
+	if err := a.run([]string{"ui", "--no-open", "--print-url"}); err != nil {
+		t.Fatalf("ui: %v stderr=%s stdout=%s", err, errOut.String(), out.String())
 	}
-	if strings.Contains(out.String(), "Press Ctrl-C") {
-		t.Fatalf("print-url mode should not block:\n%s", out.String())
+	if !ensured {
+		t.Fatal("ui did not ensure the persistent daemon")
 	}
-	lines := strings.Split(strings.TrimSpace(out.String()), "\n")
-	var uiLine, apiLine string
-	for _, line := range lines {
-		switch {
-		case strings.HasPrefix(line, "Hideout UI: "):
-			uiLine = line
-		case strings.HasPrefix(line, "Local Hideout API: "):
-			apiLine = line
-		}
-	}
-	if !strings.Contains(uiLine, "#token=ui_") {
-		t.Fatalf("ui line should carry fragment token:\n%s", out.String())
-	}
-	if strings.Contains(apiLine, "#token=") || strings.Contains(apiLine, "ui_") {
-		t.Fatalf("manager API line must not carry UI token:\n%s", out.String())
+	if got, want := out.String(), "Hideout UI: http://127.0.0.1:34567/#token=ui_fixture\n"; got != want {
+		t.Fatalf("ui output=%q want %q", got, want)
 	}
 }
 
-func TestUIRejectsPublicListenAddress(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	var out, errOut bytes.Buffer
-	code := Main([]string{"ui", "--listen", "0.0.0.0:0", "--no-open", "--print-url"}, &out, &errOut)
-	if code == 0 {
-		t.Fatalf("expected public bind to fail; stdout=%s", out.String())
-	}
-	if !strings.Contains(errOut.String(), "127.0.0.1") {
-		t.Fatalf("unexpected stderr: %s", errOut.String())
+func TestUIRejectsRemovedPerCommandListenerAndTTLFlags(t *testing.T) {
+	for _, args := range [][]string{{"--listen", "127.0.0.1:0"}, {"--ttl", "1m"}} {
+		if _, err := parseUIOptions(args); err == nil {
+			t.Fatalf("accepted obsolete daemon-owned UI option: %v", args)
+		}
 	}
 }
 

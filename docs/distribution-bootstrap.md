@@ -386,9 +386,9 @@ Packaging smoke follows the MVP delivery order: the CLI is the committed
 surface, so the CLI path must always be proven, and TUI/WebUI smoke checks
 join the packaging gate as those surfaces ship. The current tarball already
 embeds both smoke surfaces, so today `hideout tui --once` renders once without
-starting WebUI, and `hideout ui --no-open --print-url` starts the local
-Manager/WebUI server, prints redacted entrypoint information, and exits
-without opening a browser.
+starting WebUI, and `hideout ui --no-open --print-url` ensures the package's
+persistent daemon, prints its live tokenized loopback entrypoint, and exits
+without opening a browser or stopping that daemon.
 
 Unsafe fixes require explicit confirmation:
 

@@ -445,10 +445,8 @@ if grep -q 'Hideout UI:' "$tmp/tui.out"; then
   exit 1
 fi
 
-HIDEOUT_STORE_ROOT="$store" "$prefix/bin/hideout" ui --no-open --print-url --listen 127.0.0.1:0 --ttl 1m >"$tmp/ui.out"
+HIDEOUT_STORE_ROOT="$store" "$prefix/bin/hideout" ui --no-open --print-url >"$tmp/ui.out"
 grep -q '^Hideout UI: http://127\.0\.0\.1:' "$tmp/ui.out"
-grep -q '^Local Hideout API: http://127\.0\.0\.1:' "$tmp/ui.out"
-grep -q '^Token expires:' "$tmp/ui.out"
 if grep -q 'Press Ctrl-C to stop' "$tmp/ui.out"; then
   echo "package-smoke: ui --print-url should exit without waiting" >&2
   cat "$tmp/ui.out" >&2

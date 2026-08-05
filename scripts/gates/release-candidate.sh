@@ -644,11 +644,11 @@ if [ "$preflight_only" -eq 1 ]; then
 fi
 
 unit_lane() {
-  go test -json -p 4 -count=1 ./...
+  go test -json -failfast -p 4 -count=1 ./...
 }
 
 race_lane() {
-  go test -json -race -p 2 -count=1 ./...
+  go test -json -failfast -race -p 2 -count=1 ./...
 }
 
 fuzz_property_lane() {

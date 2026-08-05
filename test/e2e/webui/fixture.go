@@ -120,14 +120,20 @@ func StartFixture() (Fixture, error) {
 		_ = os.RemoveAll(root)
 		return Fixture{}, err
 	}
-	base := d.UIURL()
+	browserURL, err := daemon.BrowserUIURL(root, d.Status())
+	if err != nil {
+		_ = d.Stop(context.Background())
+		_ = os.RemoveAll(root)
+		return Fixture{}, err
+	}
+	base := browserURL
 	if idx := indexFragment(base); idx >= 0 {
 		base = base[:idx]
 	}
 	base = strings.TrimRight(base, "/")
 	fixture := Fixture{
 		StoreRoot:         root,
-		UIURL:             d.UIURL(),
+		UIURL:             browserURL,
 		BaseURL:           base,
 		Token:             d.Token(),
 		NoticeID:          noticeID,

@@ -67,10 +67,17 @@ echo "$bg" | jq -e '.id and .op == "environment-clean"' >/dev/null || { echo "da
 code="$(curl_sock -o /dev/null -w '%{http_code}' -H 'Host: localhost' -H "Authorization: Bearer $token" -H 'Content-Type: application/json' -d '{"op":"session-cleanup"}' "http://localhost/daemon/background")"
 [ "$code" = "400" ] || { echo "daemon-smoke: session-cleanup should be rejected, got $code" >&2; exit 1; }
 
-# WebUI loopback transport: the daemon printed a WebUI URL whose page consumes the
-# event stream via EventSource.
-ui_url="$(sed -n 's/^WebUI: //p' "$tmp/start.out" | head -n1)"
-[ -n "$ui_url" ] || { echo "daemon-smoke: no WebUI URL printed" >&2; cat "$tmp/start.out" >&2; exit 1; }
+# The public UI command must reuse this daemon's live console and exit without
+# invalidating its URL. Compare it with the daemon-owned entrypoint, then use the
+# command result for every browser probe below.
+daemon_ui_url="$(sed -n 's/^WebUI: //p' "$tmp/start.out" | head -n1)"
+[ -n "$daemon_ui_url" ] || { echo "daemon-smoke: no daemon WebUI URL printed" >&2; cat "$tmp/start.out" >&2; exit 1; }
+"$bin" ui --no-open --print-url >"$tmp/ui-command.out"
+ui_url="$(sed -n 's/^Hideout UI: //p' "$tmp/ui-command.out" | head -n1)"
+[ "$ui_url" = "$daemon_ui_url" ] || {
+  echo "daemon-smoke: hideout ui did not resolve the running daemon console" >&2
+  exit 1
+}
 ui_base="${ui_url%%/#*}"
 curl --fail --silent --show-error "$ui_base/" >"$tmp/ui-index.html"
 grep -Fq 'src="/assets/client.js"' "$tmp/ui-index.html" || {
@@ -93,10 +100,28 @@ grep -Fq 'root.Client.events({' "$tmp/ui-app.js" || {
   echo "daemon-smoke: WebUI console does not subscribe to the event client" >&2
   exit 1
 }
-# The event endpoint is SSE (streams); cap it and read just the status.
-code="$(curl -sS --max-time 2 -o /dev/null -w '%{http_code}' "$ui_base/daemon/events?token=$token" || true)"
-[ "$code" = "200" ] || { echo "daemon-smoke: WebUI event endpoint (query token) want 200 got $code" >&2; exit 1; }
-code="$(curl -sS --max-time 2 -o /dev/null -w '%{http_code}' "$ui_base/daemon/events?token=wrong" || true)"
+# The event endpoint is SSE (streams). Bind the probe to the authoritative
+# snapshot sequence just like a real client. A concurrent producer may advance
+# the bus between the two requests, so 409 means reseed and retry, never omit
+# the sequence contract.
+code=""
+sequence=""
+for _ in 1 2 3; do
+  curl_sock -H 'Host: localhost' -H "Authorization: Bearer $token" \
+    "http://localhost/api/v1/operator/snapshot?activityLimit=1" \
+    >"$tmp/operator-snapshot.json"
+  sequence="$(jq -er '.data.sequence | select(type == "number" and floor == . and . >= 0)' \
+    "$tmp/operator-snapshot.json")"
+  code="$(curl -s --max-time 2 -o /dev/null -w '%{http_code}' \
+    "$ui_base/daemon/events?token=$token&since=$sequence" || true)"
+  [ "$code" = "409" ] || break
+done
+[ "$code" = "200" ] || {
+  echo "daemon-smoke: sequence-bound WebUI event endpoint want 200 got $code (since=$sequence)" >&2
+  exit 1
+}
+code="$(curl -sS --max-time 2 -o /dev/null -w '%{http_code}' \
+  "$ui_base/daemon/events?token=wrong&since=$sequence" || true)"
 [ "$code" = "401" ] || { echo "daemon-smoke: WebUI event endpoint wrong token want 401 got $code" >&2; exit 1; }
 
 # Auth refusal was recorded in the daemon-local audit log, without token material.

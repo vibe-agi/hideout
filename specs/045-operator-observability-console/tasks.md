@@ -401,6 +401,9 @@ handoff.
 - [x] T189 Close the browser snapshot-to-SSE event-loss window with an atomic sequence handshake and keep the console read-only until the bound stream opens
 - [x] T190 Turn validation cost/dependency order into an executable ladder, move UI acceptance before product smokes, and expose a no-TLC formal judge preflight with measurable diagnostic and rerun-efficiency targets
 - [x] T191 Replace positional runtime/candidate evidence selection with one uniqueness-enforcing binding helper, a stable baseline identity, and positive/negative selector fixtures
+- [x] T192 Close and statically validate every daemon event-stream consumer, bind the shell probe to an authoritative snapshot sequence, and reject reference/sequence drift before expensive validation
+- [x] T193 Make `hideout ui` resolve the persistent daemon's real live console, remove the dead command-scoped stream and per-command listener lifetime, and prove the printed URL remains usable after command exit
+- [x] T194 Make Gate 0 and local candidate Go unit/race invocations fail fast within a failing package while preserving complete coverage on green runs, and lock the markers into the validation ladder
 
 ---
 

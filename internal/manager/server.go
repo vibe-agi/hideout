@@ -174,9 +174,9 @@ func validateLocalListenAddr(addr string) error {
 	return nil
 }
 
-// ServeUIRoot serves the WebUI root HTML. The daemon (internal/daemon) reuses it
-// to serve the same WebUI over its loopback UI transport so the existing panels
-// can consume the daemon event stream.
+// ServeUIRoot serves the command-scoped WebUI root HTML. The persistent daemon
+// console has its own asset handler in internal/daemon/uiweb_assets; this server
+// intentionally exposes Manager API snapshots only.
 func ServeUIRoot(w http.ResponseWriter, r *http.Request, expiresAt time.Time) {
 	serveUIRootWithCatalog(
 		w,
@@ -2042,11 +2042,11 @@ async function seedLiveConsole() {
       updateNoticeSummary();
     }
     liveLastSeq = 0;
-    liveStreamState = "live";
-    liveStreamReason = "";
+    liveStreamState = "disconnected";
+    liveStreamReason = "command-scoped snapshot; refresh manually";
     renderAll();
     const expiry = tokenExpiryLabel();
-    setStatus("connected · " + freshnessLabel() + (expiry ? " · " + expiry : ""), "ok");
+    setStatus("snapshot · " + freshnessLabel() + (expiry ? " · " + expiry : ""), "ok");
   } catch (error) {
     overview = seedEmptyOverview();
     syncProfileScopeOptions();
@@ -2100,24 +2100,6 @@ document.getElementById("tabs").addEventListener("click", function(event) {
 document.getElementById("refresh").addEventListener("click", load);
 window.addEventListener("pagehide", function() { releaseOwnedClaims("webui page closed"); });
 seedLiveConsole();
-// Live state from the hideoutd event stream when served over the daemon's
-// loopback UI transport. The stream applies typed event payloads to local state
-// and renders without overview/audit re-fetches while healthy. When absent
-// (command-scoped ui), the EventSource errors and is closed, and manual refresh
-// keeps working unchanged.
-try {
-  if (window.EventSource && token) {
-    const es = new EventSource("/daemon/events?token=" + encodeURIComponent(token));
-    es.onmessage = function(message) {
-      try {
-        applyLiveEvent(JSON.parse(message.data));
-      } catch {
-        markLiveHealth("schema-mismatch", "invalid event json");
-      }
-    };
-    es.onerror = function() { releaseOwnedClaims("webui event stream disconnected"); markLiveHealth("disconnected", "event stream closed"); es.close(); };
-  }
-} catch (e) {}
 </script>
 </body>
 </html>`

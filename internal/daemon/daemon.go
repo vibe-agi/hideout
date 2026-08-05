@@ -735,9 +735,12 @@ func (d *Daemon) Status() Status {
 	d.mu.Unlock()
 	status := Status{
 		Version: statusVersion, BuildID: d.buildID, State: state, InstanceID: d.instanceID,
-		LimaHome:   d.limaHome,
-		StartedAt:  d.startedAt.Format(time.RFC3339),
-		Transport:  StatusTransport{Socket: d.socket, SessionSocket: d.sessionListener.Socket(), SessionProtocol: SessionProtocolVersion},
+		LimaHome:  d.limaHome,
+		StartedAt: d.startedAt.Format(time.RFC3339),
+		Transport: StatusTransport{
+			Socket: d.socket, SessionSocket: d.sessionListener.Socket(),
+			SessionProtocol: SessionProtocolVersion, BrowserURL: d.uiURL,
+		},
 		Background: d.bg.inventory(),
 	}
 	if d.credentials != nil {

@@ -121,6 +121,54 @@ func TestFetchStatusSeedsExistingBackgroundWork(t *testing.T) {
 	t.Fatalf("background operation missing from status seed: %+v", status.Background)
 }
 
+func TestBrowserUIURLUsesDaemonBaseAndCurrentFragmentCredential(t *testing.T) {
+	d := startTestDaemon(t)
+	status, err := FetchStatus(context.Background(), d.store.Root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.Transport.BrowserURL == "" ||
+		strings.Contains(status.Transport.BrowserURL, "token") ||
+		strings.Contains(status.Transport.BrowserURL, "#") {
+		t.Fatalf("status browser URL is absent or carries authority: %q", status.Transport.BrowserURL)
+	}
+	got, err := BrowserUIURL(d.store.Root, status)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != d.UIURL() {
+		t.Fatalf("BrowserUIURL=%q want current daemon URL %q", got, d.UIURL())
+	}
+}
+
+func TestBrowserUIURLRejectsForeignOrNonLoopbackStatus(t *testing.T) {
+	d := startTestDaemon(t)
+	status := d.Status()
+	for name, mutate := range map[string]func(*Status){
+		"missing URL": func(value *Status) { value.Transport.BrowserURL = "" },
+		"foreign host": func(value *Status) {
+			value.Transport.BrowserURL = "http://example.com:1234/"
+		},
+		"non-http": func(value *Status) {
+			value.Transport.BrowserURL = "https://127.0.0.1:1234/"
+		},
+		"query authority": func(value *Status) {
+			value.Transport.BrowserURL = "http://127.0.0.1:1234/?token=bad"
+		},
+		"foreign store": func(value *Status) {
+			value.Transport.Socket = socketPathFor(t.TempDir())
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			candidate := status
+			mutate(&candidate)
+			if got, err := BrowserUIURL(d.store.Root, candidate); err == nil {
+				t.Fatalf("accepted invalid browser status as %q", got)
+			}
+		})
+	}
+}
+
 func TestStopRunningWaitsForCompleteShutdownAndAllowsImmediateRestart(t *testing.T) {
 	store := testStore(t)
 	shutdownEntered := make(chan struct{})

@@ -78,6 +78,7 @@ type app struct {
 	terminalInteractive    func() bool
 	activityProvider       func(string) manager.ActivityProvider
 	activitySnapshot       func(context.Context, string, manager.OperatorSnapshotQuery) (manager.OperatorSnapshot, error)
+	daemonBrowserURL       func(string, daemon.Status) (string, error)
 	secretClient           secretCommandClient
 	secretReadPassword     func() ([]byte, error)
 	migrationRequest       func(string, string, string, io.Reader) ([]byte, error)
@@ -7991,28 +7992,21 @@ func formatEnvironmentTime(value *time.Time) string {
 }
 
 type uiOptions struct {
-	listen   string
-	ttl      time.Duration
 	noOpen   bool
 	printURL bool
 }
 
 func parseUIOptions(args []string) (uiOptions, error) {
-	opts := uiOptions{
-		listen: manager.DefaultUIListenAddr,
-		ttl:    15 * time.Minute,
-	}
+	opts := uiOptions{}
 	fs := flag.NewFlagSet("ui", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
-	fs.StringVar(&opts.listen, "listen", opts.listen, "127.0.0.1 listen address")
-	fs.DurationVar(&opts.ttl, "ttl", opts.ttl, "UI token lifetime")
 	fs.BoolVar(&opts.noOpen, "no-open", false, "do not open a browser")
 	fs.BoolVar(&opts.printURL, "print-url", false, "print URL and exit")
 	if err := fs.Parse(args); err != nil {
 		return opts, err
 	}
 	if fs.NArg() != 0 {
-		return opts, errors.New("usage: hideout ui [--listen 127.0.0.1:0] [--ttl 15m] [--no-open] [--print-url]")
+		return opts, errors.New("usage: hideout ui [--no-open] [--print-url]")
 	}
 	return opts, nil
 }
@@ -8029,51 +8023,45 @@ func (a app) ui(args []string) error {
 	if err := os.MkdirAll(store.Root, 0o700); err != nil {
 		return err
 	}
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	server, err := manager.StartLocalServer(ctx, manager.LocalServerOptions{
-		Core:        manager.New(store),
-		Addr:        opts.listen,
-		TTL:         opts.ttl,
-		RunBackend:  a.runAPIBackend,
-		HelpCatalog: defaultOperatorHelpCatalog(),
-		RunOpener: func(_ manager.RunAPIRequest, _ manager.RunPlan, runSession manager.RunSession) broker.Opener {
-			return hostOpener(runSession.IdentityDir, a.stdout, a.stderr)
-		},
+	executableFn := a.daemonExecutable
+	if executableFn == nil {
+		executableFn = os.Executable
+	}
+	executable, err := executableFn()
+	if err != nil {
+		return fmt.Errorf("resolve hideout executable: %w", err)
+	}
+	ensure := a.ensureDaemon
+	if ensure == nil {
+		ensure = daemon.EnsureStarted
+	}
+	status, err := ensure(context.Background(), daemon.EnsureStartedOptions{
+		Store: store, Executable: executable, BuildID: daemonBuildID(), Diagnostics: a.stderr,
 	})
+	if err != nil {
+		return fmt.Errorf("browser console requires hideoutd: %w", err)
+	}
+	resolveURL := a.daemonBrowserURL
+	if resolveURL == nil {
+		resolveURL = daemon.BrowserUIURL
+	}
+	uiURL, err := resolveURL(store.Root, status)
 	if err != nil {
 		return err
 	}
-	defer server.Close()
-	fmt.Fprintf(a.stdout, "Hideout UI: %s\n", server.UIURL)
-	fmt.Fprintf(a.stdout, "Local Hideout API: %s\n", server.APIURL)
-	fmt.Fprintf(a.stdout, "Token expires: %s\n", server.ExpiresAt.Format(time.RFC3339))
-	if opts.printURL {
+	fmt.Fprintf(a.stdout, "Hideout UI: %s\n", uiURL)
+	if opts.printURL || opts.noOpen {
 		return nil
 	}
-	if !opts.noOpen {
-		opener := hostopen.Opener{
-			BrowserProfileDir: filepath.Join(store.Root, "ui-browser"),
-			BrowserPath:       os.Getenv("HIDEOUT_BROWSER_PATH"),
-			BrowserApp:        os.Getenv("HIDEOUT_BROWSER_APP"),
-			DryRun:            os.Getenv("HIDEOUT_OPEN_DRY_RUN") == "1",
-			Stdout:            a.stdout,
-			Stderr:            a.stderr,
-		}
-		if err := opener.OpenURL(context.Background(), server.UIURL); err != nil {
-			return err
-		}
+	opener := hostopen.Opener{
+		BrowserProfileDir: filepath.Join(store.Root, "ui-browser"),
+		BrowserPath:       os.Getenv("HIDEOUT_BROWSER_PATH"),
+		BrowserApp:        os.Getenv("HIDEOUT_BROWSER_APP"),
+		DryRun:            os.Getenv("HIDEOUT_OPEN_DRY_RUN") == "1",
+		Stdout:            a.stdout,
+		Stderr:            a.stderr,
 	}
-	fmt.Fprintln(a.stdout, "Press Ctrl-C to stop.")
-	sig := make(chan os.Signal, 1)
-	signal.Notify(sig, os.Interrupt)
-	defer signal.Stop(sig)
-	select {
-	case <-sig:
-		return nil
-	case err := <-serverError(server):
-		return err
-	}
+	return opener.OpenURL(context.Background(), uiURL)
 }
 
 func (a app) daemonCommand(args []string) error {
@@ -9822,12 +9810,4 @@ func probeTCPBridge(ctx context.Context, address, send, expect string, timeout t
 		return "", err
 	}
 	return string(buf), nil
-}
-
-func serverError(server *manager.LocalServer) <-chan error {
-	ch := make(chan error, 1)
-	go func() {
-		ch <- server.Wait()
-	}()
-	return ch
 }

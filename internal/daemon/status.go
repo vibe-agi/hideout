@@ -46,6 +46,10 @@ type StatusTransport struct {
 	Socket          string `json:"socket"`
 	SessionSocket   string `json:"sessionSocket,omitempty"`
 	SessionProtocol string `json:"sessionProtocol,omitempty"`
+	// BrowserURL is the non-secret loopback base URL. Clients obtain the current
+	// rotating credential from the authenticated store transport and put it only
+	// in the browser fragment.
+	BrowserURL string `json:"browserUrl,omitempty"`
 }
 
 type SessionStatus struct {

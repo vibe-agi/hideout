@@ -100,7 +100,7 @@ if [ "${1:-}" = "--quick" ]; then
     echo "$unformatted" >&2
     exit 1
   fi
-  go test -p "$go_test_parallelism" ./...
+  go test -failfast -p "$go_test_parallelism" ./...
   markdownlint-cli2 'docs/*.md'
   jq empty schemas/*.json
   echo "gate0 --quick passed; run the full gate before commit"
@@ -240,7 +240,7 @@ if [ -n "$unformatted" ]; then
   echo "$unformatted" >&2
   exit 1
 fi
-go test -p "$go_test_parallelism" -count=1 ./...
+go test -failfast -p "$go_test_parallelism" -count=1 ./...
 scripts/test-vulnerability-gate.sh --self-test --source
 # Portable migration foundation: strict schemas and parsers, bounded fuzz
 # smoke, the four focused TLC configurations, and production refinement traces.

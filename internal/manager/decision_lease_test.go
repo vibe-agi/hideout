@@ -324,18 +324,18 @@ func TestHostFSWriteDecisionLeaseExpiryConvergesProviderAndPublicState(t *testin
 	}
 }
 
-func TestWebDecisionClientReleasesOwnedClaimsOnCloseAndStreamDisconnect(t *testing.T) {
+func TestWebDecisionClientReleasesOwnedClaimsOnCloseAndRefresh(t *testing.T) {
 	html := renderUIHTML(time.Date(2026, 7, 29, 16, 0, 0, 0, time.UTC))
 	for _, required := range []string{
 		`function releaseOwnedClaims(reason)`,
 		`"/api/v1/decision/release"`,
 		`keepalive: true`,
 		`window.addEventListener("pagehide"`,
-		`releaseOwnedClaims("webui event stream disconnected")`,
+		`releaseOwnedClaims("webui refreshed or changed scope")`,
 		`data-decision-action="release"`,
 	} {
 		if !strings.Contains(html, required) {
-			t.Fatalf("Web decision disconnect contract missing %q", required)
+			t.Fatalf("Web decision release contract missing %q", required)
 		}
 	}
 }

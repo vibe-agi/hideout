@@ -9,7 +9,7 @@ import (
 	"github.com/dop251/goja"
 )
 
-func TestWebUILiveConsoleUsesSeedAndTypedEvents(t *testing.T) {
+func TestWebUISnapshotConsoleUsesSeedAndRetainsTypedReducer(t *testing.T) {
 	html := renderUIHTML(time.Date(2026, 7, 8, 0, 0, 0, 0, time.UTC))
 	for _, want := range []string{
 		"function seedLiveConsole()",
@@ -18,8 +18,7 @@ func TestWebUILiveConsoleUsesSeedAndTypedEvents(t *testing.T) {
 		"function renderAll()",
 		`data-panel="operator-console"`,
 		"function consoleActionSummary()",
-		"new EventSource(\"/daemon/events?token=\"",
-		"applyLiveEvent(JSON.parse(message.data))",
+		`liveStreamReason = "command-scoped snapshot; refresh manually"`,
 		"overview.environments = upsertByID(overview.environments, payload)",
 		"overview.sessions = upsertByID(overview.sessions, payload)",
 		"overview.hostfsWrites = upsertByID(overview.hostfsWrites",
@@ -34,10 +33,9 @@ func TestWebUILiveConsoleUsesSeedAndTypedEvents(t *testing.T) {
 	if strings.Contains(html, "setInterval") {
 		t.Fatal("WebUI live console must not use a polling timer")
 	}
-	onMessage := between(t, html, "es.onmessage = function(message)", "es.onerror = function()")
-	for _, forbidden := range []string{"load()", "seedLiveConsole()", `api("overview")`, `api("audit/events`} {
-		if strings.Contains(onMessage, forbidden) {
-			t.Fatalf("EventSource handler must not re-fetch seed data; found %q in:\n%s", forbidden, onMessage)
+	for _, forbidden := range []string{"new EventSource(", "/daemon/events"} {
+		if strings.Contains(html, forbidden) {
+			t.Fatalf("command-scoped WebUI must not open the daemon stream; found %q", forbidden)
 		}
 	}
 }
@@ -256,7 +254,7 @@ func TestWebUILiveConsoleHealthAndRedactionContracts(t *testing.T) {
 		`markLiveHealth("schema-mismatch", "invalid event")`,
 		`markLiveHealth("stale", "event sequence gap")`,
 		`markLiveHealth(payload.reason === "credential invalidated" ? "credential-expired" : "disconnected"`,
-		`markLiveHealth("disconnected", "event stream closed")`,
+		`liveStreamReason = "command-scoped snapshot; refresh manually"`,
 		`history.replaceState(null, document.title, location.pathname + location.search)`,
 	} {
 		if !strings.Contains(html, want) {
@@ -350,33 +348,30 @@ func TestWebUIRendersConcurrentOwnerFieldsWithoutPolling(t *testing.T) {
 			t.Fatalf("WebUI owner rendering missing %q", marker)
 		}
 	}
-	onMessage := between(t, html, "es.onmessage = function(message)", "es.onerror = function()")
-	if strings.Contains(onMessage, "setInterval") || strings.Contains(onMessage, `api("overview"`) {
-		t.Fatalf("owner event rendering introduced polling: %s", onMessage)
+	reducer := between(t, html, "function applyLiveEvent(event)", "async function seedLiveConsole()")
+	if strings.Contains(reducer, "setInterval") || strings.Contains(reducer, `api("overview"`) {
+		t.Fatalf("owner reducer introduced polling: %s", reducer)
 	}
 }
 
-func TestWebUILiveConsoleProofArtifact(t *testing.T) {
+func TestWebUISnapshotConsoleProofArtifact(t *testing.T) {
 	html := renderUIHTML(time.Date(2026, 7, 8, 0, 0, 0, 0, time.UTC))
-	onMessage := between(t, html, "es.onmessage = function(message)", "es.onerror = function()")
 	reducer := between(t, html, "function applyLiveEvent(event)", "async function seedLiveConsole()")
 	proof := struct {
-		EventHandlerAppliesPayload bool
-		OverviewReads              int
-		AuditReads                 int
-		RedactionOK                bool
-		HealthRendered             bool
+		NoDeadEventSource bool
+		SnapshotHonest    bool
+		ReducerReadOnly   bool
+		RedactionOK       bool
 	}{
-		EventHandlerAppliesPayload: strings.Contains(onMessage, "applyLiveEvent(JSON.parse(message.data))"),
-		OverviewReads:              strings.Count(onMessage, `api("overview"`),
-		AuditReads:                 strings.Count(onMessage, `api("audit/events`),
-		RedactionOK:                !strings.Contains(reducer, "cap_"+"0123456789abcdef") && !strings.Contains(reducer, "HIDEOUT_"+"SECRET_"),
-		HealthRendered:             strings.Contains(html, `markLiveHealth("stale", "event sequence gap")`) && strings.Contains(html, "credential-expired"),
+		NoDeadEventSource: !strings.Contains(html, "new EventSource("),
+		SnapshotHonest:    strings.Contains(html, `liveStreamReason = "command-scoped snapshot; refresh manually"`),
+		ReducerReadOnly:   !strings.Contains(reducer, "fetch(") && !strings.Contains(reducer, `api("`),
+		RedactionOK:       !strings.Contains(reducer, "cap_"+"0123456789abcdef") && !strings.Contains(reducer, "HIDEOUT_"+"SECRET_"),
 	}
-	if !proof.EventHandlerAppliesPayload || proof.OverviewReads != 0 || proof.AuditReads != 0 || !proof.RedactionOK || !proof.HealthRendered {
-		t.Fatalf("WebUI live proof failed: %+v\nhandler:\n%s", proof, onMessage)
+	if !proof.NoDeadEventSource || !proof.SnapshotHonest || !proof.ReducerReadOnly || !proof.RedactionOK {
+		t.Fatalf("WebUI snapshot proof failed: %+v\nreducer:\n%s", proof, reducer)
 	}
-	t.Logf("WebUI live proof: %+v", proof)
+	t.Logf("WebUI snapshot proof: %+v", proof)
 }
 
 func TestWebUILiveConsoleReducerExecutesTypedEventsWithoutFetch(t *testing.T) {

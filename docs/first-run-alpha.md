@@ -361,7 +361,7 @@ host execution.
 
 ## Operator Console
 
-Start the local daemon when you want a live local console:
+Open either live local console (both use the same persistent daemon):
 
 ```bash
 hideout daemon start

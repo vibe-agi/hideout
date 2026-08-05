@@ -197,6 +197,35 @@ func FetchStatus(ctx context.Context, storeRoot string) (Status, error) {
 	return status, nil
 }
 
+// BrowserUIURL binds a daemon-advertised, non-secret loopback base URL to the
+// current store credential. The returned credential stays in the fragment, so
+// it is not sent in the initial HTTP request. A stale or foreign status is
+// rejected before any URL is handed to a browser.
+func BrowserUIURL(storeRoot string, status Status) (string, error) {
+	if !sameSocketPath(status.Transport.Socket, socketPathFor(storeRoot)) {
+		return "", errors.New("daemon browser console status belongs to another store")
+	}
+	base := status.Transport.BrowserURL
+	parsed, err := url.ParseRequestURI(base)
+	if err != nil || parsed.Scheme != "http" || parsed.Hostname() != "127.0.0.1" ||
+		parsed.User != nil || parsed.Path != "/" || parsed.RawPath != "" ||
+		parsed.RawQuery != "" || parsed.Fragment != "" {
+		return "", errors.New("daemon browser console did not publish a valid loopback URL")
+	}
+	port, err := strconv.Atoi(parsed.Port())
+	if err != nil || port < 1 || port > 65535 {
+		return "", errors.New("daemon browser console did not publish a valid loopback port")
+	}
+	_, _, token, err := DialClient(storeRoot)
+	if err != nil {
+		return "", err
+	}
+	if token == "" {
+		return "", errors.New("daemon browser console credential is unavailable")
+	}
+	return base + "#token=" + url.QueryEscape(token), nil
+}
+
 // StopRunning requests an ordered shutdown and returns only after the exact
 // daemon instance named by the receipt no longer owns the store. A successful
 // return therefore permits an immediate restart without racing the old owner.

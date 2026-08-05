@@ -2179,6 +2179,23 @@ non-accepting `--preflight` that proves its inventory and false-green selectors
 without acquiring the TLC jar or starting TLC. `scripts/test-validation-ladder.sh`
 fails closed if any of those orderings drift.
 
+Protocol changes also close over consumers before expensive validation. The
+event-stream contract inventories every non-test production/release reference
+and separately asserts the Go, TUI, browser, and shell sequence bindings. A new
+reference, a missing authoritative snapshot marker, or a command-scoped page
+trying to attach to a route it does not serve fails the sub-second ladder. The
+daemon smoke then proves the public `hideout ui` command resolves the already
+running daemon's exact live console, exits without invalidating its URL, and
+performs the snapshot-to-SSE handshake. This prevents a focused provider test
+from passing while an older shell or user-facing entrypoint remains stale.
+
+Go package promotion and candidate unit/race lanes use `-failfast`. A passing
+run still executes the complete selected scope, while a failing package stops
+after its first useful assertion instead of spending the rest of that package's
+budget collecting non-accepting work. After fixing that assertion, rerun the
+smallest named test first; already-passing packages are retained diagnostically
+and are repeated only by the later exact acceptance run.
+
 For a same-candidate diagnostic retry, rerun amplification should be at most
 1.25 and work after the first useful diagnostic should be zero unless the run
 plan explicitly requests independent multi-failure discovery. A discarded,

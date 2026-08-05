@@ -71,6 +71,7 @@ promote an observation into a protection promise.
 | --- | --- | --- | --- | --- |
 | Optional policy that prevents an action because an explainable activity-risk rule matched | Policy and Manager | A user could mistake a detective risk finding for a firewall or execution block | Before any UI, documentation, or package claims that activity risks prevent commands, file actions, or network access | Risk findings explain observed behavior and policy status; they do not block it |
 | Tamper-resistant observation against a workload with effective guest-root control | Runtime isolation and workload observer | Guest root can stop or confuse collectors, reducing confidence if the reduction is ignored | Before supporting hostile guest root or claiming complete observation despite guest-root tampering | Guest-root tampering is outside the trusted observation boundary and must reduce coverage to Partial or Unavailable |
+| Retire the internal command-scoped Manager snapshot server and its duplicate HTML/reducer tests | Browser console and Manager maintainers | The unused internal implementation adds maintenance/test cost and could drift, but no shipped command routes users to it and it cannot attach to daemon events | Before any product entrypoint reuses `manager.StartLocalServer`, or during the next browser-console architecture change | `hideout ui` exclusively resolves the daemon-owned asset console; the internal server is snapshot-only compatibility code and is not a live-console claim |
 
 ## Feature 046 follow-on work
 

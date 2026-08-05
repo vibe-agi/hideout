@@ -112,5 +112,73 @@ if grep -Fq '[.proofs[] | select(.runtime != null)][0].runtime' \
   exit 1
 fi
 
+# Direct event-stream references are a closed, role-reviewed set. This catches
+# protocol changes in a server or client before a remote product-smoke stage can
+# discover a forgotten shell/embedded consumer after unrelated work.
+event_reference_paths="$({
+  git grep -l -F '/daemon/events' -- internal scripts || true
+} | awk '$0 !~ /_test\.go$/ && $0 != "scripts/test-validation-ladder.sh" { print }' | LC_ALL=C sort)"
+expected_event_reference_paths="$(printf '%s\n' \
+  'internal/daemon/client.go' \
+  'internal/daemon/server.go' \
+  'internal/daemon/uiweb.go' \
+  'internal/daemon/uiweb_assets/client.js' \
+  'scripts/test-daemon-smoke.sh')"
+if [ "$event_reference_paths" != "$expected_event_reference_paths" ]; then
+  printf 'validation-ladder: daemon event-stream reference inventory drifted\n' >&2
+  diff -u <(printf '%s\n' "$expected_event_reference_paths") \
+    <(printf '%s\n' "$event_reference_paths") >&2 || true
+  exit 1
+fi
+for binding in \
+  'internal/daemon/client.go:values.Set("since",' \
+  'internal/daemon/uiweb_assets/client.js:"&since="' \
+  'scripts/test-daemon-smoke.sh:&since=$sequence' \
+  'internal/app/tui.go:snapshot.Sequence)'; do
+  binding_file="${binding%%:*}"
+  binding_marker="${binding#*:}"
+  if ! grep -Fq "$binding_marker" "$binding_file"; then
+    printf 'validation-ladder: sequence binding missing: %s (%s)\n' \
+      "$binding_file" "$binding_marker" >&2
+    exit 1
+  fi
+done
+
+for fail_fast_test in \
+  'scripts/test-gate0.sh:go test -failfast -p "$go_test_parallelism" -count=1 ./...' \
+  'scripts/gates/release-candidate.sh:go test -json -failfast -p 4 -count=1 ./...' \
+  'scripts/gates/release-candidate.sh:go test -json -failfast -race -p 2 -count=1 ./...'; do
+  test_file="${fail_fast_test%%:*}"
+  test_marker="${fail_fast_test#*:}"
+  if ! grep -Fq "$test_marker" "$test_file"; then
+    printf 'validation-ladder: package fail-fast contract missing: %s\n' \
+      "$test_marker" >&2
+    exit 1
+  fi
+done
+
+if git grep -F 'manager.StartLocalServer' -- internal/app >/dev/null; then
+  printf 'validation-ladder: public UI entrypoint returned to a second Manager server\n' >&2
+  exit 1
+fi
+for ui_binding in \
+  'internal/app/app.go:resolveURL = daemon.BrowserUIURL' \
+  'internal/app/command_catalog.go:Ensures hideoutd is running' \
+  'test/e2e/webui/fixture.go:daemon.BrowserUIURL(root, d.Status())' \
+  'scripts/test-daemon-smoke.sh:"$bin" ui --no-open --print-url'; do
+  ui_file="${ui_binding%%:*}"
+  ui_marker="${ui_binding#*:}"
+  if ! grep -Fq "$ui_marker" "$ui_file"; then
+    printf 'validation-ladder: daemon-owned public UI binding missing: %s\n' \
+      "$ui_marker" >&2
+    exit 1
+  fi
+done
+if git grep -E 'hideout ui.*--(listen|ttl)' -- internal/app docs scripts \
+    ':!scripts/test-validation-ladder.sh' >/dev/null; then
+  printf 'validation-ladder: obsolete per-command UI ownership option returned\n' >&2
+  exit 1
+fi
+
 printf '%s\n' \
-  'validation-ladder: passed contracts=4 vmBoots=0 tlcRuns=0 browserRuns=0'
+  'validation-ladder: passed contracts=7 vmBoots=0 tlcRuns=0 browserRuns=0'

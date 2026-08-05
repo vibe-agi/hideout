@@ -29,7 +29,6 @@ candidate_daemon_launcher_pid=""
 legacy_daemon_launcher_pid=""
 proxy_pid=""
 http_pid=""
-ui_pid=""
 package_removed=0
 
 usage() {
@@ -192,7 +191,6 @@ stop_process() {
 cleanup() {
   local exit_status=$?
   set +e
-  stop_process "${ui_pid:-}" INT
   stop_process "${proxy_pid:-}" TERM
   stop_process "${http_pid:-}" TERM
   if [ -n "${installed_binary:-}" ] &&
@@ -1122,16 +1120,8 @@ jq -n \
     }
   ' >"$scratch/tui-pty.json"
 
-"$installed_binary" ui \
-  --listen 127.0.0.1:0 --no-open \
-  >"$scratch/ui.raw" 2>"$scratch/ui.err" &
-ui_pid=$!
-for _ in $(seq 1 200); do
-  grep -Fq 'Hideout UI: ' "$scratch/ui.raw" && break
-  kill -0 "$ui_pid" 2>/dev/null ||
-    fail "local WebUI exited before publishing"
-  sleep 0.05
-done
+"$installed_binary" ui --no-open --print-url \
+  >"$scratch/ui.raw" 2>"$scratch/ui.err"
 ui_url="$(sed -n 's/^Hideout UI: //p' "$scratch/ui.raw" | head -1)"
 case "$ui_url" in
   http://127.0.0.1:*/#token=*)
@@ -1141,10 +1131,8 @@ case "$ui_url" in
     ;;
 esac
 ui_token="${ui_url##*#token=}"
-local_api="$(
-  sed -n 's/^Local Hideout API: //p' "$scratch/ui.raw" |
-    head -1
-)"
+ui_base="${ui_url%%#*}"
+local_api="${ui_base}api/v1/overview"
 case "$local_api" in
   http://127.0.0.1:*/api/v1/overview)
     ;;
@@ -1189,8 +1177,6 @@ jq -n \
       responseBodyBytes:$bodyBytes
     }
   ' >"$scratch/web-ui.json"
-stop_process "$ui_pid" INT
-ui_pid=""
 
 "$installed_binary" daemon status \
   >"$scratch/daemon-status-after-surfaces.json"
