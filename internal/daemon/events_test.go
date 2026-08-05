@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"net"
 	"net/http"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -18,6 +19,13 @@ import (
 
 func readEventStream(t *testing.T, d *Daemon, token string, timeout time.Duration) []Event {
 	t.Helper()
+	snapshot, err := d.operatorSnapshot(
+		context.Background(),
+		manager.OperatorSnapshotQuery{ActivityLimit: 100},
+	)
+	if err != nil {
+		t.Fatalf("read authoritative event-stream sequence: %v", err)
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 	client := &http.Client{Transport: &http.Transport{
@@ -25,7 +33,13 @@ func readEventStream(t *testing.T, d *Daemon, token string, timeout time.Duratio
 			return (&net.Dialer{}).DialContext(ctx, "unix", d.Socket())
 		},
 	}}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://localhost"+eventsPath, nil)
+	req, err := http.NewRequestWithContext(
+		ctx,
+		http.MethodGet,
+		"http://localhost"+eventsPath+"?since="+
+			strconv.Itoa(snapshot.Sequence),
+		nil,
+	)
 	if err != nil {
 		t.Fatal(err)
 	}

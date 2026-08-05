@@ -2,22 +2,33 @@ package daemon
 
 import (
 	"context"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/vibe-agi/hideout/internal/liveconsole"
+	"github.com/vibe-agi/hideout/internal/manager"
 )
 
 func TestSubscribeEventsDeliversTypedEvents(t *testing.T) {
 	d := startTestDaemon(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	ch, err := SubscribeEvents(ctx, d.store.Root)
+	snapshot, err := FetchOperatorSnapshot(
+		ctx,
+		d.store.Root,
+		manager.OperatorSnapshotQuery{
+			ActivityLimit: manager.DefaultOperatorActivityLimit,
+		},
+	)
+	if err != nil {
+		t.Fatalf("FetchOperatorSnapshot: %v", err)
+	}
+	ch, err := SubscribeEvents(ctx, d.store.Root, snapshot.Sequence)
 	if err != nil {
 		t.Fatalf("SubscribeEvents: %v", err)
 	}
-	time.Sleep(100 * time.Millisecond) // ensure the subscription is attached
 	d.bus.OperationEvent(liveconsole.KindEnvironment, "complete", map[string]any{
 		"id":      "env_live",
 		"profile": "default",
@@ -51,9 +62,38 @@ func TestSubscribeEventsDeliversTypedEvents(t *testing.T) {
 	}
 }
 
+func TestSubscribeEventsRejectsStaleSnapshotSequence(t *testing.T) {
+	d := startTestDaemon(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	snapshot, err := FetchOperatorSnapshot(
+		ctx,
+		d.store.Root,
+		manager.OperatorSnapshotQuery{
+			ActivityLimit: manager.DefaultOperatorActivityLimit,
+		},
+	)
+	if err != nil {
+		t.Fatalf("FetchOperatorSnapshot: %v", err)
+	}
+	d.bus.OperationEvent(liveconsole.KindEnvironment, "complete", map[string]any{
+		"id": "env_between_seed_and_stream",
+	})
+	if _, err := SubscribeEvents(
+		ctx,
+		d.store.Root,
+		snapshot.Sequence,
+	); err == nil || !strings.Contains(err.Error(), "409 Conflict") {
+		t.Fatalf("stale snapshot stream error=%v want 409 Conflict", err)
+	}
+	if got := browserSubscriberCount(d); got != 0 {
+		t.Fatalf("stale TUI stream registered %d subscribers", got)
+	}
+}
+
 func TestSubscribeEventsNoDaemon(t *testing.T) {
 	store := testStore(t)
-	if _, err := SubscribeEvents(context.Background(), store.Root); err == nil {
+	if _, err := SubscribeEvents(context.Background(), store.Root, 0); err == nil {
 		t.Fatal("SubscribeEvents should error when no daemon is running")
 	}
 }

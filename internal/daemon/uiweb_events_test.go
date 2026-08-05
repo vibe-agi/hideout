@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -31,7 +32,7 @@ func TestBrowserSSEGapIsStickyReadOnlyUntilAuthoritativeReseed(t *testing.T) {
 		t.Fatalf("authoritative browser seed is unexpectedly read-only: %+v", state)
 	}
 
-	stream := openBrowserSSE(t, d, d.Token())
+	stream := openBrowserSSE(t, d, d.Token(), snapshot.Sequence)
 	defer stream.Close()
 	waitForBrowserSubscriberCount(t, d, 1)
 	firstID := "browser.gap.first"
@@ -90,17 +91,63 @@ func TestBrowserSSEGapIsStickyReadOnlyUntilAuthoritativeReseed(t *testing.T) {
 	}
 }
 
+func TestBrowserSSERequiresCurrentAuthoritativeSnapshotSequence(t *testing.T) {
+	d := startTestDaemon(t)
+	client := &http.Client{Timeout: 3 * time.Second}
+	base := strings.TrimSuffix(strings.Split(d.UIURL(), "#")[0], "/")
+	for _, test := range []struct {
+		name  string
+		query string
+	}{
+		{name: "missing", query: ""},
+		{name: "negative", query: "?since=-1"},
+		{name: "malformed", query: "?since=not-a-sequence"},
+		{name: "duplicate", query: "?since=0&since=0"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if code := browserAuthedStatus(
+				t,
+				base+eventsPath+test.query,
+				d.Token(),
+			); code != http.StatusBadRequest {
+				t.Fatalf("invalid browser SSE sequence status=%d want 400", code)
+			}
+		})
+	}
+
+	snapshot := browserOperatorSnapshot(t, client, d)
+	if err := d.bus.publishCapabilityProjection(
+		browserCapabilityProjection("browser.handshake.gap"),
+	); err != nil {
+		t.Fatal(err)
+	}
+	if code := browserAuthedStatus(
+		t,
+		base+eventsPath+"?since="+strconv.Itoa(snapshot.Sequence),
+		d.Token(),
+	); code != http.StatusConflict {
+		t.Fatalf("stale browser SSE sequence status=%d want 409", code)
+	}
+	if got := browserSubscriberCount(d); got != 0 {
+		t.Fatalf("stale browser SSE registered %d subscribers", got)
+	}
+}
+
 func TestBrowserSSESlowSubscriberIsTerminatedWithoutBlockingPublisher(
 	t *testing.T,
 ) {
 	d := startTestDaemon(t)
+	client := &http.Client{Timeout: 3 * time.Second}
+	snapshot := browserOperatorSnapshot(t, client, d)
 	writer := newBlockingBrowserSSEWriter()
+	t.Cleanup(writer.releaseHeader)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	request, err := http.NewRequestWithContext(
 		ctx,
 		http.MethodGet,
-		"http://localhost"+eventsPath,
+		"http://localhost"+eventsPath+"?since="+
+			strconv.Itoa(snapshot.Sequence),
 		nil,
 	)
 	if err != nil {
@@ -118,7 +165,13 @@ func TestBrowserSSESlowSubscriberIsTerminatedWithoutBlockingPublisher(
 	case <-time.After(time.Second):
 		t.Fatal("browser SSE response headers were not flushed")
 	}
-	waitForBrowserSubscriberCount(t, d, 1)
+	if got := browserSubscriberCount(d); got != 1 {
+		t.Fatalf(
+			"browser SSE opened before atomic subscription: subscribers=%d want=1",
+			got,
+		)
+	}
+	writer.releaseHeader()
 
 	if err := d.bus.publishCapabilityProjection(
 		browserCapabilityProjection("browser.slow.first"),
@@ -186,7 +239,7 @@ func TestBrowserSSECredentialRotationExpiresStreamAndRequiresFreshSeed(
 	if err != nil {
 		t.Fatal(err)
 	}
-	stream := openBrowserSSE(t, d, staleToken)
+	stream := openBrowserSSE(t, d, staleToken, snapshot.Sequence)
 	defer stream.Close()
 	waitForBrowserSubscriberCount(t, d, 1)
 
@@ -262,7 +315,12 @@ func TestBrowserSSECredentialRotationExpiresStreamAndRequiresFreshSeed(
 		t.Fatalf("fresh browser seed did not restore authority: %+v", freshSnapshot)
 	}
 
-	freshStream := openBrowserSSE(t, d, freshToken)
+	freshStream := openBrowserSSE(
+		t,
+		d,
+		freshToken,
+		freshSnapshot.Sequence,
+	)
 	defer freshStream.Close()
 	waitForBrowserSubscriberCount(t, d, 1)
 	const freshEventID = "browser.rotation.fresh"
@@ -323,7 +381,13 @@ func TestBrowserSSEDaemonRestartRejectsOldInstanceUntilReseed(t *testing.T) {
 		t.Fatalf("pre-restart browser credential status=%d want 401", code)
 	}
 
-	stream := openBrowserSSE(t, second, second.Token())
+	secondStreamSnapshot := browserOperatorSnapshot(t, client, second)
+	stream := openBrowserSSE(
+		t,
+		second,
+		second.Token(),
+		secondStreamSnapshot.Sequence,
+	)
 	defer stream.Close()
 	waitForBrowserSubscriberCount(t, second, 1)
 	const restartedEventID = "browser.restart"
@@ -378,6 +442,7 @@ func openBrowserSSE(
 	t *testing.T,
 	d *Daemon,
 	token string,
+	sequence int,
 ) *browserSSEStream {
 	t.Helper()
 	base := strings.TrimSuffix(strings.Split(d.UIURL(), "#")[0], "/")
@@ -385,7 +450,8 @@ func openBrowserSSE(
 	request, err := http.NewRequestWithContext(
 		ctx,
 		http.MethodGet,
-		base+eventsPath+"?token="+url.QueryEscape(token),
+		base+eventsPath+"?token="+url.QueryEscape(token)+
+			"&since="+strconv.Itoa(sequence),
 		nil,
 	)
 	if err != nil {
@@ -580,19 +646,22 @@ type blockingBrowserSSEWriter struct {
 	mu   sync.Mutex
 	body bytes.Buffer
 
-	headerFlushed     chan struct{}
-	firstEventStarted chan struct{}
-	releaseFirstEvent chan struct{}
-	flushOnce         sync.Once
-	eventOnce         sync.Once
+	headerFlushed      chan struct{}
+	releaseHeaderFlush chan struct{}
+	firstEventStarted  chan struct{}
+	releaseFirstEvent  chan struct{}
+	flushOnce          sync.Once
+	headerReleaseOnce  sync.Once
+	eventOnce          sync.Once
 }
 
 func newBlockingBrowserSSEWriter() *blockingBrowserSSEWriter {
 	return &blockingBrowserSSEWriter{
-		header:            make(http.Header),
-		headerFlushed:     make(chan struct{}),
-		firstEventStarted: make(chan struct{}),
-		releaseFirstEvent: make(chan struct{}),
+		header:             make(http.Header),
+		headerFlushed:      make(chan struct{}),
+		releaseHeaderFlush: make(chan struct{}),
+		firstEventStarted:  make(chan struct{}),
+		releaseFirstEvent:  make(chan struct{}),
 	}
 }
 
@@ -621,7 +690,14 @@ func (writer *blockingBrowserSSEWriter) Write(data []byte) (int, error) {
 }
 
 func (writer *blockingBrowserSSEWriter) Flush() {
-	writer.flushOnce.Do(func() { close(writer.headerFlushed) })
+	writer.flushOnce.Do(func() {
+		close(writer.headerFlushed)
+		<-writer.releaseHeaderFlush
+	})
+}
+
+func (writer *blockingBrowserSSEWriter) releaseHeader() {
+	writer.headerReleaseOnce.Do(func() { close(writer.releaseHeaderFlush) })
 }
 
 func (writer *blockingBrowserSSEWriter) Bytes() []byte {

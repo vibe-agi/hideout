@@ -4,10 +4,12 @@ import (
 	"context"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/vibe-agi/hideout/internal/manager"
 	"github.com/vibe-agi/hideout/internal/operatorhelp"
 )
 
@@ -69,6 +71,7 @@ func TestLoopbackUIServesEventConsumingWebUI(t *testing.T) {
 	for _, want := range []string{
 		"new EventSource(",
 		`"/daemon/events?token="`,
+		`"&since="`,
 		"handlers.event(JSON.parse(message.data))",
 	} {
 		if !strings.Contains(clientJS, want) {
@@ -107,7 +110,13 @@ func TestLoopbackUIServesEventConsumingWebUI(t *testing.T) {
 
 	// The event endpoint accepts a browser query-param token (EventSource cannot set
 	// headers) and refuses a wrong one.
-	code := getStatus(t, client, base+"/daemon/events?token="+d.Token())
+	snapshot := browserOperatorSnapshot(t, client, d)
+	code := getStatus(
+		t,
+		client,
+		base+"/daemon/events?token="+d.Token()+
+			"&since="+strconv.Itoa(snapshot.Sequence),
+	)
 	if code != http.StatusOK {
 		t.Fatalf("/daemon/events?token=<valid>: want 200, got %d", code)
 	}
@@ -284,11 +293,20 @@ func TestSubscribeEventsDeliversTypedRefreshEvents(t *testing.T) {
 	d := startTestDaemon(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	ch, err := SubscribeEvents(ctx, d.store.Root)
+	snapshot, err := FetchOperatorSnapshot(
+		ctx,
+		d.store.Root,
+		manager.OperatorSnapshotQuery{
+			ActivityLimit: manager.DefaultOperatorActivityLimit,
+		},
+	)
+	if err != nil {
+		t.Fatalf("FetchOperatorSnapshot: %v", err)
+	}
+	ch, err := SubscribeEvents(ctx, d.store.Root, snapshot.Sequence)
 	if err != nil {
 		t.Fatalf("SubscribeEvents: %v", err)
 	}
-	time.Sleep(100 * time.Millisecond) // ensure the subscription is attached
 	d.bus.OperationEvent("environment", "complete", map[string]any{"action": "clean"})
 	select {
 	case ev, ok := <-ch:

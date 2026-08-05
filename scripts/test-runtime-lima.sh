@@ -179,12 +179,13 @@ if ! HIDEOUT_STORE_ROOT="$drift_store" LIMA_HOME="$drift_lima_home" "$hideout" r
 fi
 grep -q '^runtime_durable_prefix=passed$' "$tmp/durable-restart.out"
 echo "runtime_durable_prefix=passed"
-baseline_id="$(jq -r '[.contract.observations[] | select(.class == "baseline")][0].id // empty' "$tmp/inspect.json")"
-baseline_command="$(jq -r '[.contract.observations[] | select(.class == "baseline")][0].command // empty' "$tmp/inspect.json")"
-if [ -z "$baseline_id" ] || [ -z "$baseline_command" ]; then
-  echo "runtime-lima: promoted contract has no baseline observation for drift proof" >&2
-  exit 1
-fi
+baseline_id="baseline.git"
+baseline_command="$(jq -er --arg id "$baseline_id" '
+  [.contract.observations[] | select(.id == $id and .class == "baseline")] |
+  if length == 1 then .[0].command
+  else error("promoted contract requires one stable baseline.git observation")
+  end
+' "$tmp/inspect.json")"
 if ! HIDEOUT_STORE_ROOT="$drift_store" LIMA_HOME="$drift_lima_home" "$hideout" run \
   --profile runtime-drift --env runtime-drift --workspace "$drift_workspace" -- \
   sh -eu -c '

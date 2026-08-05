@@ -64,7 +64,7 @@ func (a app) runTUICommand(options tuiOptions) error {
 		configProvider = configurationClient
 		lifecycleProvider = configurationClient
 		migrationProvider = configurationClient
-		events, err = daemon.SubscribeEvents(ctx, store.Root)
+		events, err = daemon.SubscribeEvents(ctx, store.Root, snapshot.Sequence)
 		if err != nil {
 			state.ReadOnly = true
 			state.RequiresReseed = true

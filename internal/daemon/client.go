@@ -41,16 +41,30 @@ func DialClient(storeRoot string) (client *http.Client, baseURL, token string, e
 	return c, "http://localhost", tok, nil
 }
 
-// SubscribeEvents connects to a running daemon's event stream and returns typed
-// live-console events. The channel closes when the stream ends (daemon stop /
-// credential expiry). Returns an error if no daemon is reachable, so callers can
-// fall back to their daemon-less behavior.
-func SubscribeEvents(ctx context.Context, storeRoot string) (<-chan liveconsole.Event, error) {
+// SubscribeEvents connects to the event stream at the exact sequence of the
+// authoritative snapshot already held by the caller. Registration and sequence
+// validation are atomic on the server; a conflict requires a fresh snapshot.
+// The channel closes when the stream ends (daemon stop / credential expiry).
+func SubscribeEvents(
+	ctx context.Context,
+	storeRoot string,
+	since int,
+) (<-chan liveconsole.Event, error) {
+	if since < 0 {
+		return nil, errors.New("daemon events: snapshot sequence must be non-negative")
+	}
 	client, base, token, err := DialClient(storeRoot)
 	if err != nil {
 		return nil, err
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, base+"/daemon/events", nil)
+	values := url.Values{}
+	values.Set("since", strconv.Itoa(since))
+	req, err := http.NewRequestWithContext(
+		ctx,
+		http.MethodGet,
+		base+"/daemon/events?"+values.Encode(),
+		nil,
+	)
 	if err != nil {
 		return nil, err
 	}

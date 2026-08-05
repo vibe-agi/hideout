@@ -356,6 +356,9 @@ func TestBrowserEventV2ReducerFailsClosedUntilAuthoritativeReseed(t *testing.T) 
 		GenericTerminal      string `json:"genericTerminal"`
 		CredentialTerminal   string `json:"credentialTerminal"`
 		OldStillStale        bool   `json:"oldStillStale"`
+		ReseedBeforeConnect  bool   `json:"reseedBeforeConnect"`
+		ReseedWaitingHealth  string `json:"reseedWaitingHealth"`
+		ReseedConnected      bool   `json:"reseedConnected"`
 		ReseedCanMutate      bool   `json:"reseedCanMutate"`
 		ReseedSequence       int    `json:"reseedSequence"`
 		ReseedRevision       int    `json:"reseedRevision"`
@@ -442,6 +445,9 @@ const fresh = snapshot(6);
 fresh.profiles[0].revision = 7;
 const reseeded = State.reseed(gapState,fresh);
 fresh.profiles[0].revision = 99;
+const reseedBeforeConnect = State.canMutate(reseeded);
+const reseedWaitingHealth = reseeded.health.state;
+const reseedConnected = State.streamConnected(reseeded);
 
 const limited = State.seed(snapshot(4));
 limited.snapshot.risks = Array.from({length:256},(_,index) => ({
@@ -486,6 +492,7 @@ JSON.stringify({
   genericTerminal:genericTerminalState.health.state,
   credentialTerminal:credentialTerminalState.health.state,
   oldStillStale:gapState.requiresReseed,
+  reseedBeforeConnect,reseedWaitingHealth,reseedConnected,
   reseedCanMutate:State.canMutate(reseeded),
   reseedSequence:reseeded.lastSeq,
   reseedRevision:reseeded.snapshot.profiles[0].revision,
@@ -519,7 +526,9 @@ JSON.stringify({
 		proof.CredentialTerminal != "credential-expired" {
 		t.Fatalf("terminal reason classification mismatch: %+v", proof)
 	}
-	if !proof.OldStillStale || !proof.ReseedCanMutate ||
+	if !proof.OldStillStale || proof.ReseedBeforeConnect ||
+		proof.ReseedWaitingHealth != "seeding" || !proof.ReseedConnected ||
+		!proof.ReseedCanMutate ||
 		proof.ReseedSequence != 6 || proof.ReseedRevision != 7 ||
 		proof.ReseedEventViews != 0 {
 		t.Fatalf("authoritative re-seed did not replace state: %+v", proof)

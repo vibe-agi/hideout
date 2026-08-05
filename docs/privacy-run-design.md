@@ -4329,7 +4329,7 @@ POST /api/v1/profile/hostfs/plan
 POST /api/v1/profile/hostfs/apply
 POST /api/v1/profile/env/plan
 POST /api/v1/profile/env/apply
-GET /daemon/events
+GET /daemon/events?since=<operator-snapshot-sequence>
 ```
 
 Every local HTTP response uses a stable envelope:

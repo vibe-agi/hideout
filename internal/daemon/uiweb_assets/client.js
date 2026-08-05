@@ -382,13 +382,18 @@
    *   error:(reason:string)=>void,
    *   open?:()=>void
    * }} handlers
+   * @param {number} since
    */
-  function events(handlers) {
+  function events(handlers, since) {
     if (!token) throw new Error("operator credential is missing");
+    if (!Number.isSafeInteger(since) || since < 0) {
+      throw new Error("event stream snapshot sequence is invalid");
+    }
     const streamEpoch = credentialEpoch;
     const streamToken = token;
     const source = new EventSource(
-      "/daemon/events?token=" + encodeURIComponent(streamToken)
+      "/daemon/events?token=" + encodeURIComponent(streamToken) +
+      "&since=" + encodeURIComponent(String(since))
     );
     let closed = false;
     const close = () => {
@@ -397,6 +402,7 @@
       source.close();
     };
     source.onopen = function() {
+      if (closed) return;
       if (streamEpoch !== credentialEpoch) {
         close();
         return;
@@ -404,6 +410,7 @@
       if (handlers.open) handlers.open();
     };
     source.onmessage = function(message) {
+      if (closed) return;
       if (streamEpoch !== credentialEpoch) {
         close();
         return;

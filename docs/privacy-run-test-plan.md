@@ -2167,6 +2167,26 @@ does invalidate downstream evidence. No result is described as passing merely
 because its producer exited zero; the evidence judge for that layer must also
 pass.
 
+The validation ladder is an executable release contract, not a suggested
+ordering. A deterministic harness, inventory, schema, or semantic-judge defect
+must produce its first useful diagnostic within 60 seconds and before any VM,
+TLC state exploration, real browser, full race suite, or bulk migration I/O.
+Gate 0 runs UI acceptance immediately after its release contracts and before
+the longer product-smoke stage. The local aggregate runs schema, static,
+release-blocker, generated-output, and dependency checks before unit, race,
+fuzz/property, migration, or mutation work. The formal gate exposes a
+non-accepting `--preflight` that proves its inventory and false-green selectors
+without acquiring the TLC jar or starting TLC. `scripts/test-validation-ladder.sh`
+fails closed if any of those orderings drift.
+
+For a same-candidate diagnostic retry, rerun amplification should be at most
+1.25 and work after the first useful diagnostic should be zero unless the run
+plan explicitly requests independent multi-failure discovery. A discarded,
+unknown, or unmappable process/session receipt is failed evidence, never an
+implicit pass. A complete release-acceptance run remains from-scratch unless an
+explicit digest-bound checkpoint authenticates reuse; this exception does not
+authorize re-running unaffected performance evidence.
+
 Track process quality alongside product quality: time to first useful
 diagnostic, work after that diagnostic, VM boots before failure, repeated
 logical/encoded bytes or already-passing lanes, rerun amplification (`repeated

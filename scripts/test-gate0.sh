@@ -67,6 +67,7 @@ gate0_release_preflight() {
     printf 'gate0: Lima version=%s, want=2.2.0\n' "$lima_version" >&2
     return 1
   }
+  scripts/test-validation-ladder.sh
   printf \
     'gate0: preflight=passed go=%s java=%s javaArch=%s hostArch=%s shellcheck=%s markdownlint=%s lima=%s vmBoots=0\n' \
     "$actual_go_version" "$HIDEOUT_JAVA_VERSION" "$HIDEOUT_JAVA_ARCH" \
@@ -447,6 +448,15 @@ if grep -R --fixed-strings "$release_secret" "$release_tmp" >/dev/null 2>&1; the
 fi
 rm -rf "$release_tmp"
 
+gate0_begin_stage ui-acceptance
+# Exercise the real browser/PTY proof as soon as its static release contracts
+# are known-good. Hosts without those prerequisites retain explicit not-run
+# evidence; CI provisions Chrome, so a browser regression fails before the
+# longer product-smoke stage.
+ui_e2e_tmp="$(mktemp -d "${TMPDIR:-/tmp}/hideout-ui-e2e-gate0.XXXXXX")"
+scripts/test-ui-e2e.sh --all --out "$ui_e2e_tmp"
+rm -rf "$ui_e2e_tmp"
+
 gate0_begin_stage product-smokes
 # Isolation-evidence machine-readable contract (no Lima): per-gate emission,
 # manifest aggregation shape, and release-dogfood schema for isolationGates /
@@ -621,13 +631,6 @@ scripts/package-local.sh --out "$first_run_tmp/hideout.tar.gz" >"$first_run_tmp/
 scripts/test-first-run-e2e.sh --local-fast --package "$first_run_tmp/hideout.tar.gz" --out "$first_run_tmp/022"
 scripts/test-first-run-e2e.sh --setup-local-fast --package "$first_run_tmp/hideout.tar.gz" --out "$first_run_tmp/038"
 rm -rf "$first_run_tmp"
-
-# UI E2E product-hardening evidence (021): schema and not-run semantics only in
-# Gate 0. Targeted browser/PTY completion requires --require-executed on a host
-# with those prerequisites.
-ui_e2e_tmp="$(mktemp -d "${TMPDIR:-/tmp}/hideout-ui-e2e-gate0.XXXXXX")"
-scripts/test-ui-e2e.sh --all --out "$ui_e2e_tmp"
-rm -rf "$ui_e2e_tmp"
 
 # Concurrent run sessions (034): schemas, ownership/transition models, shared
 # service identity, namespace command construction, and Manager wiring. Real

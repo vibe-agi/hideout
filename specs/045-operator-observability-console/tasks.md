@@ -397,6 +397,10 @@ handoff.
 - [x] T185 Bind the release's sorted feature inventory from validated 045/046 proof manifests through evidence, public manifest, promotion, receipt-derived docs, and Homebrew truth; reject stale candidate-specific STATUS claims before publication
 - [x] T186 Split the combined workload model into full safety and bounded liveness configurations without removing owner/process interleavings, stream TLC progress, bind requested/actual heap, update exact inventory consumers, and prove both configurations independently before one exact remote acceptance rerun
 - [x] T187 Derive the release-evidence preflight's formal counts from the checked-in inventory/configs so stale producer and consumer literals fail before candidate work
+- [x] T188 Make formal false-green judge mutations stable-ID-bound and prove their reordered selectors before any TLC execution
+- [x] T189 Close the browser snapshot-to-SSE event-loss window with an atomic sequence handshake and keep the console read-only until the bound stream opens
+- [x] T190 Turn validation cost/dependency order into an executable ladder, move UI acceptance before product smokes, and expose a no-TLC formal judge preflight with measurable diagnostic and rerun-efficiency targets
+- [x] T191 Replace positional runtime/candidate evidence selection with one uniqueness-enforcing binding helper, a stable baseline identity, and positive/negative selector fixtures
 
 ---
 

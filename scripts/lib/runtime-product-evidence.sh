@@ -70,6 +70,21 @@ runtime_evidence_binding() {
       buildCommit:$buildCommit,buildDirty:$buildDirty}'
 }
 
+runtime_evidence_unique_binding() {
+  local manifest="$1"
+  jq -ce '
+    [.proofs[] | select(.runtime != null) | .runtime] as $bindings |
+    ($bindings | unique) as $unique |
+    if ($bindings | length) == 0 then
+      error("runtime evidence has no runtime binding")
+    elif ($unique | length) != 1 then
+      error("runtime evidence has conflicting runtime bindings")
+    else
+      $unique[0]
+    end
+  ' "$manifest"
+}
+
 runtime_evidence_add_proof() {
   local proofs="$1" registry="$2" proof_id="$3" mode="$4" evidence_class="$5"
   local summary="$6" artifact_path="$7" artifact_sha="$8" runtime_json="${9:-null}"

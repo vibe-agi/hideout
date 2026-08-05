@@ -31,9 +31,12 @@ The steady-state model is daemon-first and implemented (see [STATUS.md](STATUS.m
 `hideoutd` hosts the Manager API over a store-rooted socket plus a live, redacted
 event stream, and also serves the WebUI over a tokened loopback UI transport. The
 WebUI panels open an `EventSource` on `/daemon/events` and the TUI consumes the
-same stream via `daemon.SubscribeEvents`, so both surfaces apply typed event
-payloads to a seeded live-console reducer with no steady-state overview/audit
-polling while the stream is healthy. Typed run/session and cleanup rows are live
+same stream via `daemon.SubscribeEvents`. Both bind the authoritative snapshot
+sequence to subscription; the daemon either registers the stream before HTTP
+200 or requires a fresh snapshot, and the WebUI stays read-only until open.
+Both surfaces then apply typed event payloads to a seeded live-console reducer
+with no steady-state overview/audit polling while the stream is healthy. Typed
+run/session and cleanup rows are live
 for daemon-mediated Manager operations; standalone CLI invocations still surface
 through audit-tail events unless they go through the daemon. Environment live
 events currently cover the Manager stop/clean lifecycle. Both surfaces fall back

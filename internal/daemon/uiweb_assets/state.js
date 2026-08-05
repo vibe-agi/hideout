@@ -98,6 +98,7 @@
    *   lastSeq:number,
    *   profileScope:string,
    *   health:{state:string,reason:string},
+   *   streamReadyHealth:string,
    *   readOnly:boolean,
    *   requiresReseed:boolean,
    *   diagnostics:Array<string>
@@ -526,6 +527,18 @@
     const snapshot = clone(validateSnapshot(input));
     initializeEventViews(snapshot);
     const live = LIVE_HEALTH.has(snapshot.streamHealth.state);
+    const streamReadyHealth = live ? snapshot.streamHealth.state : "";
+    const health = live ? {
+      state: "seeding",
+      reason: "waiting for authenticated event stream"
+    } : {
+      state: snapshot.streamHealth.state,
+      reason: snapshot.streamHealth.reason || ""
+    };
+    snapshot.streamHealth = {
+      state: health.state,
+      ...(health.reason ? {reason: health.reason} : {})
+    };
     return {
       version: SNAPSHOT_SCHEMA,
       snapshot,
@@ -533,11 +546,9 @@
       credentialGeneration: snapshot.credentialGeneration,
       lastSeq: snapshot.sequence,
       profileScope,
-      health: {
-        state: snapshot.streamHealth.state,
-        reason: snapshot.streamHealth.reason || ""
-      },
-      readOnly: !live,
+      health,
+      streamReadyHealth,
+      readOnly: true,
       requiresReseed: false,
       diagnostics: []
     };
@@ -590,6 +601,7 @@
       lastSeq: 0,
       profileScope: "",
       health: {state: health, reason},
+      streamReadyHealth: "",
       readOnly: true,
       requiresReseed: true,
       diagnostics: reason ? [reason] : []
@@ -643,6 +655,27 @@
     appendDiagnostic(state, message);
     state.readOnly = true;
     state.requiresReseed = true;
+    state.streamReadyHealth = "";
+  }
+
+  /**
+   * Marks the snapshot mutable only after the sequence-bound EventSource has
+   * opened. The server registers that subscriber before flushing HTTP 200, so
+   * this transition cannot race a non-durable event.
+   *
+   * @param {ConsoleState} state
+   * @returns {boolean}
+   */
+  function streamConnected(state) {
+    if (!state || state.requiresReseed || state.health.state !== "seeding" ||
+        !LIVE_HEALTH.has(state.streamReadyHealth)) {
+      return false;
+    }
+    const health = state.streamReadyHealth;
+    state.streamReadyHealth = "";
+    setHealth(state, health, "");
+    state.readOnly = false;
+    return true;
   }
 
   /** @param {ConsoleState} state @param {string=} reason */
@@ -1114,6 +1147,9 @@
 
     state.lastSeq = event.seq;
     state.snapshot.sequence = event.seq;
+    state.streamReadyHealth = "";
+    state.readOnly = false;
+    state.requiresReseed = false;
     setHealth(state, "live", "");
     if (!KNOWN_KINDS.has(event.kind)) {
       appendDiagnostic(state, `ignored optional event kind ${event.kind}`);
@@ -1139,6 +1175,7 @@
     unavailable,
     beginReseed,
     expireCredential,
+    streamConnected,
     applyEvent,
     canMutate,
     disconnect

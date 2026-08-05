@@ -326,6 +326,25 @@ func (b *eventBus) subscribe(buffer int) *subscriber {
 	return s
 }
 
+// subscribeAt atomically proves that an authoritative snapshot sequence is
+// still current and registers the subscriber before releasing the sequence
+// lock. A false result means at least one non-durable event was published after
+// the snapshot (or the bus closed), so the caller must take a fresh snapshot.
+func (b *eventBus) subscribeAt(sequence, buffer int) (*subscriber, bool) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.closed || sequence < 0 || b.seq != sequence {
+		return nil, false
+	}
+	s := &subscriber{
+		ch:   make(chan Event, buffer),
+		done: make(chan struct{}),
+		seq:  sequence,
+	}
+	b.subs[s] = struct{}{}
+	return s, true
+}
+
 func (b *eventBus) unsubscribe(s *subscriber) {
 	b.mu.Lock()
 	delete(b.subs, s)

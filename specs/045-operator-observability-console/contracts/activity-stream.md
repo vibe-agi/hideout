@@ -150,13 +150,18 @@ coverage interval degrades, and only a non-sensitive failure code is audited.
 
 ### Endpoint
 
-`GET /daemon/events` with the existing operator authorization. Browser
-EventSource may use the existing short-lived query credential. Responses are
+`GET /daemon/events?since=<snapshot.sequence>` with the existing operator
+authorization. Exactly one non-negative `since` value is required. Browser
+EventSource may also use the existing short-lived query credential. A malformed
+or missing sequence returns `400`; a sequence that is no longer current returns
+`409` and requires a new authoritative snapshot. Successful responses are
 `text/event-stream`, `Cache-Control: no-store`.
 
 The stream has no durable replay. Clients seed through
-`GET /api/v1/operator/snapshot` and then subscribe. If an event is missed they
-must fetch a new snapshot.
+`GET /api/v1/operator/snapshot` and subscribe with that exact sequence. The
+daemon checks the sequence and registers the subscriber under the event-bus
+lock before opening HTTP 200. Clients remain read-only until that stream opens.
+If an event is missed they must fetch a new snapshot.
 
 ### Event v2
 
@@ -237,7 +242,7 @@ Required contract fixtures:
 - ring/control-queue overflow and heartbeat counter mismatch;
 - managed secret in argv, URI userinfo, split sensitive flag, query parameter,
   and control token;
-- SSE event gap, daemon instance change, slow subscriber, credential rotation,
-  and unknown optional kind;
+- SSE snapshot/subscribe conflict, event gap, daemon instance change, slow
+  subscriber, credential rotation, and unknown optional kind;
 - target attempt to write observer transport or escape cgroup;
 - daemon crash between activity segment frame and manifest update.

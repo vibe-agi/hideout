@@ -23,12 +23,14 @@ inventory_schema="$root/schemas/formal-inventory.schema.json"
 verifier="$root/scripts/gates/formal-verify.sh"
 java_toolchain="$root/scripts/lib/java-toolchain.sh"
 selected_configuration=""
+preflight_only=0
 tlc_workers="${HIDEOUT_TLC_WORKERS:-1}"
 tlc_max_heap_mb="${HIDEOUT_TLC_MAX_HEAP_MB:-3072}"
+judge_mutation_target="AttachReservation"
 
 usage() {
   printf '%s\n' \
-    "Usage: scripts/gates/formal.sh [--out DIR] [--workers N]" \
+    "Usage: scripts/gates/formal.sh [--out DIR] [--workers N] [--preflight]" \
     "       scripts/gates/formal.sh --configuration ID [--workers N]" \
     "" \
     "Runs every repository TLC configuration, every inventoried Go formal/" \
@@ -37,6 +39,8 @@ usage() {
     "" \
     "  --configuration ID  Run one inventoried TLC model for diagnosis only." \
     "                      This never emits full formal acceptance evidence." \
+    "  --preflight         Validate inventory and false-green judge selectors" \
+    "                      without acquiring the TLC jar or starting TLC." \
     "  --workers N         Use 1..64 TLC workers (default: 1, or" \
     "                      HIDEOUT_TLC_WORKERS when set)." \
     "" \
@@ -62,6 +66,10 @@ while [ "$#" -gt 0 ]; do
       selected_configuration="$2"
       shift 2
       ;;
+    --preflight)
+      preflight_only=1
+      shift
+      ;;
     --workers)
       if [ "$#" -lt 2 ] || [ -z "${2:-}" ]; then
         printf 'formal-gate: --workers requires a number\n' >&2
@@ -81,6 +89,11 @@ while [ "$#" -gt 0 ]; do
       ;;
   esac
 done
+
+if [ "$preflight_only" -eq 1 ] && [ -n "$selected_configuration" ]; then
+  printf 'formal-gate: --preflight and --configuration are mutually exclusive\n' >&2
+  exit 2
+fi
 
 case "$tlc_workers" in
   '' | *[!0-9]* | 0 | 0*)
@@ -144,6 +157,137 @@ safe_numeric_stat() {
   printf '%s\n' "$value"
 }
 
+write_judge_mutation_fixture() {
+  local mutation="$1" source="$2" destination="$3"
+  case "$mutation" in
+    omit-required-configuration)
+      jq --arg target "$judge_mutation_target" \
+        '.configurations |= map(select(.id != $target))' \
+        "$source" >"$destination"
+      ;;
+    add-counterexample)
+      jq --arg target "$judge_mutation_target" '
+        (.configurations[] |
+          select(.id == $target) |
+          .counterexamples) = 1
+      ' "$source" >"$destination"
+      ;;
+    stale-model-digest)
+      jq --arg target "$judge_mutation_target" '
+        (.configurations[] |
+          select(.id == $target) |
+          .moduleSHA256) = ("0" * 64)
+      ' "$source" >"$destination"
+      ;;
+    worker-count-mismatch)
+      jq '
+        (if .tools.tlcWorkers == 1 then 2 else 1 end) as $forged |
+        .tools.tlcWorkers = $forged |
+        .configurations |= map(.workers = $forged)
+      ' "$source" >"$destination"
+      ;;
+    *)
+      printf 'formal-gate: unknown judge mutation: %s\n' "$mutation" >&2
+      return 2
+      ;;
+  esac
+}
+
+judge_mutation_diagnostic() {
+  case "$1" in
+    omit-required-configuration)
+      printf '%s\n' 'formal-verify: configuration-set-mismatch'
+      ;;
+    add-counterexample)
+      printf 'formal-verify: counterexamples-present:%s\n' \
+        "$judge_mutation_target"
+      ;;
+    stale-model-digest)
+      printf 'formal-verify: model-digest-mismatch:%s\n' \
+        "$judge_mutation_target"
+      ;;
+    worker-count-mismatch)
+      printf 'formal-verify: tlc-worker-marker-mismatch:%s\n' \
+        "$judge_mutation_target"
+      ;;
+    *) return 2 ;;
+  esac
+}
+
+judge_mutation_preflight() {
+  local source fixture mutation diagnostic
+  source="$scratch/judge-mutation-contract.json"
+  jq -n --arg target "$judge_mutation_target" '
+    {
+      tools:{tlcWorkers:1},
+      configurations:[
+        {
+          id:"WorkloadObservation",
+          counterexamples:0,
+          moduleSHA256:("a" * 64),
+          workers:1
+        },
+        {
+          id:$target,
+          counterexamples:0,
+          moduleSHA256:("b" * 64),
+          workers:1
+        }
+      ]
+    }
+  ' >"$source"
+  for mutation in \
+    omit-required-configuration \
+    add-counterexample \
+    stale-model-digest \
+    worker-count-mismatch; do
+    fixture="$scratch/judge-mutation-contract-$mutation.json"
+    write_judge_mutation_fixture "$mutation" "$source" "$fixture"
+    diagnostic="$(judge_mutation_diagnostic "$mutation")"
+    case "$mutation" in
+      omit-required-configuration)
+        jq -e --arg target "$judge_mutation_target" '
+          (.configurations | length) == 1 and
+          all(.configurations[]; .id != $target)
+        ' "$fixture" >/dev/null
+        ;;
+      add-counterexample)
+        jq -e --arg target "$judge_mutation_target" '
+          any(.configurations[];
+            .id == $target and .counterexamples == 1) and
+          any(.configurations[];
+            .id == "WorkloadObservation" and .counterexamples == 0)
+        ' "$fixture" >/dev/null
+        ;;
+      stale-model-digest)
+        jq -e --arg target "$judge_mutation_target" '
+          any(.configurations[];
+            .id == $target and .moduleSHA256 == ("0" * 64)) and
+          any(.configurations[];
+            .id == "WorkloadObservation" and .moduleSHA256 == ("a" * 64))
+        ' "$fixture" >/dev/null
+        ;;
+      worker-count-mismatch)
+        jq -e '
+          .tools.tlcWorkers == 2 and
+          all(.configurations[]; .workers == 2)
+        ' "$fixture" >/dev/null
+        ;;
+    esac
+    case "$mutation" in
+      omit-required-configuration) ;;
+      *)
+        case "$diagnostic" in
+          *:"$judge_mutation_target") ;;
+          *) return 1 ;;
+        esac
+        ;;
+    esac
+  done
+  printf 'formal-gate: judge-mutation-preflight=passed target=%s\n' \
+    "$judge_mutation_target"
+}
+
 source_commit="$(git rev-parse HEAD)"
 if [ -n "$(git status --porcelain --untracked-files=normal)" ]; then
   source_dirty=true
@@ -185,6 +329,7 @@ write_formal_run_review() {
     --arg configuration "$gate_current_configuration" \
     --arg configurationStartedAt "$gate_current_configuration_started_at" \
     --arg selectedConfiguration "$selected_configuration" \
+    --argjson preflightOnly "$preflight_only" \
     --arg failureLayer "$failure_layer" \
     --arg failureReason "$failure_reason" \
     --arg javaVersion "$HIDEOUT_JAVA_VERSION" \
@@ -218,7 +363,12 @@ write_formal_run_review() {
           nativeJava:true
         },
         execution:{
-          scope:(if $selectedConfiguration == "" then "full-formal" else "single-configuration-diagnostic" end),
+          scope:(
+            if $preflightOnly == 1 then "preflight-only"
+            elif $selectedConfiguration == "" then "full-formal"
+            else "single-configuration-diagnostic"
+            end
+          ),
           selectedConfiguration:(if $selectedConfiguration == "" then null else $selectedConfiguration end),
           workers:$workers,
           maxHeapMB:$maxHeapMB,
@@ -284,27 +434,6 @@ printf 'formal inventory schema: passed\n' >>"$run_dir/inventory-schema.log"
 cp "$inventory" "$run_dir/inventory.json"
 
 inventory_sha="$(sha256_file "$inventory")"
-tla_version="$(jq -er '.tla2tools.version' "$inventory")"
-tla_sha="$(jq -er '.tla2tools.sha256' "$inventory")"
-tla_url="$(jq -er '.tla2tools.url' "$inventory")"
-tla_cache="${HIDEOUT_TLA_CACHE:-${HOME:-/tmp}/.cache/hideout/tla}"
-tla_jar="${TLA2TOOLS_JAR:-$tla_cache/tla2tools-$tla_version.jar}"
-
-if [ ! -f "$tla_jar" ]; then
-  mkdir -p "$(dirname "$tla_jar")"
-  tla_download="$scratch/tla2tools.jar"
-  curl --fail --location --silent --show-error \
-    "$tla_url" --output "$tla_download"
-  if [ "$(sha256_file "$tla_download")" != "$tla_sha" ]; then
-    printf 'formal-gate: downloaded tla2tools.jar digest mismatch\n' >&2
-    exit 1
-  fi
-  mv "$tla_download" "$tla_jar"
-fi
-if [ "$(sha256_file "$tla_jar")" != "$tla_sha" ]; then
-  printf 'formal-gate: tla2tools.jar digest mismatch\n' >&2
-  exit 1
-fi
 
 jq -r '.configurations[].config' "$inventory" | LC_ALL=C sort \
   >"$scratch/inventory-configs"
@@ -347,6 +476,47 @@ if [ -n "$selected_configuration" ] && ! jq -e \
   printf 'formal-gate: unknown configuration: %s\n' \
     "$selected_configuration" >&2
   exit 2
+fi
+if ! jq -e --arg target "$judge_mutation_target" '
+  [.configurations[] | select(.id == $target)] | length == 1
+' "$inventory" >/dev/null; then
+  printf 'formal-gate: judge mutation target is missing or duplicate: %s\n' \
+    "$judge_mutation_target" >&2
+  exit 1
+fi
+gate_stage="judge-preflight"
+judge_mutation_preflight
+if [ "$preflight_only" -eq 1 ]; then
+  gate_stage="preflight-complete"
+  write_formal_run_review passed "" ""
+  gate_completed=1
+  printf \
+    'formal-gate: preflight=passed acceptance=false tlcRuns=0 vmBoots=0 review=%s\n' \
+    "$run_review"
+  exit 0
+fi
+
+gate_stage="tlc-toolchain"
+tla_version="$(jq -er '.tla2tools.version' "$inventory")"
+tla_sha="$(jq -er '.tla2tools.sha256' "$inventory")"
+tla_url="$(jq -er '.tla2tools.url' "$inventory")"
+tla_cache="${HIDEOUT_TLA_CACHE:-${HOME:-/tmp}/.cache/hideout/tla}"
+tla_jar="${TLA2TOOLS_JAR:-$tla_cache/tla2tools-$tla_version.jar}"
+
+if [ ! -f "$tla_jar" ]; then
+  mkdir -p "$(dirname "$tla_jar")"
+  tla_download="$scratch/tla2tools.jar"
+  curl --fail --location --silent --show-error \
+    "$tla_url" --output "$tla_download"
+  if [ "$(sha256_file "$tla_download")" != "$tla_sha" ]; then
+    printf 'formal-gate: downloaded tla2tools.jar digest mismatch\n' >&2
+    exit 1
+  fi
+  mv "$tla_download" "$tla_jar"
+fi
+if [ "$(sha256_file "$tla_jar")" != "$tla_sha" ]; then
+  printf 'formal-gate: tla2tools.jar digest mismatch\n' >&2
+  exit 1
 fi
 
 configuration_entries() {
@@ -797,30 +967,8 @@ for mutation in \
   stale-model-digest \
   worker-count-mismatch; do
   fixture="$scratch/$mutation.json"
-  case "$mutation" in
-    omit-required-configuration)
-      jq '.configurations |= .[1:]' "$preliminary" >"$fixture"
-      diagnostic='formal-verify: configuration-set-mismatch'
-      ;;
-    add-counterexample)
-      jq '.configurations[0].counterexamples = 1' \
-        "$preliminary" >"$fixture"
-      diagnostic='formal-verify: counterexamples-present:AttachReservation'
-      ;;
-    stale-model-digest)
-      jq '.configurations[0].moduleSHA256 = ("0" * 64)' \
-        "$preliminary" >"$fixture"
-      diagnostic='formal-verify: model-digest-mismatch:AttachReservation'
-      ;;
-    worker-count-mismatch)
-      jq '
-        (if .tools.tlcWorkers == 1 then 2 else 1 end) as $forged |
-        .tools.tlcWorkers = $forged |
-        .configurations |= map(.workers = $forged)
-      ' "$preliminary" >"$fixture"
-      diagnostic='formal-verify: tlc-worker-marker-mismatch:AttachReservation'
-      ;;
-  esac
+  write_judge_mutation_fixture "$mutation" "$preliminary" "$fixture"
+  diagnostic="$(judge_mutation_diagnostic "$mutation")"
 
   set +e
   mutation_output="$(

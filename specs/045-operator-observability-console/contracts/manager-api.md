@@ -51,7 +51,10 @@ sessions, recent activity, coverage, risks, operations, capabilities, and
 catalog-backed next actions.
 
 The snapshot is the only valid seed for applying subsequent SSE events. A
-client must not merge a new snapshot with old local state.
+client must not merge a new snapshot with old local state. It must pass the
+snapshot's exact `sequence` as `/daemon/events?since=...`; the console stays
+read-only until that sequence-bound stream opens, and `409 Conflict` requires a
+fresh snapshot.
 
 ### `GET /api/v1/profiles/{id}/projection`
 

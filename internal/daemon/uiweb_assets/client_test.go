@@ -469,6 +469,78 @@ Client.migrationSecretInput({
 	}
 }
 
+func TestBrowserClientBindsEventStreamToSnapshotSequence(t *testing.T) {
+	runtime := goja.New()
+	value, err := runtime.RunString(`
+const secretToken = "ui_" + "f".repeat(48);
+const sources = [];
+let opened = 0;
+let closed = 0;
+var document = {title:"Hideout"};
+var window = {
+  HideoutConsole:{},
+  location:{hash:"#token=" + secretToken,pathname:"/",search:""},
+  history:{replaceState:function() { window.location.hash = ""; }},
+  addEventListener:function() {}
+};
+class URLSearchParams {
+  constructor(raw) {
+    this.value = String(raw || "").startsWith("token=") ?
+      decodeURIComponent(String(raw).slice(6)) : "";
+  }
+  get(name) { return name === "token" ? this.value : null; }
+}
+function EventSource(path) {
+  this.path = path;
+  this.close = function() { closed++; };
+  sources.push(this);
+}
+` + mustAsset("client.js") + `
+const Client = window.HideoutConsole.Client;
+const handlers = {
+  open:function() { opened++; },
+  event:function() {},
+  error:function() {}
+};
+const stream = Client.events(handlers,17);
+sources[0].onopen();
+let invalid = "";
+try {
+  Client.events(handlers,-1);
+} catch (error) {
+  invalid = error.message;
+}
+stream.close();
+JSON.stringify({
+  path:sources[0].path,
+  sourceCount:sources.length,
+  opened,
+  closed,
+  invalid
+});
+`)
+	if err != nil {
+		t.Fatalf("run sequence-bound browser event stream: %v", err)
+	}
+	var proof struct {
+		Path        string `json:"path"`
+		SourceCount int    `json:"sourceCount"`
+		Opened      int    `json:"opened"`
+		Closed      int    `json:"closed"`
+		Invalid     string `json:"invalid"`
+	}
+	if err := json.Unmarshal([]byte(value.String()), &proof); err != nil {
+		t.Fatal(err)
+	}
+	wantPath := "/daemon/events?token=ui_" + strings.Repeat("f", 48) +
+		"&since=17"
+	if proof.Path != wantPath || proof.SourceCount != 1 || proof.Opened != 1 ||
+		proof.Closed != 1 ||
+		proof.Invalid != "event stream snapshot sequence is invalid" {
+		t.Fatalf("sequence-bound browser event stream mismatch: %+v", proof)
+	}
+}
+
 func TestBrowserClientAndAppHaveNoHealthyStreamPolling(t *testing.T) {
 	client := mustAsset("client.js")
 	app := mustAsset("app.js")
@@ -491,6 +563,8 @@ func TestBrowserClientAndAppHaveNoHealthyStreamPolling(t *testing.T) {
 		"reconnectDelays",
 		`state.health.state === "credential-expired"`,
 		"root.State.beginReseed(",
+		"root.State.streamConnected(state)",
+		`"&since="`,
 		`data-requires-authority="true"`,
 	} {
 		if !strings.Contains(client+app+state, required) {

@@ -10,6 +10,7 @@ cd "$ROOT"
 . "$ROOT/scripts/lib/public-alpha-cleanup.sh"
 . "$ROOT/scripts/lib/public-alpha-features.sh"
 . "$ROOT/scripts/lib/gate-result.sh"
+. "$ROOT/scripts/lib/runtime-product-evidence.sh"
 
 tag=""
 package=""
@@ -406,7 +407,10 @@ jq 'del(.auditPath)' "$gate2" >"$proof_dir/artifacts/gate2.json"
 jq 'del(.auditPath)' "$gate3" >"$proof_dir/artifacts/gate3.json"
 cp "$out/docs-candidate.out" "$proof_dir/artifacts/docs-candidate.out"
 "$hideout" support proof-registry --json >"$out/proof-registry.json"
-runtime_binding="$(jq -c '[.proofs[] | select(.runtime != null)][0].runtime' "$out/runtime-gate2/product-hardening-evidence.json")"
+runtime_binding="$(
+  runtime_evidence_unique_binding \
+    "$out/runtime-gate2/product-hardening-evidence.json"
+)"
 jq -n \
   --arg generatedAt "$(date -u +"%Y-%m-%dT%H:%M:%SZ")" \
   --arg commit "$source_commit" \

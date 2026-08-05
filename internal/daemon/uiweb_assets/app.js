@@ -2850,6 +2850,8 @@
     stream = root.Client.events({
       open: () => {
         cancelReconnect(true);
+        root.State.streamConnected(state);
+        renderAll();
       },
       event: (event) => {
         const result = root.State.applyEvent(state, event);
@@ -2872,7 +2874,7 @@
         renderAll();
         scheduleAuthoritativeReseed(reason);
       }
-    });
+    }, state.lastSeq);
   }
 
   /**

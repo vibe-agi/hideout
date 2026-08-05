@@ -23,9 +23,10 @@ usage() {
   printf '%s\n' \
     "Usage: scripts/gates/release-candidate.sh [--out DIR] [--preflight]" \
     "" \
-    "Runs the complete local unit, race, fuzz/property, schema, generated," \
-    "static, dependency/advisory, migration, and mutation aggregate. Every lane runs and" \
-    "writes private digest-bound evidence even when another lane fails." \
+    "Runs the complete local schema, static, release-blocker, generated," \
+    "dependency/advisory, unit, race, fuzz/property, migration, and mutation" \
+    "aggregate in diagnostic-cost order. A failing lane writes private digest-bound" \
+    "evidence and stops before later work; a passing run executes all ten lanes." \
     "The run records its start/reuse decision and a measured post-run review." \
     "Use --preflight to validate that review protocol without running a lane." \
     "This command never publishes or accepts an exact release candidate."
@@ -474,6 +475,7 @@ fi
 
 gate_stage="review-preflight"
 gate_run_review_self_test
+scripts/test-validation-ladder.sh
 
 jq -n \
   --arg generatedAt "$(date -u +'%Y-%m-%dT%H:%M:%SZ')" \
@@ -510,16 +512,6 @@ printf \
   'release-candidate-local: start=%s host=%s checkpointReused=false plan=%s\n' \
   "$start_mode" "$host_continuity" "$run_dir/run-plan.json"
 
-if [ "$preflight_only" -eq 1 ]; then
-  gate_stage="preflight-complete"
-  write_gate_run_review passed "" ""
-  gate_completed=1
-  printf \
-    'release-candidate-local: preflight=passed plan=%s review=%s\n' \
-    "$run_dir/run-plan.json" "$run_dir/run-review.json"
-  exit 0
-fi
-
 gate_stage="lane-execution"
 gate_failure_layer="harness"
 gate_failure_reason="local lane execution ended outside a classified lane result"
@@ -553,6 +545,8 @@ run_lane() {
     printf 'release-candidate-local: %s passed\n' "$id"
   else
     result="failed"
+    gate_failure_layer="lane-execution"
+    gate_failure_reason="lane $id failed with exit $status"
     failed_lanes=$((failed_lanes + 1))
     if [ "$first_failure_epoch" -eq 0 ]; then
       first_failure_epoch="$finished_epoch"
@@ -582,7 +576,72 @@ run_lane() {
         log: {path: $path, sha256: $sha256}
       }]' <<<"$lanes"
   )"
+  return "$status"
 }
+
+lane_runner_self_test() {
+  local saved_run_dir="$run_dir" saved_run_id="$run_id"
+  local saved_lanes="$lanes" saved_failed_lanes="$failed_lanes"
+  local saved_first_failure_epoch="$first_failure_epoch"
+  local saved_first_failure_lane="$first_failure_lane"
+  local saved_gate_stage="$gate_stage"
+  local saved_failure_layer="$gate_failure_layer"
+  local saved_failure_reason="$gate_failure_reason"
+  local self_test_dir="$scratch/lane-runner-self-test" status=0
+  local self_test_status=0
+
+  mkdir -p "$self_test_dir/lanes"
+  run_dir="$self_test_dir"
+  run_id="lane-runner-self-test"
+  lanes='[]'
+  failed_lanes=0
+  first_failure_epoch=0
+  first_failure_lane=""
+  if run_lane synthetic-failure bash -c \
+    'printf "%s\n" synthetic-lane-failure; exit 23' \
+    >"$self_test_dir/stdout" 2>"$self_test_dir/stderr"; then
+    status=0
+  else
+    status=$?
+  fi
+  if [ "$status" -ne 23 ] || [ "$failed_lanes" -ne 1 ] ||
+    [ "$first_failure_lane" != "synthetic-failure" ] ||
+    ! jq -e '
+      length == 1 and
+      .[0].id == "synthetic-failure" and
+      .[0].result == "failed" and
+      .[0].exitCode == 23
+    ' <<<"$lanes" >/dev/null; then
+    printf 'release-candidate-local: lane runner failed fail-fast self-test\n' >&2
+    self_test_status=1
+  fi
+
+  run_dir="$saved_run_dir"
+  run_id="$saved_run_id"
+  lanes="$saved_lanes"
+  failed_lanes="$saved_failed_lanes"
+  first_failure_epoch="$saved_first_failure_epoch"
+  first_failure_lane="$saved_first_failure_lane"
+  gate_stage="$saved_gate_stage"
+  gate_failure_layer="$saved_failure_layer"
+  gate_failure_reason="$saved_failure_reason"
+  if [ "$self_test_status" -eq 0 ]; then
+    printf 'release-candidate-local: lane-runner-self-test=passed\n'
+  fi
+  return "$self_test_status"
+}
+
+lane_runner_self_test
+
+if [ "$preflight_only" -eq 1 ]; then
+  gate_stage="preflight-complete"
+  write_gate_run_review passed "" ""
+  gate_completed=1
+  printf \
+    'release-candidate-local: preflight=passed plan=%s review=%s\n' \
+    "$run_dir/run-plan.json" "$run_dir/run-review.json"
+  exit 0
+fi
 
 unit_lane() {
   go test -json -p 4 -count=1 ./...
@@ -1255,19 +1314,20 @@ EOF
   scripts/release/collect-evidence.sh --preflight
   scripts/release/install-local-candidate.sh --preflight
   scripts/release/verify-publication-absence.sh --preflight
+  scripts/gates/formal.sh --preflight --out "$run_dir/formal-preflight"
   printf 'no required integration blocker remains\n'
 }
 
+run_lane schema schema_lane
+run_lane static static_lane
+run_lane release-blockers release_blockers_lane
+run_lane generated generated_lane
+run_lane dependencies-advisory dependencies_advisory_lane
 run_lane unit unit_lane
 run_lane race race_lane
 run_lane fuzz-property fuzz_property_lane
-run_lane schema schema_lane
-run_lane generated generated_lane
-run_lane static static_lane
-run_lane dependencies-advisory dependencies_advisory_lane
 run_lane migration scripts/gates/migration.sh --out "$run_dir/migration"
 run_lane mutations mutations_lane
-run_lane release-blockers release_blockers_lane
 
 gate_stage="evidence-assembly"
 gate_failure_layer="evidence-judge"

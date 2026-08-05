@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/vibe-agi/hideout/internal/lifecycle"
@@ -209,13 +210,33 @@ func (d *Daemon) serveEvents(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "streaming unsupported"})
 		return
 	}
+	sinceValues, exists := r.URL.Query()["since"]
+	if !exists || len(sinceValues) != 1 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{
+			"error": "exactly one non-negative snapshot sequence is required",
+		})
+		return
+	}
+	since, err := strconv.Atoi(sinceValues[0])
+	if err != nil || since < 0 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{
+			"error": "exactly one non-negative snapshot sequence is required",
+		})
+		return
+	}
+	sub, current := d.bus.subscribeAt(since, 64)
+	if !current {
+		writeJSON(w, http.StatusConflict, map[string]string{
+			"error": "event stream sequence changed; authoritative reseed required",
+		})
+		return
+	}
+	defer d.bus.unsubscribe(sub)
+
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-store")
 	w.WriteHeader(http.StatusOK)
 	flusher.Flush()
-
-	sub := d.bus.subscribe(64)
-	defer d.bus.unsubscribe(sub)
 	ticker := time.NewTicker(150 * time.Millisecond)
 	defer ticker.Stop()
 

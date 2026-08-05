@@ -2,16 +2,16 @@
   "schema": "hideout.local-release-candidate-inventory/v1",
   "requiredGoVersion": "go1.25.12",
   "requiredLanes": [
+    "schema",
+    "static",
+    "release-blockers",
+    "generated",
+    "dependencies-advisory",
     "unit",
     "race",
     "fuzz-property",
-    "schema",
-    "generated",
-    "static",
-    "dependencies-advisory",
     "migration",
-    "mutations",
-    "release-blockers"
+    "mutations"
   ],
   "shellLint": [
     "internal/workloadobs/testdata/reference-workload.sh",
@@ -63,6 +63,7 @@
     "scripts/test-shared-workspace-lima-e2e.sh",
     "scripts/test-shared-workspace-smoke.sh",
     "scripts/test-ui-e2e.sh",
+    "scripts/test-validation-ladder.sh",
     "scripts/test-vulnerability-gate.sh",
     "scripts/test-workspace-path-identity-lima.sh"
   ],

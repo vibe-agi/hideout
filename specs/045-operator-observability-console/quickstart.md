@@ -182,6 +182,7 @@ Expected:
 
 - facts and terminal operation states match CLI/TUI exactly;
 - the browser does not poll while SSE is healthy;
+- the browser remains read-only while binding the snapshot sequence to SSE;
 - a gap or credential rotation makes mutation controls read-only until re-seed;
 - export is a separate review/apply operation with path/redaction disclosure.
 

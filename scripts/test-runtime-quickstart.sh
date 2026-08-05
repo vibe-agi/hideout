@@ -67,17 +67,24 @@ jq -s -e --argjson required "$required_proofs" '
   all($required[]; . as $proof | ($actual | index($proof) != null))
 ' "$gate2_manifest" "$gate3_manifest" >/dev/null
 
-gate2_runtime="$(jq -c '[.proofs[] | select(.runtime != null)][0].runtime' "$gate2_manifest")"
-gate3_runtime="$(jq -c '[.proofs[] | select(.runtime != null)][0].runtime' "$gate3_manifest")"
+gate2_runtime="$(runtime_evidence_unique_binding "$gate2_manifest")"
+gate3_runtime="$(runtime_evidence_unique_binding "$gate3_manifest")"
 jq -e -n --argjson a "$gate2_runtime" --argjson b "$gate3_runtime" '
   $a.environmentId != $b.environmentId and
   ($a | del(.environmentId)) == ($b | del(.environmentId))
 ' >/dev/null
 
-catalog_sha="$(jq -r '.families[] | select(.id == "developer-standard") |
-  .currentRevision as $revision | .revisions[] | select(.id == $revision) | .artifacts[] |
-  select(.hostOS == "darwin" and .hostArch == "arm64") | .sha256' \
-  internal/runtimecatalog/catalog.json | head -n 1)"
+catalog_sha="$(jq -er '
+  [
+    .families[] | select(.id == "developer-standard") |
+    .currentRevision as $revision |
+    .revisions[] | select(.id == $revision) | .artifacts[] |
+    select(.hostOS == "darwin" and .hostArch == "arm64")
+  ] |
+  if length == 1 then .[0].sha256
+  else error("runtime quickstart requires one current darwin/arm64 artifact")
+  end
+' internal/runtimecatalog/catalog.json)"
 promotion_sha="$(jq -r '.image.sha256' dist/runtime/promotion.json)"
 [ -n "$catalog_sha" ] && [ "$catalog_sha" = "$promotion_sha" ] && \
   [ "$catalog_sha" = "$(jq -r '.artifactSHA256' <<<"$gate2_runtime")" ] || {

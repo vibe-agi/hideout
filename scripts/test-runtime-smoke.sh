@@ -136,5 +136,32 @@ jq -e --arg commit "$package_commit" --argjson dirty "$package_dirty" '
     hostArch:"arm64"
   }
 ' "$tmp/product-hardening-evidence.json" >/dev/null
+selected_runtime_binding="$(
+  runtime_evidence_unique_binding "$tmp/product-hardening-evidence.json"
+)"
+if ! jq -e -n \
+  --argjson selected "$selected_runtime_binding" \
+  --argjson expected "$runtime_binding" \
+  '$selected == $expected' >/dev/null; then
+  echo "runtime-smoke: unique runtime binding changed exact identity" >&2
+  exit 1
+fi
+jq '.proofs += [.proofs[0]]' "$tmp/product-hardening-evidence.json" \
+  >"$tmp/repeated-runtime-binding.json"
+runtime_evidence_unique_binding "$tmp/repeated-runtime-binding.json" >/dev/null
+jq '.proofs[1].runtime.environmentId = "env_conflicting-runtime-binding"' \
+  "$tmp/repeated-runtime-binding.json" >"$tmp/conflicting-runtime-binding.json"
+if runtime_evidence_unique_binding "$tmp/conflicting-runtime-binding.json" \
+  >/dev/null 2>&1; then
+  echo "runtime-smoke: conflicting runtime bindings were accepted" >&2
+  exit 1
+fi
+jq 'del(.proofs[].runtime)' "$tmp/product-hardening-evidence.json" \
+  >"$tmp/missing-runtime-binding.json"
+if runtime_evidence_unique_binding "$tmp/missing-runtime-binding.json" \
+  >/dev/null 2>&1; then
+  echo "runtime-smoke: missing runtime binding was accepted" >&2
+  exit 1
+fi
 
 echo "runtime-smoke: catalog state and verification contracts passed"
