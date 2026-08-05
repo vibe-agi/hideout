@@ -254,6 +254,25 @@ function browserRequestCount(cdp, predicate) {
   }).length;
 }
 
+async function waitForBrowserRequestIncrease(
+  cdp,
+  predicate,
+  baseline,
+  timeoutMS = 10000
+) {
+  const deadline = Date.now() + timeoutMS;
+  let observed = browserRequestCount(cdp, predicate);
+  while (Date.now() < deadline) {
+    observed = browserRequestCount(cdp, predicate);
+    if (observed > baseline) return observed;
+    await delay(50);
+  }
+  throw new Error(
+    "timeout waiting for browser request count to increase: " +
+    `baseline=${baseline} observed=${observed}`
+  );
+}
+
 async function secureWrite(name, data, encoding) {
   const path = join(outDir, name);
   if (encoding) await writeFile(path, data, encoding);
@@ -921,9 +940,14 @@ async function main() {
       10000
     );
     const liveUpdateMS = performance.now() - liveStarted;
-    const detailAfterLive = browserRequestCount(
+    const detailAfterLive = await waitForBrowserRequestIncrease(
       cdp,
-      (url) => url.includes("/api/v1/activity/")
+      (url) => url.includes("/api/v1/activity/"),
+      detailBaseline
+    );
+    await waitFor(
+      cdp,
+      `document.getElementById("timelineBody").getAttribute("aria-busy") === "false"`
     );
     const snapshotAfterLive = browserRequestCount(
       cdp,
@@ -933,7 +957,9 @@ async function main() {
       snapshotAfterLive === snapshotBaseline;
     if (!liveUpdateObserved) {
       throw new Error(
-        "live event did not refresh detail through SSE-only orchestration"
+        "live event did not refresh detail through SSE-only orchestration: " +
+        `detail=${detailBaseline}->${detailAfterLive} ` +
+        `snapshot=${snapshotBaseline}->${snapshotAfterLive}`
       );
     }
 
