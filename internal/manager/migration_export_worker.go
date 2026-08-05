@@ -19,6 +19,7 @@ import (
 	"github.com/vibe-agi/hideout/internal/backend"
 	"github.com/vibe-agi/hideout/internal/environment"
 	"github.com/vibe-agi/hideout/internal/migration"
+	"github.com/vibe-agi/hideout/internal/profilestate"
 	"github.com/vibe-agi/hideout/internal/secrets"
 )
 
@@ -44,6 +45,9 @@ type migrationExportProfile struct {
 	componentID        migration.OpaqueID
 	encoded            []byte
 	digest             migration.Digest
+	stateComponentID   migration.OpaqueID
+	stateSnapshot      profilestate.Snapshot
+	stateDigest        migration.Digest
 	guestUser          string
 	authorityProposals []migration.AuthorityProposal
 	authorityRefs      []migration.OpaqueID
@@ -365,9 +369,9 @@ func (service MigrationService) prepareMigrationExport(
 	secretEntries, secretRevisions, err := service.inspectMigrationExportSecrets(
 		ctx, operation.PlanID, source, operation.SelectedSecretRefs,
 	)
-	environmentRevisionCount := len(source.records)
-	if err != nil || len(source.revisions) != environmentRevisionCount+len(secretRevisions) ||
-		!reflect.DeepEqual(secretRevisions, source.revisions[environmentRevisionCount:]) {
+	nonSecretRevisionCount := len(source.records) + len(source.profileStates)
+	if err != nil || len(source.revisions) != nonSecretRevisionCount+len(secretRevisions) ||
+		!reflect.DeepEqual(secretRevisions, source.revisions[nonSecretRevisionCount:]) {
 		if err == nil {
 			err = ErrMigrationPlanStale
 		}
@@ -384,6 +388,7 @@ func (service MigrationService) prepareMigrationExportProfiles(
 	source migrationExportSource,
 ) ([]migrationExportProfile, error) {
 	profiles := make([]migrationExportProfile, len(source.records))
+	configOnly := migrationOperationConfigExport(operation)
 	for index, record := range source.records {
 		profileValue, err := service.Profiles.Load(record.Profile)
 		if err != nil || profileValue.Identity.User != record.User {
@@ -403,12 +408,29 @@ func (service MigrationService) prepareMigrationExportProfiles(
 		if err != nil {
 			return nil, err
 		}
+		profileState := profilestate.Snapshot{}
+		stateComponentID := migration.OpaqueID("")
+		stateDigest := migration.Digest("")
+		if !configOnly {
+			var exists bool
+			profileState, exists = source.profileStates[record.ID]
+			if !exists || profileState.LogicalBytes() == 0 ||
+				profileState.Digest() == "" {
+				return nil, ErrMigrationPlanStale
+			}
+			stateComponentID = migrationExportDerivedID(
+				"profilestatecomponent", operation.ID, record.ID,
+			)
+			stateDigest = migration.Digest(profileState.Digest())
+		}
 		profiles[index] = migrationExportProfile{
 			record: record,
 			componentID: migrationExportDerivedID(
 				"profilecomponent", operation.ID, record.ID,
 			),
 			encoded: encoded, digest: migrationExportBytesDigest(encoded),
+			stateComponentID: stateComponentID, stateSnapshot: profileState,
+			stateDigest:        stateDigest,
 			guestUser:          normalized.Identity.User,
 			authorityProposals: authorityProposals,
 			authorityRefs:      authorityRefs,
@@ -503,12 +525,16 @@ func (service MigrationService) writeFreshMigrationExport(
 	}
 
 	selectedSecrets := selectedMigrationExportSecrets(prepared.secrets)
+	profileStateCount := 0
+	if !prepared.configOnly {
+		profileStateCount = len(prepared.profiles)
+	}
 	componentIndex := make([]migration.ComponentIndexEntry, 0,
-		len(selectedSecrets)+len(prepared.profiles)+len(snapshot.Components))
+		len(selectedSecrets)+len(prepared.profiles)+profileStateCount+len(snapshot.Components))
 	completedComponents := uint32(0)
 	completedLogical := uint64(0)
 	completedComponentIDs := make([]migration.OpaqueID, 0,
-		len(selectedSecrets)+len(prepared.profiles)+len(snapshot.Components))
+		len(selectedSecrets)+len(prepared.profiles)+profileStateCount+len(snapshot.Components))
 	var lastPrefix migration.Digest
 	for _, secretValue := range selectedSecrets {
 		entry, prefix, err := service.writeMigrationExportSecret(
@@ -559,6 +585,22 @@ func (service MigrationService) writeFreshMigrationExport(
 			checkpointReceipt,
 		); err != nil {
 			return migration.SealedBundleInspection{}, err
+		}
+	}
+	if !prepared.configOnly {
+		for _, profileValue := range prepared.profiles {
+			entry, prefix, err := service.writeMigrationExportProfileState(
+				ctx, prepared.operation, profileValue, writer, file,
+				completedComponentIDs, completedLogical, completedComponents,
+			)
+			if err != nil {
+				return migration.SealedBundleInspection{}, err
+			}
+			componentIndex = append(componentIndex, entry)
+			lastPrefix = prefix
+			completedLogical += entry.LogicalBytes
+			completedComponents++
+			completedComponentIDs = append(completedComponentIDs, entry.ComponentID)
 		}
 	}
 
@@ -732,7 +774,7 @@ func (service MigrationService) resumeMigrationExport(
 	secretFacts := make(map[migration.OpaqueID]migrationExportSecretContentFacts,
 		len(selectedSecrets))
 	resumeSpecs := make([]migration.ResumeComponentSpec, 0,
-		len(selectedSecrets)+len(prepared.profiles)+len(components))
+		len(selectedSecrets)+len(prepared.profiles)*2+len(components))
 	for _, secretValue := range selectedSecrets {
 		facts, err := service.migrationExportSecretContentFacts(ctx, secretValue)
 		if err != nil {
@@ -749,6 +791,14 @@ func (service MigrationService) resumeMigrationExport(
 			ComponentID: profileValue.componentID, Kind: "profile",
 			LogicalBytes: uint64(len(profileValue.encoded)),
 		})
+	}
+	if !prepared.configOnly {
+		for _, profileValue := range prepared.profiles {
+			resumeSpecs = append(resumeSpecs, migration.ResumeComponentSpec{
+				ComponentID: profileValue.stateComponentID, Kind: "profile-state",
+				LogicalBytes: profileValue.stateSnapshot.LogicalBytes(),
+			})
+		}
 	}
 	for _, component := range components {
 		resumeSpecs = append(resumeSpecs, migration.ResumeComponentSpec{
@@ -902,6 +952,41 @@ func (service MigrationService) resumeMigrationExport(
 			return migration.SealedBundleInspection{}, err
 		}
 	}
+	if !prepared.configOnly {
+		for _, profileValue := range prepared.profiles {
+			state, exists := stateByComponent[profileValue.stateComponentID]
+			logicalBytes := profileValue.stateSnapshot.LogicalBytes()
+			if exists {
+				_, complete := completedAtCheckpoint[profileValue.stateComponentID]
+				if !complete || state.ContentBytes != logicalBytes ||
+					state.NextLogicalOffset != logicalBytes || state.PayloadRecords == 0 {
+					return migration.SealedBundleInspection{}, migration.ErrCheckpointMismatch
+				}
+				componentIndex = append(componentIndex, migration.ComponentIndexEntry{
+					ComponentID: profileValue.stateComponentID, Kind: "profile-state",
+					LogicalBytes: logicalBytes, FirstRecord: state.FirstRecord,
+					LastRecord: state.LastRecord, RecordCount: state.RecordCount,
+					ContentDigest: profileValue.stateDigest,
+				})
+				completedLogical += logicalBytes
+				completedComponentIDs = append(completedComponentIDs, profileValue.stateComponentID)
+				completedComponents++
+				continue
+			}
+			entry, prefix, err := service.writeMigrationExportProfileState(
+				ctx, prepared.operation, profileValue, writer, file,
+				completedComponentIDs, completedLogical, completedComponents,
+			)
+			if err != nil {
+				return migration.SealedBundleInspection{}, err
+			}
+			componentIndex = append(componentIndex, entry)
+			lastPrefix = prefix
+			completedLogical += entry.LogicalBytes
+			completedComponents++
+			completedComponentIDs = append(completedComponentIDs, entry.ComponentID)
+		}
+	}
 
 	diskDigests := make(map[migration.OpaqueID]migration.Digest, len(components))
 	for _, component := range components {
@@ -1026,6 +1111,76 @@ func (service MigrationService) resumeMigrationExport(
 		return migration.SealedBundleInspection{}, err
 	}
 	return inspection, nil
+}
+
+func (service MigrationService) writeMigrationExportProfileState(
+	ctx context.Context,
+	operation MigrationOperation,
+	profileValue migrationExportProfile,
+	writer *migration.Writer,
+	file *os.File,
+	completedComponentIDs []migration.OpaqueID,
+	completedLogical uint64,
+	completedComponents uint32,
+) (migration.ComponentIndexEntry, migration.Digest, error) {
+	if profileValue.stateComponentID == "" || profileValue.stateSnapshot.LogicalBytes() == 0 ||
+		profileValue.stateDigest != migration.Digest(profileValue.stateSnapshot.Digest()) {
+		return migration.ComponentIndexEntry{}, "", ErrMigrationOperationInvalid
+	}
+	var firstRecord uint64
+	var lastPayload uint64
+	payloadRecords := uint64(0)
+	ordinal := uint64(0)
+	logicalOffset := uint64(0)
+	maxChunk := int(migration.DefaultLimits().MaxChunkBytes)
+	err := profileValue.stateSnapshot.Write(ctx, maxChunk, func(chunk []byte) error {
+		receipt, err := writer.Append(migration.RecordInput{
+			Type: migration.RecordRawChunk, ComponentID: profileValue.stateComponentID,
+			Ordinal: ordinal, LogicalOffset: logicalOffset, Plaintext: chunk,
+		})
+		if err != nil {
+			return err
+		}
+		if payloadRecords == 0 {
+			firstRecord = receipt.Sequence
+		}
+		lastPayload = receipt.Sequence
+		payloadRecords++
+		ordinal++
+		logicalOffset += uint64(len(chunk))
+		return nil
+	})
+	if err != nil || payloadRecords == 0 || logicalOffset != profileValue.stateSnapshot.LogicalBytes() {
+		return migration.ComponentIndexEntry{}, "", errors.Join(ErrMigrationPlanStale, err)
+	}
+	completed := append(append([]migration.OpaqueID(nil), completedComponentIDs...),
+		profileValue.stateComponentID)
+	_, checkpointReceipt, err := writer.AppendCheckpoint(migration.CheckpointInput{
+		OperationID: migration.OpaqueID(operation.ID), CompletedComponents: completed,
+		CurrentComponent: profileValue.stateComponentID,
+	})
+	if err != nil {
+		return migration.ComponentIndexEntry{}, "", err
+	}
+	if checkpointReceipt.Sequence != lastPayload+1 {
+		return migration.ComponentIndexEntry{}, "", migration.ErrCorruptBundle
+	}
+	if err := file.Sync(); err != nil {
+		return migration.ComponentIndexEntry{}, "", err
+	}
+	if err := service.updateMigrationExportProgress(
+		operation.ID, completedLogical+logicalOffset, completedComponents+1,
+		migrationExportFileOffset(file), string(profileValue.stateComponentID),
+		checkpointReceipt,
+	); err != nil {
+		return migration.ComponentIndexEntry{}, "", err
+	}
+	return migration.ComponentIndexEntry{
+		ComponentID: profileValue.stateComponentID, Kind: "profile-state",
+		LogicalBytes: logicalOffset, FirstRecord: firstRecord,
+		LastRecord: checkpointReceipt.Sequence, RecordCount: payloadRecords + 1,
+		ContentDigest: profileValue.stateDigest,
+	}, checkpointReceipt.PrefixDigest, nil
 }
 
 func (service MigrationService) writeMigrationExportDisk(
@@ -1343,9 +1498,10 @@ func (service MigrationService) buildMigrationExportManifest(
 			SourceEnvironmentRef: ref, DisplayNameHint: record.Name,
 			Runtime: "linux", GuestUser: profileValue.guestUser,
 			Backend: prepared.capability.Provider, Mode: migration.ExportModeFull,
-			ImageProvenance:    migrationEnvironmentImageProvenance(record),
-			ProfileComponentID: profileValue.componentID,
-			WorkspaceProposals: workspaceProposals,
+			ImageProvenance:         migrationEnvironmentImageProvenance(record),
+			ProfileComponentID:      profileValue.componentID,
+			ProfileStateComponentID: profileValue.stateComponentID,
+			WorkspaceProposals:      workspaceProposals,
 			AuthorityProposalRefs: append(
 				[]migration.OpaqueID(nil), profileValue.authorityRefs...,
 			),

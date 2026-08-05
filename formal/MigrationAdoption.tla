@@ -28,9 +28,11 @@ VARIABLES phase,
           authorityApproved,
           authorityEffective,
           staged,
+          profileStateStaged,
           receiptValid,
           runnable,
           profileVisible,
+          profileStateVisible,
           environmentVisible,
           decision,
           daemonUp,
@@ -43,8 +45,9 @@ VARIABLES phase,
 vars ==
     <<phase, requestedName, policy, plannedPolicy, bundleDigest,
       bundleValid, nameOwner, controlID, backendID, guestID,
-      authorityApproved, authorityEffective, staged, receiptValid,
-      runnable, profileVisible, environmentVisible, decision, daemonUp,
+      authorityApproved, authorityEffective, staged, profileStateStaged,
+      receiptValid, runnable, profileVisible, profileStateVisible,
+      environmentVisible, decision, daemonUp,
       crashCount, stageEffects,
       adoptionEffects, commitEffects, replacementEffects>>
 
@@ -74,6 +77,8 @@ UsedSafeGuestIDs ==
 HasNameClaim(destination) ==
     nameOwner[requestedName[destination]] = destination
 
+ProfileStateVars == <<profileStateStaged, profileStateVisible>>
+
 Init ==
     /\ phase = [destination \in Destinations |-> "draft"]
     /\ requestedName \in [Destinations -> Names]
@@ -88,9 +93,11 @@ Init ==
     /\ authorityApproved = [destination \in Destinations |-> FALSE]
     /\ authorityEffective = [destination \in Destinations |-> FALSE]
     /\ staged = [destination \in Destinations |-> FALSE]
+    /\ profileStateStaged = [destination \in Destinations |-> FALSE]
     /\ receiptValid = [destination \in Destinations |-> FALSE]
     /\ runnable = [destination \in Destinations |-> FALSE]
     /\ profileVisible = [destination \in Destinations |-> FALSE]
+    /\ profileStateVisible = [destination \in Destinations |-> FALSE]
     /\ environmentVisible = [destination \in Destinations |-> FALSE]
     /\ decision = [destination \in Destinations |-> "none"]
     /\ daemonUp = TRUE
@@ -105,6 +112,7 @@ RejectInvalidBundle(destination) ==
     /\ phase[destination] = "draft"
     /\ ~bundleValid
     /\ phase' = [phase EXCEPT ![destination] = "blocked"]
+	/\ UNCHANGED ProfileStateVars
 	/\ UNCHANGED <<requestedName, policy, plannedPolicy, bundleDigest,
                     bundleValid, nameOwner, controlID, backendID, guestID,
                     authorityApproved, authorityEffective, staged,
@@ -126,6 +134,7 @@ PlanDestination(destination) ==
               [controlID EXCEPT ![destination] = freshControl]
         /\ backendID' =
               [backendID EXCEPT ![destination] = freshBackend]
+        /\ UNCHANGED ProfileStateVars
         /\ UNCHANGED <<requestedName, policy, bundleDigest, bundleValid,
                         nameOwner, guestID, authorityApproved,
                         authorityEffective, staged, receiptValid, runnable,
@@ -139,6 +148,7 @@ ApproveAuthority(destination) ==
     /\ ~authorityApproved[destination]
     /\ authorityApproved' =
           [authorityApproved EXCEPT ![destination] = TRUE]
+    /\ UNCHANGED ProfileStateVars
     /\ UNCHANGED <<phase, requestedName, policy, plannedPolicy,
                     bundleDigest, bundleValid, nameOwner, controlID,
                     backendID, guestID, authorityEffective, staged,
@@ -154,6 +164,7 @@ AcquireNameClaim(destination) ==
     /\ phase' = [phase EXCEPT ![destination] = "claimed"]
     /\ nameOwner' =
           [nameOwner EXCEPT ![requestedName[destination]] = destination]
+    /\ UNCHANGED ProfileStateVars
     /\ UNCHANGED <<requestedName, policy, plannedPolicy, bundleDigest,
                     bundleValid, controlID, backendID, guestID,
                     authorityApproved, authorityEffective, staged,
@@ -170,6 +181,7 @@ BlockNameConflict(destination) ==
     /\ phase' = [phase EXCEPT ![destination] = "blocked"]
     /\ controlID' = [controlID EXCEPT ![destination] = NoID]
     /\ backendID' = [backendID EXCEPT ![destination] = NoID]
+    /\ UNCHANGED ProfileStateVars
     /\ UNCHANGED <<requestedName, policy, plannedPolicy, bundleDigest,
                     bundleValid, nameOwner, guestID, authorityApproved,
                     authorityEffective, staged, receiptValid, runnable,
@@ -192,6 +204,7 @@ RenameDestination(destination) ==
               [plannedPolicy EXCEPT ![destination] = NoPolicy]
         /\ controlID' = [controlID EXCEPT ![destination] = NoID]
         /\ backendID' = [backendID EXCEPT ![destination] = NoID]
+        /\ UNCHANGED ProfileStateVars
         /\ UNCHANGED <<policy, bundleDigest, bundleValid, nameOwner,
                         guestID, authorityApproved, authorityEffective,
                         staged, receiptValid, runnable, profileVisible,
@@ -204,6 +217,7 @@ PlanReplacement(destination) ==
     /\ phase[destination] = "planned"
     /\ nameOwner[requestedName[destination]] = ExternalOwner
     /\ phase' = [phase EXCEPT ![destination] = "replacement-planned"]
+    /\ UNCHANGED ProfileStateVars
     /\ UNCHANGED <<requestedName, policy, plannedPolicy, bundleDigest,
                     bundleValid, nameOwner, controlID, backendID, guestID,
                     authorityApproved, authorityEffective, staged,
@@ -217,6 +231,7 @@ ConfirmReplacement(destination) ==
     /\ phase[destination] = "replacement-planned"
     /\ nameOwner[requestedName[destination]] = ExternalOwner
     /\ phase' = [phase EXCEPT ![destination] = "replacement-confirmed"]
+    /\ UNCHANGED ProfileStateVars
     /\ UNCHANGED <<requestedName, policy, plannedPolicy, bundleDigest,
                     bundleValid, nameOwner, controlID, backendID, guestID,
                     authorityApproved, authorityEffective, staged,
@@ -239,6 +254,7 @@ DeleteReplacement(destination) ==
     /\ backendID' = [backendID EXCEPT ![destination] = NoID]
     /\ replacementEffects' =
           [replacementEffects EXCEPT ![destination] = @ + 1]
+    /\ UNCHANGED ProfileStateVars
     /\ UNCHANGED <<requestedName, policy, bundleDigest, bundleValid,
                     guestID, authorityApproved, authorityEffective, staged,
                     receiptValid, runnable, profileVisible,
@@ -253,7 +269,10 @@ StageDestination(destination) ==
     /\ stageEffects[destination] = 0
     /\ phase' = [phase EXCEPT ![destination] = "staged"]
     /\ staged' = [staged EXCEPT ![destination] = TRUE]
+    /\ profileStateStaged' =
+          [profileStateStaged EXCEPT ![destination] = TRUE]
     /\ stageEffects' = [stageEffects EXCEPT ![destination] = @ + 1]
+    /\ UNCHANGED profileStateVisible
     /\ UNCHANGED <<requestedName, policy, plannedPolicy, bundleDigest,
                     bundleValid, nameOwner, controlID, backendID, guestID,
                     authorityApproved, authorityEffective, receiptValid,
@@ -267,6 +286,7 @@ BeginAdoption(destination) ==
     /\ phase[destination] = "staged"
     /\ staged[destination]
     /\ phase' = [phase EXCEPT ![destination] = "adopting"]
+    /\ UNCHANGED ProfileStateVars
     /\ UNCHANGED <<requestedName, policy, plannedPolicy, bundleDigest,
                     bundleValid, nameOwner, controlID, backendID, guestID,
                     authorityApproved, authorityEffective, staged,
@@ -288,6 +308,7 @@ FinishSafeClone(destination) ==
               [receiptValid EXCEPT ![destination] = TRUE]
         /\ adoptionEffects' =
               [adoptionEffects EXCEPT ![destination] = @ + 1]
+        /\ UNCHANGED ProfileStateVars
         /\ UNCHANGED <<requestedName, policy, plannedPolicy, bundleDigest,
                         bundleValid, nameOwner, controlID, backendID,
                         authorityApproved, authorityEffective, staged,
@@ -306,6 +327,7 @@ FinishExactRestore(destination) ==
     /\ receiptValid' = [receiptValid EXCEPT ![destination] = TRUE]
     /\ adoptionEffects' =
           [adoptionEffects EXCEPT ![destination] = @ + 1]
+    /\ UNCHANGED ProfileStateVars
     /\ UNCHANGED <<requestedName, policy, plannedPolicy, bundleDigest,
                     bundleValid, nameOwner, controlID, backendID,
                     authorityApproved, authorityEffective, staged,
@@ -320,6 +342,7 @@ VerifyDestination(destination) ==
     /\ staged[destination]
     /\ receiptValid[destination]
     /\ phase' = [phase EXCEPT ![destination] = "verified"]
+    /\ UNCHANGED ProfileStateVars
     /\ UNCHANGED <<requestedName, policy, plannedPolicy, bundleDigest,
                     bundleValid, nameOwner, controlID, backendID, guestID,
                     authorityApproved, authorityEffective, staged,
@@ -337,6 +360,7 @@ DecideCommit(destination) ==
     /\ phase' = [phase EXCEPT ![destination] = "committed"]
     /\ decision' = [decision EXCEPT ![destination] = "commit"]
     /\ commitEffects' = [commitEffects EXCEPT ![destination] = @ + 1]
+    /\ UNCHANGED ProfileStateVars
     /\ UNCHANGED <<requestedName, policy, plannedPolicy, bundleDigest,
                     bundleValid, nameOwner, controlID, backendID, guestID,
                     authorityApproved, authorityEffective, staged,
@@ -353,11 +377,14 @@ Activate(destination) ==
     /\ runnable' = [runnable EXCEPT ![destination] = TRUE]
     /\ profileVisible' =
           [profileVisible EXCEPT ![destination] = TRUE]
+    /\ profileStateVisible' =
+          [profileStateVisible EXCEPT ![destination] = TRUE]
     /\ environmentVisible' =
           [environmentVisible EXCEPT ![destination] = TRUE]
     /\ authorityEffective' =
           [authorityEffective EXCEPT
               ![destination] = authorityApproved[destination]]
+    /\ UNCHANGED profileStateStaged
     /\ UNCHANGED <<requestedName, policy, plannedPolicy, bundleDigest,
                     bundleValid, nameOwner, controlID, backendID, guestID,
                     authorityApproved, staged, receiptValid, decision,
@@ -371,6 +398,7 @@ RequestRollback(destination) ==
     /\ decision[destination] = "none"
     /\ phase' = [phase EXCEPT ![destination] = "rolling-back"]
     /\ decision' = [decision EXCEPT ![destination] = "rollback"]
+    /\ UNCHANGED ProfileStateVars
     /\ UNCHANGED <<requestedName, policy, plannedPolicy, bundleDigest,
                     bundleValid, nameOwner, controlID, backendID, guestID,
                     authorityApproved, authorityEffective, staged,
@@ -393,10 +421,14 @@ Rollback(destination) ==
     /\ authorityEffective' =
           [authorityEffective EXCEPT ![destination] = FALSE]
     /\ staged' = [staged EXCEPT ![destination] = FALSE]
+    /\ profileStateStaged' =
+          [profileStateStaged EXCEPT ![destination] = FALSE]
     /\ receiptValid' = [receiptValid EXCEPT ![destination] = FALSE]
     /\ runnable' = [runnable EXCEPT ![destination] = FALSE]
     /\ profileVisible' =
           [profileVisible EXCEPT ![destination] = FALSE]
+    /\ profileStateVisible' =
+          [profileStateVisible EXCEPT ![destination] = FALSE]
     /\ environmentVisible' =
           [environmentVisible EXCEPT ![destination] = FALSE]
     /\ UNCHANGED <<requestedName, policy, plannedPolicy, bundleDigest,
@@ -409,6 +441,7 @@ Crash ==
     /\ crashCount < MaxCrashes
     /\ daemonUp' = FALSE
     /\ crashCount' = crashCount + 1
+    /\ UNCHANGED ProfileStateVars
     /\ UNCHANGED <<phase, requestedName, policy, plannedPolicy,
                     bundleDigest, bundleValid, nameOwner, controlID,
                     backendID, guestID, authorityApproved,
@@ -420,6 +453,7 @@ Crash ==
 Restart ==
     /\ ~daemonUp
     /\ daemonUp' = TRUE
+    /\ UNCHANGED ProfileStateVars
     /\ UNCHANGED <<phase, requestedName, policy, plannedPolicy,
                     bundleDigest, bundleValid, nameOwner, controlID,
                     backendID, guestID, authorityApproved,
@@ -505,9 +539,11 @@ TypeOK ==
     /\ authorityApproved \in [Destinations -> BOOLEAN]
     /\ authorityEffective \in [Destinations -> BOOLEAN]
     /\ staged \in [Destinations -> BOOLEAN]
+    /\ profileStateStaged \in [Destinations -> BOOLEAN]
     /\ receiptValid \in [Destinations -> BOOLEAN]
     /\ runnable \in [Destinations -> BOOLEAN]
     /\ profileVisible \in [Destinations -> BOOLEAN]
+    /\ profileStateVisible \in [Destinations -> BOOLEAN]
     /\ environmentVisible \in [Destinations -> BOOLEAN]
     /\ decision \in
           [Destinations -> {"none", "commit", "rollback"}]
@@ -526,8 +562,13 @@ RunnableIffActive ==
 
 AtomicNamespaceVisibility ==
     \A destination \in Destinations :
+        /\ profileStateVisible[destination] = profileVisible[destination]
         /\ profileVisible[destination] = environmentVisible[destination]
         /\ environmentVisible[destination] = runnable[destination]
+
+ProfileStateOwnedByStage ==
+    \A destination \in Destinations :
+        profileStateStaged[destination] = staged[destination]
 
 ControlIDsFreshAndDistinct ==
     /\ \A destination \in Destinations :
@@ -578,6 +619,8 @@ InvalidBundleNeverStages ==
     ~bundleValid =>
         \A destination \in Destinations :
             /\ ~staged[destination]
+            /\ ~profileStateStaged[destination]
+            /\ ~profileStateVisible[destination]
             /\ ~runnable[destination]
             /\ phase[destination] \in {"draft", "blocked"}
 
@@ -615,6 +658,7 @@ ReplacementRequiresFreshImportPlan ==
             /\ backendID[destination] = NoID
             /\ nameOwner[requestedName[destination]] # ExternalOwner
             /\ ~staged[destination]
+            /\ ~profileStateStaged[destination]
             /\ ~runnable[destination]
 
 StagedStateNeverRuns ==
@@ -622,6 +666,7 @@ StagedStateNeverRuns ==
         phase[destination] # "active" =>
             /\ ~runnable[destination]
             /\ ~profileVisible[destination]
+            /\ ~profileStateVisible[destination]
             /\ ~environmentVisible[destination]
 
 EveryDestinationEventuallyTerminal ==

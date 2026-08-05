@@ -160,9 +160,15 @@ func (service MigrationImportService) PlanImport(
 	}
 	requiredBytes := logicalBytes
 	capacity := migration.CapacityRequirement{}
+	var profileStateBytes uint64
 	if !configOnly {
+		var stateErr error
+		profileStateBytes, stateErr = migrationProfileStateLogicalBytes(environmentActions)
+		if stateErr != nil {
+			return migration.ImportPlan{}, stateErr
+		}
 		capacity, err = migrationImportCapacityRequirement(
-			inspection.BundleFile.Size, selectedDisks,
+			inspection.BundleFile.Size, selectedDisks, profileStateBytes,
 		)
 		if err != nil {
 			return migration.ImportPlan{}, err
@@ -181,7 +187,8 @@ func (service MigrationImportService) PlanImport(
 			Binding: binding, ManifestDigest: draft.BundleBinding.ManifestDigest,
 			SourceProduct:   inspection.Manifest.SourceProduct,
 			EnvironmentRefs: migrationImportObjectRefs(objects),
-			Disks:           selectedDisks, Edges: selectedEdges,
+			Disks:           selectedDisks, ProfileStateBytes: profileStateBytes,
+			Edges: selectedEdges,
 			RequiredCapabilities: append(
 				[]migration.RequiredCapability(nil), inspection.Manifest.RequiredCapabilities...,
 			),
@@ -417,8 +424,12 @@ func (service MigrationImportService) revalidateImportDestination(
 		}
 		return nil
 	}
+	profileStateBytes, err := migrationProfileStateLogicalBytes(plan.EnvironmentActions)
+	if err != nil {
+		return ErrMigrationPlanStale
+	}
 	capacity, err := migrationImportCapacityRequirement(
-		int64(plan.Compatibility.Capacity.BundleBytes), disks,
+		int64(plan.Compatibility.Capacity.BundleBytes), disks, profileStateBytes,
 	)
 	if err != nil || capacity != plan.Compatibility.Capacity ||
 		capacity.PeakAdditionalBytes != plan.Compatibility.RequiredBytes {
@@ -428,7 +439,8 @@ func (service MigrationImportService) revalidateImportDestination(
 		Binding: binding, ManifestDigest: plan.BundleBinding.ManifestDigest,
 		SourceProduct:   manifest.SourceProduct,
 		EnvironmentRefs: migrationImportObjectRefs(plan.Objects),
-		Disks:           disks, Edges: edges,
+		Disks:           disks, ProfileStateBytes: profileStateBytes,
+		Edges:                edges,
 		RequiredCapabilities: append([]migration.RequiredCapability(nil), manifest.RequiredCapabilities...),
 		RequiredBytes:        capacity.PeakAdditionalBytes,
 		Capacity:             capacity,
@@ -654,6 +666,13 @@ func (service MigrationImportService) buildImportOperation(
 			operation.Progress.TotalLogicalBytes += action.ProfileLogicalBytes
 		}
 		operation.Progress.ComponentsTotal = uint32(len(plan.EnvironmentActions))
+	} else {
+		profileStateBytes, stateErr := migrationProfileStateLogicalBytes(plan.EnvironmentActions)
+		if stateErr != nil || profileStateBytes > migration.HardMaxLogicalBytes-operation.Progress.TotalLogicalBytes {
+			return MigrationOperation{}, ErrMigrationPlanInvalid
+		}
+		operation.Progress.TotalLogicalBytes += profileStateBytes
+		operation.Progress.ComponentsTotal += uint32(len(plan.EnvironmentActions))
 	}
 	if err := operation.Validate(); err != nil {
 		return MigrationOperation{}, err
@@ -1355,6 +1374,18 @@ func migrationDiskLogicalBytes(disks []migration.DiskObject) (uint64, error) {
 			return 0, ErrMigrationPlanInvalid
 		}
 		total += disk.LogicalBytes
+	}
+	return total, nil
+}
+
+func migrationProfileStateLogicalBytes(actions []migration.EnvironmentAction) (uint64, error) {
+	var total uint64
+	for _, action := range actions {
+		if action.ProfileStateLogicalBytes == 0 ||
+			action.ProfileStateLogicalBytes > migration.HardMaxLogicalBytes-total {
+			return 0, ErrMigrationPlanInvalid
+		}
+		total += action.ProfileStateLogicalBytes
 	}
 	return total, nil
 }

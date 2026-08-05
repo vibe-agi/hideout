@@ -32,9 +32,9 @@ func TestMigrationExportTUIRendersSharedGoldenPlan(t *testing.T) {
 	}
 	view := strings.Join(wizard.reviewLines(), "\n")
 	for _, expected := range []string{
-		"Included environment-declarations, persistent-disks, portable-profiles",
-		"Payload estimate 9.0 KiB · complete logical payload",
-		"ENV dev · environment_source1 · 9.0 KiB · config 1.0 KiB",
+		"Included environment-declarations, persistent-disks, portable-profiles, profile-application-state",
+		"Payload estimate 9.5 KiB · complete logical payload",
+		"ENV dev · environment_source1 · 9.5 KiB · config 1.0 KiB · profile state 512 B",
 		"DISK disk_root0000001 · root · logical 8.0 KiB",
 		"used by environment_source1",
 	} {

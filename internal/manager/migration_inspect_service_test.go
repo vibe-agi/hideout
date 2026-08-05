@@ -222,17 +222,36 @@ func writeManagerSealedBundleFixture(t *testing.T) string {
 		t.Fatal(err)
 	}
 	profile := []byte(`{"schema":"fixture.profile/v1"}`)
-	records := []migration.RecordInput{
+	profileState, _ := managerMigrationProfileStateFixture()
+	for _, record := range []migration.RecordInput{
 		{Type: migration.RecordRawChunk, ComponentID: "component_attached1", Plaintext: bytes.Repeat([]byte{1}, 4096)},
 		{Type: migration.RecordMetadata, ComponentID: "component_profile1", Plaintext: profile},
-		{Type: migration.RecordRawChunk, ComponentID: "component_root0001", Plaintext: bytes.Repeat([]byte{2}, 8192)},
-	}
-	for _, record := range records {
+		{Type: migration.RecordRawChunk, ComponentID: "component_state001", Plaintext: profileState},
+	} {
 		if _, err := writer.Append(record); err != nil {
 			_ = writer.Close()
 			_ = file.Close()
 			t.Fatal(err)
 		}
+	}
+	if _, _, err := writer.AppendCheckpoint(migration.CheckpointInput{
+		OperationID: "op_managerinspect01",
+		CompletedComponents: []migration.OpaqueID{
+			"component_attached1", "component_profile1", "component_state001",
+		},
+		CurrentComponent: "component_state001",
+	}); err != nil {
+		_ = writer.Close()
+		_ = file.Close()
+		t.Fatal(err)
+	}
+	if _, err := writer.Append(migration.RecordInput{
+		Type: migration.RecordRawChunk, ComponentID: "component_root0001",
+		Plaintext: bytes.Repeat([]byte{2}, 8192),
+	}); err != nil {
+		_ = writer.Close()
+		_ = file.Close()
+		t.Fatal(err)
 	}
 	manifest := managerMigrationManifestFixture("migb_managerinspect1")
 	manifest.ComponentIndex[1].LogicalBytes = uint64(len(profile))

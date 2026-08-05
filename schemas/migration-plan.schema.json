@@ -211,7 +211,47 @@
         "riskAcknowledgements": {
           "$ref": "#/$defs/riskAcknowledgements"
         }
-      }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "mode": {
+                "const": "full"
+              }
+            },
+            "required": [
+              "mode"
+            ]
+          },
+          "then": {
+            "properties": {
+              "environmentEstimates": {
+                "items": {
+                  "required": [
+                    "profileStateLogicalBytes",
+                    "profileStateDigest"
+                  ]
+                }
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "environmentEstimates": {
+                "items": {
+                  "not": {
+                    "anyOf": [
+                      {"required": ["profileStateLogicalBytes"]},
+                      {"required": ["profileStateDigest"]}
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        }
+      ]
     },
     "importDraft": {
       "type": "object",
@@ -526,6 +566,14 @@
           "maximum": 1048576
         },
         "portableConfigDigest": {
+          "$ref": "#/$defs/digest"
+        },
+        "profileStateLogicalBytes": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 4398046511104
+        },
+        "profileStateDigest": {
           "$ref": "#/$defs/digest"
         },
         "diskRefs": {
@@ -1151,8 +1199,41 @@
           "type": "integer",
           "minimum": 1,
           "maximum": 1048576
+        },
+        "profileStateComponentId": {
+          "$ref": "#/$defs/opaqueId"
+        },
+        "profileStateContentDigest": {
+          "$ref": "#/$defs/digest"
+        },
+        "profileStateLogicalBytes": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 4398046511104
         }
-      }
+      },
+      "allOf": [
+        {
+          "oneOf": [
+            {
+              "required": [
+                "profileStateComponentId",
+                "profileStateContentDigest",
+                "profileStateLogicalBytes"
+              ]
+            },
+            {
+              "not": {
+                "anyOf": [
+                  {"required": ["profileStateComponentId"]},
+                  {"required": ["profileStateContentDigest"]},
+                  {"required": ["profileStateLogicalBytes"]}
+                ]
+              }
+            }
+          ]
+        }
+      ]
     },
     "authorityAction": {
       "type": "object",

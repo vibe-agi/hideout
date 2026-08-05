@@ -328,6 +328,7 @@ type MigrationDestinationStageState struct {
 	ObjectHandles  []migration.OpaqueID                  `json:"objectHandles"`
 	Checkpoints    []MigrationDestinationStageCheckpoint `json:"checkpoints"`
 	Profiles       []MigrationMaterializedProfile        `json:"profiles"`
+	ProfileStates  []MigrationMaterializedProfileState   `json:"profileStates,omitempty"`
 	EvidenceDigest migration.Digest                      `json:"evidenceDigest"`
 }
 
@@ -364,6 +365,14 @@ func (stage MigrationDestinationStageState) Validate() error {
 			return fmt.Errorf("%w: destination stage profile", ErrMigrationOperationInvalid)
 		}
 		previousComponent = materialized.ComponentID
+	}
+	var previousSource migration.OpaqueID
+	for _, state := range stage.ProfileStates {
+		if state.validateShape() != nil ||
+			(previousSource != "" && previousSource >= state.SourceRef) {
+			return fmt.Errorf("%w: destination stage profile state", ErrMigrationOperationInvalid)
+		}
+		previousSource = state.SourceRef
 	}
 	return nil
 }
@@ -1595,6 +1604,12 @@ func (operation MigrationOperation) validateDestinationStage() error {
 	) != nil {
 		return fmt.Errorf("%w: destination stage profiles", ErrMigrationOperationInvalid)
 	}
+	if validateMigrationMaterializedProfileStates(
+		operation.ID, operation.ImportObjects, operation.EnvironmentActions,
+		operation.DestinationStage.ProfileStates,
+	) != nil {
+		return fmt.Errorf("%w: destination stage profile states", ErrMigrationOperationInvalid)
+	}
 	return nil
 }
 
@@ -1610,6 +1625,9 @@ func cloneMigrationDestinationStage(
 		[]MigrationDestinationStageCheckpoint(nil), stage.Checkpoints...,
 	)
 	cloned.Profiles = cloneMigrationMaterializedProfiles(stage.Profiles)
+	cloned.ProfileStates = append(
+		[]MigrationMaterializedProfileState(nil), stage.ProfileStates...,
+	)
 	return &cloned
 }
 

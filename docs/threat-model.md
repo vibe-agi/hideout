@@ -927,12 +927,16 @@ Required non-claims:
 ## Portable Migration Boundary (046)
 
 A migration bundle is high-sensitivity recovery material, not shareable
-evidence. Full mode intentionally encrypts opaque VM disks and therefore may
-carry application credentials, private source, device identifiers, or any other
-byte written inside the guest. Configuration mode is narrower, but an explicitly
-selected managed-secret value is still secret payload. Neither mode includes
-ambient host workspaces, activity/audit history, caches, live process/RAM state,
-or installed host applications.
+evidence. Full mode intentionally encrypts opaque VM disks and the selected
+profile's persistent application state under `home/`, `config/`, `data/`, and
+`browser/`. Those components may carry application credentials, private source,
+browser sessions, device identifiers, or other private bytes. Configuration mode
+is narrower, but an explicitly selected managed-secret value is still secret
+payload. Neither mode includes ambient host workspaces, activity/audit history,
+Hideout profile caches, live process/RAM state, or installed host applications.
+Generated profile machine identity and generated Git configuration are excluded
+from full profile state and recreated on the destination; opaque guest disks may
+still contain their own caches and unclassified identities.
 
 The bundle reader treats every byte as attacker-controlled. It accepts only the
 canonical v1 prologue, bounded record sizes/counts, authenticated ordering,
@@ -942,9 +946,13 @@ record substitution, truncation, duplication, reordering, expansion abuse,
 traversal, special files, and trailing data fail closed before destination
 authority. Unpublished development formats have no compatibility reader.
 
-Export authority is bounded to selected environment declarations and the exact
-stopped persistent-disk graph. Manager revalidates the plan and provider
-capability before effects; full export snapshots only an exact stopped
+Export authority is bounded to selected environment declarations, their exact
+stopped persistent-disk graph, and the referenced profile application-state
+roots. Profile capture rejects source drift, hard-link aliases, escaping links,
+special files, unsafe paths, and declared-limit overflow; its deterministic
+plaintext stream is fed directly into authenticated bundle encryption and is
+never published as an intermediate artifact. Manager revalidates the plan and
+provider capability before effects; full export snapshots only an exact stopped
 incarnation and never boots or writes the source. A retained partial is
 operation-owned, authenticated before resume, and never importable as a sealed
 bundle.
@@ -957,18 +965,21 @@ workspace, endpoint, network, script, pack, and host-app authority remains a
 disabled proposal unless the destination explicitly approves its typed effect.
 Name replacement is a separate destructive review; refusal is the default.
 
-Staged backend objects and provisional secrets remain operation-owned and
-unpublished until capacity, disk digests, adoption identity, configuration, and
-provider observations verify. The activation decision is durable and one-way;
-restart reconciliation finishes or rolls back proved effects without exposing a
-half-imported environment. The source bundle is never an import cleanup target.
+Staged backend objects, profile application state, and provisional secrets remain
+operation-owned and unpublished until capacity, profile-state and disk digests,
+adoption identity, configuration, and provider observations verify. Profile
+state is published only by the same batch that makes its freshly identified
+destination profile visible; exact-owner markers constrain rollback and resume.
+The activation decision is durable and one-way; restart reconciliation finishes
+or rolls back proved effects without exposing a half-imported environment. The
+source bundle is never an import cleanup target.
 
-Every destination creates fresh Hideout environment/control, backend, operation,
-session, broker, workspace, and ephemeral credential identity. Safe Clone also
-regenerates the guest machine ID and SSH host keys independently on each import.
-Exact Guest Restore preserves those guest identities only after the exact
-collision acknowledgement; it does not preserve Hideout/backend identity and
-does not prove that a disconnected source was retired.
+Every destination creates fresh Hideout environment/control, backend, profile,
+operation, session, broker, workspace, and ephemeral credential identity. Safe
+Clone also regenerates the guest machine ID and SSH host keys independently on
+each import. Exact Guest Restore preserves those guest identities only after the
+exact collision acknowledgement; it does not preserve Hideout/backend/profile
+identity and does not prove that a disconnected source was retired.
 
 Passphrases enter through a hidden terminal prompt or a bounded one-shot stdin
 handle, never argv, environment, plan, status, audit, or retained evidence.

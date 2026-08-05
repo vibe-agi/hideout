@@ -103,8 +103,9 @@ Request:
 ```
 
 The Manager resolves source revisions, environment/disk closure, stopped state,
-provider capability, excluded data classes, output conflicts, selected secret
-exportability, estimated logical/allocated bytes, and required free space.
+provider capability, profile application-state inventory/digest, excluded data
+classes, output conflicts, selected secret exportability, estimated
+logical/allocated bytes, and required free space.
 
 Response data is an immutable review plan:
 
@@ -116,6 +117,12 @@ Response data is an immutable review plan:
   "baseRevisions": {},
   "mode": "full",
   "environments": [],
+  "environmentEstimates": [
+    {
+      "profileStateLogicalBytes": 1024,
+      "profileStateDigest": "sha256:..."
+    }
+  ],
   "diskGraph": {},
   "sourceInventoryDigest": "sha256:...",
   "selectedSecrets": [],
@@ -173,10 +180,10 @@ Request:
 ```
 
 Returns a redacted `BundleInspection` with bundle/format/version, source product
-and backend compatibility, environment names, disk logical/allocated estimates,
-included/excluded classes, secret references/value presence, required capabilities,
-and warnings. It creates no draft, claims, secret entries, profile, environment,
-or backend object.
+and backend compatibility, environment names, disk and profile-state logical
+estimates, included/excluded classes, secret references/value presence, required
+capabilities, and warnings. It creates no draft, claims, secret entries, profile,
+environment, or backend object.
 
 URLs with userinfo are redacted; selected secret values and guest file content are
 never returned.

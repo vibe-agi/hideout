@@ -20,6 +20,7 @@ export LC_ALL=C
 export TZ=UTC
 
 candidate_result=""
+resume_checkpoint=""
 out="$repo_root/.artifacts/046/migration-lima"
 preflight_only=0
 timeout_seconds="${HIDEOUT_MIGRATION_LIMA_TIMEOUT_SECONDS:-1800}"
@@ -35,6 +36,10 @@ safe_three_store=""
 exact_store=""
 wrong_store=""
 compat_store=""
+checkpoint_path=""
+checkpoint_ready=0
+checkpoint_reused=0
+checkpoint_keychain_service="dev.hideout.migration-lima.checkpoint.v1"
 daemon_socket_path_max=100
 lima_socket_path_max=104
 lima_socket_probe="ssh.sock.1234567890123456"
@@ -42,7 +47,20 @@ lima_socket_probe="ssh.sock.1234567890123456"
 migration_guest_verify_script='
   set -eu
   printf "root="
-  cat /home/developer/migration-root-proof
+  cat /var/lib/hideout-migration-root-proof
+  printf "profile-home="
+  cat "$HOME/.claude/projects/-workspace/history.jsonl"
+  printf "profile-config="
+  cat "$XDG_CONFIG_HOME/hideout-migration/config-proof"
+  printf "profile-data="
+  cat "$XDG_DATA_HOME/hideout-migration/data-proof"
+  printf "profile-browser="
+  cat /hideout/profile/browser/hideout-migration/browser-proof
+  [ ! -e "$XDG_CACHE_HOME/hideout-migration-cache-proof" ]
+  printf "profile-cache=excluded\n"
+  [ -f "$HOME/.gitconfig" ]
+  ! grep -Fq hideout-source-generated-must-reset-v1 "$HOME/.gitconfig"
+  printf "profile-generated=regenerated\n"
   printf "machine="
   tr -d "[:space:]" </etc/machine-id
   printf "\nssh="
@@ -59,6 +77,38 @@ migration_guest_verify_script='
   [ "$found" -eq 1 ]
   [ ! -e /workspace/host-only.txt ]
 '
+
+migration_guest_fidelity_output() {
+  local output_path="$1" root_value="$2" attached_value="$3"
+  local home_value="$4" config_value="$5" data_value="$6"
+  local browser_value="$7" host_value="$8"
+  [ -f "$output_path" ] && [ ! -L "$output_path" ] || return 1
+  grep -Fxq "root=$root_value" "$output_path" &&
+    grep -Fxq "attached=$attached_value" "$output_path" &&
+    grep -Fxq "profile-home=$home_value" "$output_path" &&
+    grep -Fxq "profile-config=$config_value" "$output_path" &&
+    grep -Fxq "profile-data=$data_value" "$output_path" &&
+    grep -Fxq "profile-browser=$browser_value" "$output_path" &&
+    grep -Fxq "profile-cache=excluded" "$output_path" &&
+    grep -Fxq "profile-generated=regenerated" "$output_path" &&
+    ! grep -Fq "$host_value" "$output_path"
+}
+
+migration_source_profile_state_digest() {
+  local profile_dir="$1" relative path
+  for relative in \
+    home/.claude/projects/-workspace/history.jsonl \
+    home/.gitconfig \
+    config/hideout-migration/config-proof \
+    data/hideout-migration/data-proof \
+    browser/hideout-migration/browser-proof \
+    cache/hideout-migration-cache-proof; do
+    path="$profile_dir/$relative"
+    [ -f "$path" ] && [ ! -L "$path" ] || return 1
+    printf '%s\n' "$relative"
+    shasum -a 256 "$path"
+  done | shasum -a 256 | awk '{print $1}'
+}
 
 retain_failure_diagnostics() {
   [ -n "${scratch:-}" ] && [ -d "$scratch" ] || return 0
@@ -149,6 +199,7 @@ install_candidate_package() {
 usage() {
   printf '%s\n' \
     "Usage: scripts/gates/migration-lima.sh --candidate-result FILE [--out DIR]" \
+    "       [--resume-checkpoint FILE]" \
     "       scripts/gates/migration-lima.sh --preflight" \
     "" \
     "Consumes an already accepted package candidate without rebuilding it, installs it" \
@@ -180,6 +231,14 @@ while [ "$#" -gt 0 ]; do
         exit 2
       }
       out="$2"
+      shift 2
+      ;;
+    --resume-checkpoint)
+      [ "$#" -ge 2 ] && [ -n "${2:-}" ] || {
+        printf 'migration-lima: --resume-checkpoint requires a file\n' >&2
+        exit 2
+      }
+      resume_checkpoint="$2"
       shift 2
       ;;
     --preflight)
@@ -413,6 +472,8 @@ validate_migration_lima_summary() {
       encryptedBundleSealed:true,
       rootDiskFidelity:true,
       attachedDiskFidelity:true,
+      profileApplicationStateFidelity:true,
+      generatedProfileStateExcluded:true,
       hostWorkspaceExcluded:true,
       sourceImmutable:true,
       wrongPassphraseNoDestinationEnvironment:true,
@@ -472,6 +533,8 @@ validate_migration_lima_summary() {
       .sourceImmutability.rootDisk.afterSHA256,
       .sourceImmutability.attachedDisk.beforeSHA256,
       .sourceImmutability.attachedDisk.afterSHA256,
+      .sourceImmutability.profileState.beforeSHA256,
+      .sourceImmutability.profileState.afterSHA256,
       .sourceImmutability.environmentRecord.beforeSHA256,
       .sourceImmutability.environmentRecord.afterSHA256,
       .identityEvidence.control.sourceDigest,
@@ -608,6 +671,7 @@ migration_lima_summary_fixture() {
       sourceImmutability:{
         rootDisk:{beforeSHA256:digest("1"),afterSHA256:digest("1")},
         attachedDisk:{beforeSHA256:digest("2"),afterSHA256:digest("2")},
+        profileState:{beforeSHA256:digest("3"),afterSHA256:digest("3")},
         environmentRecord:{beforeSHA256:digest("3"),afterSHA256:digest("3")}
       },
       identityEvidence:{
@@ -645,6 +709,8 @@ migration_lima_summary_fixture() {
         encryptedBundleSealed:true,
         rootDiskFidelity:true,
         attachedDiskFidelity:true,
+        profileApplicationStateFidelity:true,
+        generatedProfileStateExcluded:true,
         hostWorkspaceExcluded:true,
         sourceImmutable:true,
         wrongPassphraseNoDestinationEnvironment:true,
@@ -679,9 +745,113 @@ migration_lima_summary_fixture() {
   '
 }
 
+sha256_file() {
+  shasum -a 256 "$1" | awk '{print $1}'
+}
+
+sha256_text() {
+  printf '%s' "$1" | shasum -a 256 | awk '{print $1}'
+}
+
+guest_identity_digest() {
+  printf 'hideout.migration-guest-identity/v1\nmachine=%s\nssh=%s\n' "$1" "$2" |
+    shasum -a 256 | awk '{print $1}'
+}
+
+file_mode() {
+  stat -f '%Lp' "$1" 2>/dev/null || stat -c '%a' "$1" 2>/dev/null
+}
+
+file_bytes() {
+  stat -f '%z' "$1" 2>/dev/null || stat -c '%s' "$1" 2>/dev/null
+}
+
+migration_checkpoint_secret() {
+  local account="$1"
+  security find-generic-password \
+    -a "$account" -s "$checkpoint_keychain_service" -w
+}
+
+migration_checkpoint_tag() {
+  local checkpoint="$1" account
+  account="$(jq -er '.authentication.keyRef.account' "$checkpoint")" || return 1
+  {
+    printf 'hideout.migration-lima-post-export-checkpoint/v1\000'
+    jq -cS '.payload' "$checkpoint"
+    printf '\000'
+    migration_checkpoint_secret "$account"
+  } | shasum -a 256 | awk '{print $1}'
+}
+
+validate_migration_post_export_checkpoint() {
+  local checkpoint="$1" checkpoint_dir checkpoint_root checkpoint_name
+  local bundle_path account recorded_tag computed_tag
+  [ -f "$checkpoint" ] && [ ! -L "$checkpoint" ] &&
+    [ "$(file_mode "$checkpoint")" = "600" ] || return 1
+  checkpoint_dir="$(CDPATH='' cd -- "$(dirname "$checkpoint")" && pwd -P)" || return 1
+  checkpoint_root="$(CDPATH='' cd -- "$out/checkpoints" && pwd -P)" || return 1
+  [ "$(dirname "$checkpoint_dir")" = "$checkpoint_root" ] || return 1
+  checkpoint_name="$(basename "$checkpoint_dir")"
+  [[ "$checkpoint_name" =~ ^checkpoint-[a-f0-9]{8}-[a-f0-9]{12}$ ]] || return 1
+  [ "$(file_mode "$checkpoint_dir")" = "700" ] || return 1
+  jq -e \
+    --arg commit "$candidate_commit" \
+    --arg tree "$candidate_tree" \
+    --arg archiveSHA256 "$archive_sha" \
+    --arg service "$checkpoint_keychain_service" '
+      (keys == ["authentication","payload","schema"]) and
+      .schema == "hideout.migration-lima-post-export-checkpoint/v1" and
+      (.payload | keys == ["bundle","canaries","candidate","createdAt","source","sourceImmutability"]) and
+      (.payload.createdAt |
+        test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$")) and
+      (.payload.candidate | keys == ["archiveSHA256","commit","tree"]) and
+      .payload.candidate == {
+        commit:$commit,tree:$tree,archiveSHA256:$archiveSHA256
+      } and
+      (.payload.bundle | keys == ["bytes","file","sha256"]) and
+      .payload.bundle.file == "bundle.hideout-migration" and
+      (.payload.bundle.sha256 | test("^[a-f0-9]{64}$")) and
+      (.payload.bundle.bytes | type == "number" and . > 0 and floor == .) and
+      (.payload.source | keys == ["environmentId","instance","machineId","name","sshDigest"]) and
+      (.payload.source.name |
+        test("^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")) and
+      (.payload.source.environmentId | test("^env_[A-Za-z0-9_-]{8,120}$")) and
+      (.payload.source.instance | test("^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")) and
+      (.payload.source.machineId | test("^[a-f0-9]{32}$")) and
+      (.payload.source.sshDigest | test("^[a-f0-9]{64}$")) and
+      (.payload.sourceImmutability |
+        keys == ["attachedDisk","environmentRecord","profileState","rootDisk"]) and
+      all(.payload.sourceImmutability[];
+        (keys == ["afterSHA256","beforeSHA256"]) and
+        (.beforeSHA256 | test("^[a-f0-9]{64}$")) and
+        .afterSHA256 == .beforeSHA256) and
+      (.payload.canaries | keys == ["attached","hostWorkspace","profileBrowser","profileCache","profileConfig","profileData","profileGenerated","profileHome","root"]) and
+      all(.payload.canaries[]; type == "string" and length > 0 and length <= 256) and
+      (.authentication | keys == ["algorithm","keyRef","tag"]) and
+      .authentication.algorithm == "sha256-payload-secret-suffix/v1" and
+      (.authentication.keyRef | keys == ["account","provider","service"]) and
+      .authentication.keyRef.provider == "macos-keychain" and
+      .authentication.keyRef.service == $service and
+      (.authentication.keyRef.account |
+        test("^migration-lima-[a-f0-9]{24}$")) and
+      (.authentication.tag | test("^[a-f0-9]{64}$"))
+    ' "$checkpoint" >/dev/null || return 1
+  bundle_path="$checkpoint_dir/$(jq -er '.payload.bundle.file' "$checkpoint")" || return 1
+  [ -f "$bundle_path" ] && [ ! -L "$bundle_path" ] &&
+    [ "$(file_mode "$bundle_path")" = "600" ] || return 1
+  [ "$(file_bytes "$bundle_path")" = "$(jq -er '.payload.bundle.bytes' "$checkpoint")" ] &&
+    [ "$(sha256_file "$bundle_path")" = "$(jq -er '.payload.bundle.sha256' "$checkpoint")" ] ||
+    return 1
+  account="$(jq -er '.authentication.keyRef.account' "$checkpoint")" || return 1
+  migration_checkpoint_secret "$account" >/dev/null || return 1
+  recorded_tag="$(jq -er '.authentication.tag' "$checkpoint")" || return 1
+  computed_tag="$(migration_checkpoint_tag "$checkpoint")" || return 1
+  [ "$recorded_tag" = "$computed_tag" ]
+}
+
 if [ "$preflight_only" -eq 1 ]; then
-  [ -z "$candidate_result" ] ||
-    fail "--preflight and --candidate-result are mutually exclusive"
+  [ -z "$candidate_result" ] && [ -z "$resume_checkpoint" ] ||
+    fail "--preflight cannot be combined with candidate or checkpoint input"
   require_command bash
   require_command cmp
   require_command cp
@@ -700,6 +870,10 @@ if [ "$preflight_only" -eq 1 ]; then
   printf '%s\n' "$summary_fixture" | validate_migration_lima_summary ||
     fail "summary validator rejected its valid preflight fixture"
   for mutation in \
+    '.checks.rootDiskFidelity = false' \
+    '.checks.attachedDiskFidelity = false' \
+    '.checks.profileApplicationStateFidelity = false' \
+    '.checks.generatedProfileStateExcluded = false' \
     '.identityEvidence.guest.safeCloneDigests[2] = .identityEvidence.guest.safeCloneDigests[1]' \
     '.crashRecovery.finalDaemonInstanceDigest = .crashRecovery.cuts[0].daemonInstanceDigest' \
     '.compatibilityEvidence.operationCreated = true' \
@@ -725,6 +899,158 @@ if [ "$preflight_only" -eq 1 ]; then
   run_dir="$diagnostic_fixture/evidence"
   source_store="$scratch/source-store"
   mkdir -p "$scratch" "$run_dir" "$source_store/daemon"
+
+  fidelity_fixture="$diagnostic_fixture/guest-fidelity.txt"
+  fidelity_root="root-proof"
+  fidelity_attached="attached-proof"
+  fidelity_home="claude-history-proof"
+  fidelity_config="config-proof"
+  fidelity_data="data-proof"
+  fidelity_browser="browser-proof"
+  fidelity_host="host-content-must-stay-local"
+  printf '%s\n' \
+    "root=$fidelity_root" \
+    "profile-home=$fidelity_home" \
+    "profile-config=$fidelity_config" \
+    "profile-data=$fidelity_data" \
+    "profile-browser=$fidelity_browser" \
+    'profile-cache=excluded' \
+    'profile-generated=regenerated' \
+    'machine=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' \
+    "attached=$fidelity_attached" \
+    >"$fidelity_fixture"
+  migration_guest_fidelity_output \
+    "$fidelity_fixture" "$fidelity_root" "$fidelity_attached" \
+    "$fidelity_home" "$fidelity_config" "$fidelity_data" \
+    "$fidelity_browser" "$fidelity_host" || {
+    find "$diagnostic_fixture" -depth -delete
+    fail "valid three-class fidelity fixture was rejected"
+  }
+  for fidelity_judge in \
+    root attached profile-home profile-config profile-data profile-browser \
+    profile-cache profile-generated; do
+    awk -v prefix="$fidelity_judge=" '
+      index($0, prefix) == 1 { print prefix "mutated"; next }
+      { print }
+    ' "$fidelity_fixture" >"$fidelity_fixture.mutated"
+    if migration_guest_fidelity_output \
+      "$fidelity_fixture.mutated" "$fidelity_root" "$fidelity_attached" \
+      "$fidelity_home" "$fidelity_config" "$fidelity_data" \
+      "$fidelity_browser" "$fidelity_host"; then
+      find "$diagnostic_fixture" -depth -delete
+      fail "fidelity judge accepted mutated $fidelity_judge evidence"
+    fi
+  done
+  cp "$fidelity_fixture" "$fidelity_fixture.mutated"
+  printf '%s\n' "$fidelity_host" >>"$fidelity_fixture.mutated"
+  if migration_guest_fidelity_output \
+    "$fidelity_fixture.mutated" "$fidelity_root" "$fidelity_attached" \
+    "$fidelity_home" "$fidelity_config" "$fidelity_data" \
+    "$fidelity_browser" "$fidelity_host"; then
+    find "$diagnostic_fixture" -depth -delete
+    fail "fidelity judge accepted leaked host-workspace evidence"
+  fi
+
+  saved_out="$out"
+  saved_candidate_commit="$candidate_commit"
+  saved_candidate_tree="$candidate_tree"
+  saved_archive_sha="${archive_sha:-}"
+  out="$diagnostic_fixture/checkpoint-out"
+  candidate_commit="$(printf '%040d' 0)"
+  candidate_tree="$(printf '%040d' 1)"
+  archive_sha="$(printf '%064d' 2)"
+  checkpoint_fixture_dir="$out/checkpoints/checkpoint-00000000-000000000000"
+  checkpoint_fixture="$checkpoint_fixture_dir/checkpoint.json"
+  checkpoint_fixture_bundle="$checkpoint_fixture_dir/bundle.hideout-migration"
+  checkpoint_fixture_account="migration-lima-$(printf '%024d' 3)"
+  checkpoint_fixture_secret="checkpoint-fixture-secret"
+  mkdir -p "$checkpoint_fixture_dir"
+  chmod 0700 "$out" "$out/checkpoints" "$checkpoint_fixture_dir"
+  printf '%s\n' 'encrypted-checkpoint-bundle-fixture' >"$checkpoint_fixture_bundle"
+  chmod 0600 "$checkpoint_fixture_bundle"
+  # shellcheck disable=SC2329 # fixture override is invoked through checkpoint tag validation.
+  migration_checkpoint_secret() {
+    [ "$1" = "$checkpoint_fixture_account" ] || return 1
+    printf '%s' "$checkpoint_fixture_secret"
+  }
+  jq -n \
+    --arg commit "$candidate_commit" --arg tree "$candidate_tree" \
+    --arg archiveSHA256 "$archive_sha" \
+    --arg bundleSHA256 "$(sha256_file "$checkpoint_fixture_bundle")" \
+    --argjson bundleBytes "$(file_bytes "$checkpoint_fixture_bundle")" \
+    --arg service "$checkpoint_keychain_service" \
+    --arg account "$checkpoint_fixture_account" '
+      def digest($value): $value * 64;
+      {
+        schema:"hideout.migration-lima-post-export-checkpoint/v1",
+        payload:{
+          createdAt:"2026-08-05T00:00:00Z",
+          candidate:{commit:$commit,tree:$tree,archiveSHA256:$archiveSHA256},
+          bundle:{file:"bundle.hideout-migration",sha256:$bundleSHA256,bytes:$bundleBytes},
+          source:{name:"migration-source",environmentId:"env_fixture1234",
+            instance:"backend_fixture1234",machineId:("a" * 32),sshDigest:digest("b")},
+          sourceImmutability:{
+            rootDisk:{beforeSHA256:digest("1"),afterSHA256:digest("1")},
+            attachedDisk:{beforeSHA256:digest("2"),afterSHA256:digest("2")},
+            profileState:{beforeSHA256:digest("3"),afterSHA256:digest("3")},
+            environmentRecord:{beforeSHA256:digest("4"),afterSHA256:digest("4")}
+          },
+          canaries:{root:"root",attached:"attached",profileHome:"home",
+            profileConfig:"config",profileData:"data",profileBrowser:"browser",
+            profileCache:"cache",profileGenerated:"generated",hostWorkspace:"host"}
+        },
+        authentication:{algorithm:"sha256-payload-secret-suffix/v1",
+          keyRef:{provider:"macos-keychain",service:$service,account:$account},
+          tag:("0" * 64)}
+      }
+    ' >"$checkpoint_fixture"
+  chmod 0600 "$checkpoint_fixture"
+  checkpoint_fixture_tag="$(migration_checkpoint_tag "$checkpoint_fixture")"
+  jq --arg tag "$checkpoint_fixture_tag" '.authentication.tag = $tag' \
+    "$checkpoint_fixture" >"$checkpoint_fixture.signed"
+  mv "$checkpoint_fixture.signed" "$checkpoint_fixture"
+  chmod 0600 "$checkpoint_fixture"
+  validate_migration_post_export_checkpoint "$checkpoint_fixture" || {
+    find "$diagnostic_fixture" -depth -delete
+    fail "valid authenticated post-export checkpoint fixture was rejected"
+  }
+  jq '.payload.canaries.root = "mutated"' \
+    "$checkpoint_fixture" >"$checkpoint_fixture.mutated"
+  chmod 0600 "$checkpoint_fixture.mutated"
+  if validate_migration_post_export_checkpoint "$checkpoint_fixture.mutated"; then
+    find "$diagnostic_fixture" -depth -delete
+    fail "checkpoint judge accepted unauthenticated payload substitution"
+  fi
+  cp "$checkpoint_fixture_bundle" "$checkpoint_fixture_bundle.original"
+  printf '%s\n' 'tampered' >>"$checkpoint_fixture_bundle"
+  if validate_migration_post_export_checkpoint "$checkpoint_fixture"; then
+    find "$diagnostic_fixture" -depth -delete
+    fail "checkpoint judge accepted bundle substitution"
+  fi
+  mv "$checkpoint_fixture_bundle.original" "$checkpoint_fixture_bundle"
+  chmod 0600 "$checkpoint_fixture_bundle"
+  jq '.payload.candidate.commit = ("d" * 40)' \
+    "$checkpoint_fixture" >"$checkpoint_fixture.mutated"
+  chmod 0600 "$checkpoint_fixture.mutated"
+  checkpoint_fixture_tag="$(migration_checkpoint_tag "$checkpoint_fixture.mutated")"
+  jq --arg tag "$checkpoint_fixture_tag" '.authentication.tag = $tag' \
+    "$checkpoint_fixture.mutated" >"$checkpoint_fixture.rebound"
+  mv "$checkpoint_fixture.rebound" "$checkpoint_fixture.mutated"
+  chmod 0600 "$checkpoint_fixture.mutated"
+  if validate_migration_post_export_checkpoint "$checkpoint_fixture.mutated"; then
+    find "$diagnostic_fixture" -depth -delete
+    fail "checkpoint judge accepted a different candidate binding"
+  fi
+  out="$saved_out"
+  candidate_commit="$saved_candidate_commit"
+  candidate_tree="$saved_candidate_tree"
+  archive_sha="$saved_archive_sha"
+  # shellcheck disable=SC2329 # restores the real indirect keychain resolver.
+  migration_checkpoint_secret() {
+    local account="$1"
+    security find-generic-password \
+      -a "$account" -s "$checkpoint_keychain_service" -w
+  }
 
   product_fixture="$diagnostic_fixture/product"
   product_summary_dir="$product_fixture/run-fixture"
@@ -999,11 +1325,12 @@ if [ "$preflight_only" -eq 1 ]; then
   scratch=""
   run_dir=""
   source_store=""
-  printf 'migration-lima: preflight=passed semantic-fixtures=34\n'
+  printf 'migration-lima: preflight=passed semantic-fixtures=47\n'
   exit 0
 fi
 
-for command in awk cp date find go grep jq limactl lsof mktemp mv openssl ps sed shasum sort ssh stat tail tar tr uname; do
+for command in awk cat cp cut date find go grep jq limactl lsof mktemp mv openssl ps \
+  security sed shasum sort ssh stat tail tar tr uname; do
   require_command "$command"
 done
 
@@ -1022,25 +1349,159 @@ esac
 [ "$(uname -s)" = "Darwin" ] && [ "$(uname -m)" = "arm64" ] ||
   fail "real migration gate requires macOS arm64"
 
-sha256_file() {
-  shasum -a 256 "$1" | awk '{print $1}'
+publish_migration_post_export_checkpoint() {
+  local checkpoint_root checkpoint_dir checkpoint_tmp checkpoint_account checkpoint_tag
+  local commit_prefix bundle_prefix
+  checkpoint_root="$out/checkpoints"
+  mkdir -p "$checkpoint_root" || return 1
+  [ ! -L "$checkpoint_root" ] || return 1
+  chmod 0700 "$checkpoint_root" || return 1
+  checkpoint_account="migration-lima-$(printf '%s' "$bundle_sha_before" | cut -c1-24)"
+  commit_prefix="$(printf '%s' "$candidate_commit" | cut -c1-8)"
+  bundle_prefix="$(printf '%s' "$bundle_sha_before" | cut -c1-12)"
+  checkpoint_dir="$checkpoint_root/checkpoint-$commit_prefix-$bundle_prefix"
+  [ ! -e "$checkpoint_dir" ] || return 1
+  mkdir "$checkpoint_dir" || return 1
+  chmod 0700 "$checkpoint_dir" || return 1
+  cp "$bundle" "$checkpoint_dir/bundle.hideout-migration" || return 1
+  chmod 0600 "$checkpoint_dir/bundle.hideout-migration" || return 1
+  if ! {
+    cat "$passphrase_file"
+    cat "$passphrase_file"
+  } | security add-generic-password \
+    -a "$checkpoint_account" -s "$checkpoint_keychain_service" \
+    -l "Hideout migration gate checkpoint" -w \
+    >/dev/null 2>&1; then
+    find "$checkpoint_dir" -depth -delete
+    return 1
+  fi
+  checkpoint_tmp="$checkpoint_dir/.checkpoint.$$.json"
+  if ! jq -n \
+    --arg createdAt "$(date -u +'%Y-%m-%dT%H:%M:%SZ')" \
+    --arg commit "$candidate_commit" --arg tree "$candidate_tree" \
+    --arg archiveSHA256 "$archive_sha" \
+    --arg bundleSHA256 "$bundle_sha_before" \
+    --argjson bundleBytes "$(file_bytes "$bundle")" \
+    --arg sourceName "$source_name" \
+    --arg sourceEnvironmentID "$source_environment_id" \
+    --arg sourceInstance "$source_instance" \
+    --arg sourceMachineID "$source_machine_id" \
+    --arg sourceSSHDigest "$source_ssh_digest" \
+    --arg rootBefore "$root_sha_before" --arg rootAfter "$root_sha_after_export" \
+    --arg attachedBefore "$attached_sha_before" --arg attachedAfter "$attached_sha_after_export" \
+    --arg profileBefore "$profile_state_sha_before" --arg profileAfter "$profile_state_sha_after_export" \
+    --arg recordBefore "$record_sha_before" --arg recordAfter "$record_sha_after_export" \
+    --arg rootCanary "$root_canary" --arg attachedCanary "$attached_canary" \
+    --arg profileHomeCanary "$profile_home_canary" \
+    --arg profileConfigCanary "$profile_config_canary" \
+    --arg profileDataCanary "$profile_data_canary" \
+    --arg profileBrowserCanary "$profile_browser_canary" \
+    --arg profileCacheCanary "$profile_cache_canary" \
+    --arg profileGeneratedCanary "$profile_generated_canary" \
+    --arg hostCanary "$host_canary" \
+    --arg service "$checkpoint_keychain_service" --arg account "$checkpoint_account" '
+      {
+        schema:"hideout.migration-lima-post-export-checkpoint/v1",
+        payload:{
+          createdAt:$createdAt,
+          candidate:{commit:$commit,tree:$tree,archiveSHA256:$archiveSHA256},
+          bundle:{file:"bundle.hideout-migration",sha256:$bundleSHA256,bytes:$bundleBytes},
+          source:{name:$sourceName,environmentId:$sourceEnvironmentID,
+            instance:$sourceInstance,machineId:$sourceMachineID,sshDigest:$sourceSSHDigest},
+          sourceImmutability:{
+            rootDisk:{beforeSHA256:$rootBefore,afterSHA256:$rootAfter},
+            attachedDisk:{beforeSHA256:$attachedBefore,afterSHA256:$attachedAfter},
+            profileState:{beforeSHA256:$profileBefore,afterSHA256:$profileAfter},
+            environmentRecord:{beforeSHA256:$recordBefore,afterSHA256:$recordAfter}
+          },
+          canaries:{root:$rootCanary,attached:$attachedCanary,
+            profileHome:$profileHomeCanary,profileConfig:$profileConfigCanary,
+            profileData:$profileDataCanary,profileBrowser:$profileBrowserCanary,
+            profileCache:$profileCacheCanary,profileGenerated:$profileGeneratedCanary,
+            hostWorkspace:$hostCanary}
+        },
+        authentication:{algorithm:"sha256-payload-secret-suffix/v1",
+          keyRef:{provider:"macos-keychain",service:$service,account:$account},
+          tag:("0" * 64)}
+      }
+    ' >"$checkpoint_tmp"; then
+    security delete-generic-password \
+      -a "$checkpoint_account" -s "$checkpoint_keychain_service" >/dev/null 2>&1 || true
+    find "$checkpoint_dir" -depth -delete
+    return 1
+  fi
+  if ! chmod 0600 "$checkpoint_tmp" ||
+    ! checkpoint_tag="$(migration_checkpoint_tag "$checkpoint_tmp")" ||
+    ! jq --arg tag "$checkpoint_tag" '.authentication.tag = $tag' \
+      "$checkpoint_tmp" >"$checkpoint_dir/checkpoint.json" ||
+    ! chmod 0600 "$checkpoint_dir/checkpoint.json" ||
+    ! find "$checkpoint_tmp" -delete; then
+    security delete-generic-password \
+      -a "$checkpoint_account" -s "$checkpoint_keychain_service" >/dev/null 2>&1 || true
+    find "$checkpoint_dir" -depth -delete
+    return 1
+  fi
+  checkpoint_path="$checkpoint_dir/checkpoint.json"
+  if ! validate_migration_post_export_checkpoint "$checkpoint_path"; then
+    security delete-generic-password \
+      -a "$checkpoint_account" -s "$checkpoint_keychain_service" >/dev/null 2>&1 || true
+    find "$checkpoint_dir" -depth -delete
+    checkpoint_path=""
+    return 1
+  fi
+  checkpoint_ready=1
 }
 
-sha256_text() {
-  printf '%s' "$1" | shasum -a 256 | awk '{print $1}'
+load_migration_post_export_checkpoint() {
+  local supplied="$1" account checkpoint_dir
+  supplied="$(CDPATH='' cd -- "$(dirname "$supplied")" && pwd -P)/$(basename "$supplied")" || return 1
+  validate_migration_post_export_checkpoint "$supplied" || return 1
+  checkpoint_dir="$(dirname "$supplied")"
+  account="$(jq -er '.authentication.keyRef.account' "$supplied")" || return 1
+  migration_checkpoint_secret "$account" >"$passphrase_file" || return 1
+  chmod 0600 "$passphrase_file" || return 1
+  bundle="$scratch/source.hideout-migration"
+  cp "$checkpoint_dir/bundle.hideout-migration" "$bundle" || return 1
+  chmod 0600 "$bundle" || return 1
+  source_name="$(jq -er '.payload.source.name' "$supplied")"
+  source_environment_id="$(jq -er '.payload.source.environmentId' "$supplied")"
+  source_instance="$(jq -er '.payload.source.instance' "$supplied")"
+  source_machine_id="$(jq -er '.payload.source.machineId' "$supplied")"
+  source_ssh_digest="$(jq -er '.payload.source.sshDigest' "$supplied")"
+  root_canary="$(jq -er '.payload.canaries.root' "$supplied")"
+  attached_canary="$(jq -er '.payload.canaries.attached' "$supplied")"
+  profile_home_canary="$(jq -er '.payload.canaries.profileHome' "$supplied")"
+  profile_config_canary="$(jq -er '.payload.canaries.profileConfig' "$supplied")"
+  profile_data_canary="$(jq -er '.payload.canaries.profileData' "$supplied")"
+  profile_browser_canary="$(jq -er '.payload.canaries.profileBrowser' "$supplied")"
+  profile_cache_canary="$(jq -er '.payload.canaries.profileCache' "$supplied")"
+  profile_generated_canary="$(jq -er '.payload.canaries.profileGenerated' "$supplied")"
+  host_canary="$(jq -er '.payload.canaries.hostWorkspace' "$supplied")"
+  root_sha_before="$(jq -er '.payload.sourceImmutability.rootDisk.beforeSHA256' "$supplied")"
+  root_sha_after_export="$(jq -er '.payload.sourceImmutability.rootDisk.afterSHA256' "$supplied")"
+  attached_sha_before="$(jq -er '.payload.sourceImmutability.attachedDisk.beforeSHA256' "$supplied")"
+  attached_sha_after_export="$(jq -er '.payload.sourceImmutability.attachedDisk.afterSHA256' "$supplied")"
+  profile_state_sha_before="$(jq -er '.payload.sourceImmutability.profileState.beforeSHA256' "$supplied")"
+  profile_state_sha_after_export="$(jq -er '.payload.sourceImmutability.profileState.afterSHA256' "$supplied")"
+  record_sha_before="$(jq -er '.payload.sourceImmutability.environmentRecord.beforeSHA256' "$supplied")"
+  record_sha_after_export="$(jq -er '.payload.sourceImmutability.environmentRecord.afterSHA256' "$supplied")"
+  bundle_sha_before="$(jq -er '.payload.bundle.sha256' "$supplied")"
+  checkpoint_path="$supplied"
+  checkpoint_ready=1
+  checkpoint_reused=1
 }
 
-guest_identity_digest() {
-  printf 'hideout.migration-guest-identity/v1\nmachine=%s\nssh=%s\n' "$1" "$2" |
-    shasum -a 256 | awk '{print $1}'
-}
-
-file_mode() {
-  stat -f '%Lp' "$1" 2>/dev/null || stat -c '%a' "$1" 2>/dev/null
-}
-
-file_bytes() {
-  stat -f '%z' "$1" 2>/dev/null || stat -c '%s' "$1" 2>/dev/null
+remove_migration_post_export_checkpoint() {
+  local account checkpoint_dir
+  [ "$checkpoint_ready" -eq 1 ] && [ -f "$checkpoint_path" ] || return 0
+  validate_migration_post_export_checkpoint "$checkpoint_path" || return 1
+  checkpoint_dir="$(CDPATH='' cd -- "$(dirname "$checkpoint_path")" && pwd -P)" || return 1
+  account="$(jq -er '.authentication.keyRef.account' "$checkpoint_path")" || return 1
+  security delete-generic-password \
+    -a "$account" -s "$checkpoint_keychain_service" >/dev/null || return 1
+  find "$checkpoint_dir" -depth -delete || return 1
+  checkpoint_ready=0
+  checkpoint_path=""
 }
 
 mark_gate_stage() {
@@ -1060,6 +1521,7 @@ write_gate_run_review() {
   local finished_at finished_epoch elapsed_seconds
   local logical_bytes=0 encoded_bytes=0 bundle_bytes=0 completed_imports=0
   local status_path stages_json='[]' review_tmp
+  local checkpoint_available=false checkpoint_reused_json=false checkpoint_relative=""
   finished_at="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
   finished_epoch="$(date +%s)"
   elapsed_seconds=$((finished_epoch - gate_review_started_epoch))
@@ -1079,6 +1541,13 @@ write_gate_run_review() {
   if [ -f "$run_dir/stage-events.jsonl" ]; then
     stages_json="$(jq -s . "$run_dir/stage-events.jsonl" 2>/dev/null || printf '[]')"
   fi
+  if [ "${checkpoint_ready:-0}" -eq 1 ] && [ -f "${checkpoint_path:-}" ]; then
+    checkpoint_available=true
+    checkpoint_relative="${checkpoint_path#"$out"/}"
+  fi
+  if [ "${checkpoint_reused:-0}" -eq 1 ]; then
+    checkpoint_reused_json=true
+  fi
   review_tmp="$run_dir/.run-review.$$.json"
   jq -n \
     --arg startedAt "$gate_review_started_at" \
@@ -1088,11 +1557,14 @@ write_gate_run_review() {
     --arg tree "$candidate_tree" \
     --arg failureStage "$gate_stage" \
     --arg failureReason "$reason" \
+    --arg checkpoint "$checkpoint_relative" \
     --argjson elapsedSeconds "$elapsed_seconds" \
     --argjson logicalBytes "$logical_bytes" \
     --argjson encodedBytes "$encoded_bytes" \
     --argjson bundleBytes "$bundle_bytes" \
     --argjson completedImports "$completed_imports" \
+    --argjson checkpointAvailable "$checkpoint_available" \
+    --argjson checkpointReused "$checkpoint_reused_json" \
     --argjson stages "$stages_json" '
       {
         schema:"hideout.gate-run-review/v1",
@@ -1100,19 +1572,30 @@ write_gate_run_review() {
         result:$result,
         candidate:{commit:$commit,tree:$tree},
         timing:{startedAt:$startedAt,finishedAt:$finishedAt,elapsedSeconds:$elapsedSeconds},
-        start:{mode:"from-scratch",checkpointReused:false,reusedCandidatePackage:true},
+        start:{
+          mode:(if $checkpointReused then "authenticated-checkpoint" else "from-scratch" end),
+          checkpointReused:$checkpointReused,
+          reusedCandidatePackage:true
+        },
         execution:{stages:$stages,completedImports:$completedImports},
+        reuse:{
+          checkpointAvailable:$checkpointAvailable,
+          checkpoint:(if $checkpointAvailable then $checkpoint else null end),
+          sealedBundle:$checkpointReused
+        },
         resources:{sourceLogicalBytes:$logicalBytes,sourceEncodedBytes:$encodedBytes,bundleBytes:$bundleBytes},
         failure:(if $result == "failed" then {stage:$failureStage,reason:$failureReason} else null end),
         rerun:(if $result == "failed" then {
-          minimumScope:"full-gate",
-          startMode:"from-scratch",
-          reason:"no authenticated cross-run migration checkpoint exists"
+          minimumScope:(if $checkpointAvailable then "post-export" else "full-gate" end),
+          startMode:(if $checkpointAvailable then "authenticated-checkpoint" else "from-scratch" end),
+          reason:(if $checkpointAvailable then
+            "candidate-bound sealed bundle and secret-authenticated checkpoint retained"
+          else "no authenticated cross-run migration checkpoint exists" end)
         } else null end),
         efficiency:{
-          crossRunCheckpointAvailable:false,
+          crossRunCheckpointAvailable:$checkpointAvailable,
           expensiveWorkExecuted:($logicalBytes > 0),
-          crossRunWorkReused:false,
+          crossRunWorkReused:$checkpointReused,
           repeatAssessmentRequiresPostRunReview:true,
           avoidableWasteRequiresPostRunReview:true,
           metrics:["elapsedSeconds","sourceLogicalBytes","sourceEncodedBytes","bundleBytes","completedImports"]
@@ -1265,7 +1748,11 @@ mkdir -p \
 chmod 0700 "$lima_home" "$source_workspace" "$safe_one_workspace" \
   "$safe_two_workspace" "$safe_three_workspace" "$exact_workspace" \
   "$package_extract"
-openssl rand -hex 32 >"$passphrase_file"
+if [ -z "$resume_checkpoint" ]; then
+  openssl rand -hex 32 >"$passphrase_file"
+else
+  : >"$passphrase_file"
+fi
 chmod 0600 "$passphrase_file"
 
 mark_gate_stage candidate-install
@@ -1286,7 +1773,11 @@ installed_sha="$(sha256_file "$hideout_binary")"
 [ "$installed_sha" = "$(sha256_file "$package_root/bin/hideout")" ] ||
   fail "installed binary differs from the accepted package"
 
-mark_gate_stage source-preparation
+if [ -n "$resume_checkpoint" ]; then
+  mark_gate_stage authenticated-checkpoint-restore
+else
+  mark_gate_stage source-preparation
+fi
 for store in \
   "$safe_one_store" "$safe_two_store" "$safe_three_store" "$exact_store"; do
   hideout_for_store "$store" init --no-input --profile default --template dev \
@@ -1294,23 +1785,55 @@ for store in \
     fail "initialize independent destination store $(basename "$store")"
 done
 
+if [ -n "$resume_checkpoint" ]; then
+  load_migration_post_export_checkpoint "$resume_checkpoint" ||
+    fail "authenticated post-export checkpoint is invalid, unavailable, or stale"
+  [ "$(sha256_file "$bundle")" = "$bundle_sha_before" ] ||
+    fail "restored checkpoint bundle digest changed"
+  mark_gate_stage authenticated-checkpoint-restored
+else
 source_name="migration-source"
 source_disk="migration-attached"
 root_canary="hideout-migration-root-fidelity-v1"
 attached_canary="hideout-migration-attached-fidelity-v1"
+profile_home_canary="hideout-migration-claude-history-fidelity-v1"
+profile_config_canary="hideout-migration-config-fidelity-v1"
+profile_data_canary="hideout-migration-data-fidelity-v1"
+profile_browser_canary="hideout-migration-browser-fidelity-v1"
+profile_cache_canary="hideout-migration-cache-must-not-migrate-v1"
+profile_generated_canary="hideout-source-generated-must-reset-v1"
 host_canary="hideout-host-workspace-must-not-migrate-v1"
 printf '%s\n' "$host_canary" >"$source_workspace/host-only.txt"
 hideout_for_store "$source_store" env create "$source_name" \
   --workspace "$source_workspace" --profile default --backend lima \
   >"$scratch/source-create.log" 2>&1 ||
   fail "create source environment"
+# Seed application state through the exact projected guest paths used by tools
+# such as Claude. Cache and generated git identity are deliberate negative
+# controls: neither may survive a full migration.
 # shellcheck disable=SC2016 # evaluated by the guest shell
 hideout_for_store "$source_store" run --env "$source_name" \
   --workspace "$source_workspace" --terminal never -- \
-  sh -c 'printf "%s\n" "$1" > /home/developer/migration-root-proof; sync' \
-  hideout-migration-root "$root_canary" \
-  >"$scratch/source-root-write.log" 2>&1 ||
-  fail "write source root-disk sentinel"
+  sh -c '
+    set -eu
+    mkdir -p \
+      "$HOME/.claude/projects/-workspace" \
+      "$XDG_CONFIG_HOME/hideout-migration" \
+      "$XDG_DATA_HOME/hideout-migration" \
+      /hideout/profile/browser/hideout-migration \
+      "$XDG_CACHE_HOME"
+    printf "%s\n" "$1" >"$HOME/.claude/projects/-workspace/history.jsonl"
+    printf "%s\n" "$2" >"$XDG_CONFIG_HOME/hideout-migration/config-proof"
+    printf "%s\n" "$3" >"$XDG_DATA_HOME/hideout-migration/data-proof"
+    printf "%s\n" "$4" >/hideout/profile/browser/hideout-migration/browser-proof
+    printf "%s\n" "$5" >"$XDG_CACHE_HOME/hideout-migration-cache-proof"
+    printf "\n# %s\n" "$6" >>"$HOME/.gitconfig"
+    sync
+  ' hideout-migration-profile-state \
+  "$profile_home_canary" "$profile_config_canary" "$profile_data_canary" \
+  "$profile_browser_canary" "$profile_cache_canary" "$profile_generated_canary" \
+  >"$scratch/source-profile-state-write.log" 2>&1 ||
+  fail "write source projected profile-state sentinels"
 hideout_for_store "$source_store" env inspect "$source_name" \
   >"$scratch/source-inspect.txt" 2>&1 ||
   fail "inspect source environment"
@@ -1347,7 +1870,8 @@ if ! ssh \
   -o ControlPath=none \
   -o ConnectionAttempts=1 \
   -o ConnectTimeout=15 \
-  "lima-$source_instance" -- sh -s -- "$source_disk" "$attached_canary" \
+  "lima-$source_instance" -- sh -s -- \
+  "$source_disk" "$attached_canary" "$root_canary" \
   >"$scratch/source-attached-write.log" 2>&1 <<'ROOTSH'
   set -eu
   path="/mnt/lima-$1"
@@ -1359,6 +1883,8 @@ if ! ssh \
   [ -d "$path" ]
   printf "%s\n" "$2" >"$path/migration-attached-proof"
   chmod 0644 "$path/migration-attached-proof"
+  printf "%s\n" "$3" >/var/lib/hideout-migration-root-proof
+  chmod 0644 /var/lib/hideout-migration-root-proof
   sync
 ROOTSH
 then
@@ -1401,6 +1927,7 @@ esac
 source_root_path="$source_instance_dir/disk"
 source_attached_path="$source_disk_dir/datadisk"
 source_record_path="$source_store/environments/$source_environment_id/environment.json"
+source_profile_dir="$source_store/profiles/default"
 for path in "$source_root_path" "$source_attached_path" "$source_record_path"; do
   [ -f "$path" ] && [ ! -L "$path" ] ||
     fail "source fidelity path is missing or unsafe: $path"
@@ -1408,6 +1935,9 @@ done
 root_sha_before="$(sha256_file "$source_root_path")"
 attached_sha_before="$(sha256_file "$source_attached_path")"
 record_sha_before="$(sha256_file "$source_record_path")"
+profile_state_sha_before="$(
+  migration_source_profile_state_digest "$source_profile_dir"
+)" || fail "capture source projected profile-state digest"
 
 bundle="$scratch/source.hideout-migration"
 export_log="$scratch/export.log"
@@ -1462,8 +1992,29 @@ wait_migration "$source_store" "$export_operation" export \
 [ -f "$bundle" ] && [ ! -L "$bundle" ] && [ "$(file_mode "$bundle")" = "600" ] ||
   fail "completed bundle is missing, linked, or not owner-only"
 bundle_sha_before="$(sha256_file "$bundle")"
-if grep -aFq "$root_canary" "$bundle" || grep -aFq "$attached_canary" "$bundle"; then
+if grep -aFq "$root_canary" "$bundle" ||
+  grep -aFq "$attached_canary" "$bundle" ||
+  grep -aFq "$profile_home_canary" "$bundle" ||
+  grep -aFq "$profile_config_canary" "$bundle" ||
+  grep -aFq "$profile_data_canary" "$bundle" ||
+  grep -aFq "$profile_browser_canary" "$bundle"; then
   fail "encrypted bundle exposes a plaintext guest sentinel"
+fi
+
+root_sha_after_export="$(sha256_file "$source_root_path")"
+attached_sha_after_export="$(sha256_file "$source_attached_path")"
+record_sha_after_export="$(sha256_file "$source_record_path")"
+profile_state_sha_after_export="$(
+  migration_source_profile_state_digest "$source_profile_dir"
+)" || fail "recheck source state after export"
+[ "$root_sha_before" = "$root_sha_after_export" ] &&
+  [ "$attached_sha_before" = "$attached_sha_after_export" ] &&
+  [ "$profile_state_sha_before" = "$profile_state_sha_after_export" ] &&
+  [ "$record_sha_before" = "$record_sha_after_export" ] ||
+  fail "export mutated the stopped source before checkpoint publication"
+publish_migration_post_export_checkpoint ||
+  fail "publish authenticated post-export checkpoint"
+mark_gate_stage post-export-checkpoint-published
 fi
 
 mark_gate_stage bundle-negative-and-compatibility
@@ -1475,7 +2026,10 @@ jq -e '
   .inventory.sealed == true and
   (.inventory.environments | length) == 1 and
   (.inventory.disks | length) == 2 and
+  .inventory.components.profileStates == 1 and
   (.inventory.disks | map(.role) | sort) == ["attached","root"] and
+  (.inventory.warnings |
+    map(.code) | index("migration.bundle.full_state_may_contain_secrets")) != null and
   (.inventory.excludedClasses | index("host-workspace-content")) != null
 ' "$inspect_log" >/dev/null ||
   fail "authenticated bundle inventory is incomplete"
@@ -1794,9 +2348,10 @@ verify_import() {
     --workspace "$workspace" --terminal never -- \
     sh -c "$migration_guest_verify_script" hideout-migration-verify \
     >"$run_path" 2>&1 || return 1
-  grep -Fq "root=$root_canary" "$run_path" || return 1
-  grep -Fq "attached=$attached_canary" "$run_path" || return 1
-  if grep -Fq "$host_canary" "$run_path"; then return 1; fi
+  migration_guest_fidelity_output \
+    "$run_path" "$root_canary" "$attached_canary" \
+    "$profile_home_canary" "$profile_config_canary" \
+    "$profile_data_canary" "$profile_browser_canary" "$host_canary" || return 1
   machine="$(sed -n 's/^machine=//p' "$run_path" | tail -1 | tr -d '[:space:]')"
   ssh_digest="$(sed -n 's/^ssh=//p' "$run_path" | tail -1 | tr -d '[:space:]')"
   printf '%s\n' "$machine" | grep -Eq '^[a-f0-9]{32}$' || return 1
@@ -1905,14 +2460,25 @@ all_distinct \
   fail "Exact Guest Restore did not preserve guest identity"
 
 mark_gate_stage final-fidelity-and-evidence
-root_sha_after="$(sha256_file "$source_root_path")"
-attached_sha_after="$(sha256_file "$source_attached_path")"
-record_sha_after="$(sha256_file "$source_record_path")"
+if [ "$checkpoint_reused" -eq 1 ]; then
+  root_sha_after="$root_sha_after_export"
+  attached_sha_after="$attached_sha_after_export"
+  record_sha_after="$record_sha_after_export"
+  profile_state_sha_after="$profile_state_sha_after_export"
+else
+  root_sha_after="$(sha256_file "$source_root_path")"
+  attached_sha_after="$(sha256_file "$source_attached_path")"
+  record_sha_after="$(sha256_file "$source_record_path")"
+  profile_state_sha_after="$(
+    migration_source_profile_state_digest "$source_profile_dir"
+  )" || fail "recheck source projected profile-state digest"
+fi
 bundle_sha_after="$(sha256_file "$bundle")"
 [ "$root_sha_before" = "$root_sha_after" ] &&
   [ "$attached_sha_before" = "$attached_sha_after" ] &&
+  [ "$profile_state_sha_before" = "$profile_state_sha_after" ] &&
   [ "$record_sha_before" = "$record_sha_after" ] ||
-  fail "migration mutated source disks or environment declaration"
+  fail "migration mutated source disks, projected profile state, or environment declaration"
 [ "$bundle_sha_before" = "$bundle_sha_after" ] ||
   fail "bundle changed while reused across destinations"
 
@@ -1926,6 +2492,8 @@ evidence_log="$run_dir/gate.log"
     "$root_sha_before" "$root_sha_after"
   printf 'source-attached-before=%s after=%s\n' \
     "$attached_sha_before" "$attached_sha_after"
+  printf 'source-profile-state-before=%s after=%s\n' \
+    "$profile_state_sha_before" "$profile_state_sha_after"
   printf 'source-record-before=%s after=%s\n' \
     "$record_sha_before" "$record_sha_after"
   printf 'safe-clone-destinations=3 exact-restore-destinations=1\n'
@@ -1985,6 +2553,8 @@ jq -n \
   --arg sourceRootAfterSHA256 "$root_sha_after" \
   --arg sourceAttachedBeforeSHA256 "$attached_sha_before" \
   --arg sourceAttachedAfterSHA256 "$attached_sha_after" \
+  --arg sourceProfileStateBeforeSHA256 "$profile_state_sha_before" \
+  --arg sourceProfileStateAfterSHA256 "$profile_state_sha_after" \
   --arg sourceRecordBeforeSHA256 "$record_sha_before" \
   --arg sourceRecordAfterSHA256 "$record_sha_after" \
   --arg sourceControlDigest "$source_control_digest" \
@@ -2021,6 +2591,7 @@ jq -n \
     sourceImmutability:{
       rootDisk:{beforeSHA256:$sourceRootBeforeSHA256,afterSHA256:$sourceRootAfterSHA256},
       attachedDisk:{beforeSHA256:$sourceAttachedBeforeSHA256,afterSHA256:$sourceAttachedAfterSHA256},
+      profileState:{beforeSHA256:$sourceProfileStateBeforeSHA256,afterSHA256:$sourceProfileStateAfterSHA256},
       environmentRecord:{beforeSHA256:$sourceRecordBeforeSHA256,afterSHA256:$sourceRecordAfterSHA256}
     },
     identityEvidence:{
@@ -2066,6 +2637,8 @@ jq -n \
       encryptedBundleSealed:true,
       rootDiskFidelity:true,
       attachedDiskFidelity:true,
+      profileApplicationStateFidelity:true,
+      generatedProfileStateExcluded:true,
       hostWorkspaceExcluded:true,
       sourceImmutable:true,
       wrongPassphraseNoDestinationEnvironment:true,
@@ -2137,6 +2710,9 @@ go run ./internal/productevidence/cmd/validate-046 \
   --package-identity "$package_identity" \
   "$out/product-hardening-evidence.json" >/dev/null ||
   fail "migration product evidence failed semantic validation"
+
+remove_migration_post_export_checkpoint ||
+  fail "retire successful post-export checkpoint and protected secret"
 
 # shellcheck disable=SC2034 # consumed by the sourced EXIT guard
 gate_completed=1

@@ -216,6 +216,9 @@
         "profileComponentId": {
           "$ref": "#/$defs/opaqueId"
         },
+        "profileStateComponentId": {
+          "$ref": "#/$defs/opaqueId"
+        },
         "workspaceProposals": {
           "type": "array",
           "maxItems": 128,
@@ -243,7 +246,33 @@
             "$ref": "#/$defs/opaqueId"
           }
         }
-      }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "mode": {
+                "const": "full"
+              }
+            },
+            "required": [
+              "mode"
+            ]
+          },
+          "then": {
+            "required": [
+              "profileStateComponentId"
+            ]
+          },
+          "else": {
+            "not": {
+              "required": [
+                "profileStateComponentId"
+              ]
+            }
+          }
+        }
+      ]
     },
     "imageProvenance": {
       "type": "object",
@@ -525,6 +554,7 @@
         "kind": {
           "enum": [
             "profile",
+            "profile-state",
             "environment",
             "disk",
             "secret-value",

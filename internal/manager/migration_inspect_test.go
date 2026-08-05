@@ -34,7 +34,7 @@ func TestMigrationBundleInspectionProjectionKeepsPathsAndRedactsCredentials(t *t
 	}}
 	manifest.ComponentIndex = append(manifest.ComponentIndex, migration.ComponentIndexEntry{
 		ComponentID: "component_secret0001", Kind: "secret-value", LogicalBytes: 32,
-		FirstRecord: 3, LastRecord: 3, RecordCount: 1,
+		FirstRecord: 5, LastRecord: 5, RecordCount: 1,
 		ContentDigest: migration.Digest("sha256:" + strings.Repeat("b", 64)),
 	})
 	inspection := sealedManagerInspectionFixture(manifest)
@@ -49,7 +49,8 @@ func TestMigrationBundleInspectionProjectionKeepsPathsAndRedactsCredentials(t *t
 	if len(projection.Environments) != 1 ||
 		projection.Environments[0].WorkspaceProposals[0].GuestPath != "/workspace" ||
 		projection.Environments[0].WorkspaceProposals[0].HostPathHint != "/Users/alice/dev" ||
-		projection.Components.Disks != 2 || projection.Components.SecretValues != 1 ||
+		projection.Components.Disks != 2 || projection.Components.ProfileStates != 1 ||
+		projection.Components.SecretValues != 1 ||
 		len(projection.Secrets) != 1 || !projection.Secrets[0].ValueIncluded ||
 		len(projection.Warnings) != 3 {
 		t.Fatalf("projection lost useful inventory: %+v", projection)
@@ -103,6 +104,11 @@ func sealedManagerInspectionFixture(
 	var logical uint64
 	for _, disk := range manifest.DiskObjects {
 		logical += disk.LogicalBytes
+	}
+	for _, component := range manifest.ComponentIndex {
+		if component.Kind == "profile-state" {
+			logical += component.LogicalBytes
+		}
 	}
 	last := manifest.ComponentIndex[len(manifest.ComponentIndex)-1]
 	return migration.SealedBundleInspection{

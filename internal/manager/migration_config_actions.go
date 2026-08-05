@@ -54,6 +54,45 @@ func validateMigrationMaterializedProfiles(
 	return nil
 }
 
+func validateMigrationMaterializedProfileStates(
+	operationID string,
+	objects []migration.ImportObject,
+	actions []migration.EnvironmentAction,
+	states []MigrationMaterializedProfileState,
+) error {
+	if len(objects) != len(actions) {
+		return ErrMigrationOperationInvalid
+	}
+	expected := make(map[migration.OpaqueID]migration.EnvironmentAction)
+	for index, object := range objects {
+		action := actions[index]
+		if object.SourceRef != action.SourceRef {
+			return ErrMigrationOperationInvalid
+		}
+		if object.Mode == migration.ExportModeConfig {
+			continue
+		}
+		expected[action.SourceRef] = action
+	}
+	if len(states) != len(expected) {
+		return ErrMigrationOperationInvalid
+	}
+	var previous migration.OpaqueID
+	for _, state := range states {
+		action, exists := expected[state.SourceRef]
+		if !exists || state.Validate(operationID) != nil ||
+			state.ProfileName != action.DestinationProfileName ||
+			state.ComponentID != action.ProfileStateComponentID ||
+			state.ContentDigest != action.ProfileStateContentDigest ||
+			state.LogicalBytes != action.ProfileStateLogicalBytes ||
+			(previous != "" && previous >= state.SourceRef) {
+			return ErrMigrationOperationInvalid
+		}
+		previous = state.SourceRef
+	}
+	return nil
+}
+
 // migrationDestinationProfiles derives destination-owned, authority-stripped
 // profiles from the authenticated snapshots retained in the private stage. The
 // sealed bundle stays destination-neutral: names are taken from this import's
@@ -263,6 +302,16 @@ func migrationImportEnvironmentActions(
 			ProfileComponentID:   environment.ProfileComponentID,
 			ProfileContentDigest: component.ContentDigest,
 			ProfileLogicalBytes:  component.LogicalBytes,
+		}
+		if object.Mode == migration.ExportModeFull {
+			profileState, stateExists := components[environment.ProfileStateComponentID]
+			if !stateExists || profileState.Kind != "profile-state" ||
+				profileState.RecordCount == 0 || profileState.LogicalBytes == 0 {
+				return nil, ErrMigrationPlanInvalid
+			}
+			actions[index].ProfileStateComponentID = environment.ProfileStateComponentID
+			actions[index].ProfileStateContentDigest = profileState.ContentDigest
+			actions[index].ProfileStateLogicalBytes = profileState.LogicalBytes
 		}
 	}
 	if validateMigrationEnvironmentActions(objects, actions) != nil {

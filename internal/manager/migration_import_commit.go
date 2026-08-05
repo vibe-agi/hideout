@@ -248,10 +248,15 @@ func (service MigrationImportService) publishMigrationImportBatch(
 	profiles []profile.Profile,
 	records []environment.Record,
 ) (environment.BatchPublication, error) {
+	states, err := migrationImportedProfileStates(operation)
+	if err != nil {
+		return environment.BatchPublication{}, err
+	}
 	return service.Environments.PublishBatchWithParticipant(
 		operation.ID, records,
 		profile.EnvironmentBatchParticipant{
 			Store: profile.Store{Root: service.Store.Root}, Profiles: profiles,
+			ImportedStates: states,
 		},
 	)
 }
@@ -261,12 +266,37 @@ func (service MigrationImportService) preflightMigrationImportBatch(
 	profiles []profile.Profile,
 	records []environment.Record,
 ) (environment.BatchPublication, error) {
+	states, err := migrationImportedProfileStates(operation)
+	if err != nil {
+		return environment.BatchPublication{}, err
+	}
 	return service.Environments.PreflightBatchWithParticipant(
 		operation.ID, records,
 		profile.EnvironmentBatchParticipant{
 			Store: profile.Store{Root: service.Store.Root}, Profiles: profiles,
+			ImportedStates: states,
 		},
 	)
+}
+
+func migrationImportedProfileStates(
+	operation MigrationOperation,
+) ([]profile.ImportedState, error) {
+	if operation.DestinationStage == nil ||
+		validateMigrationMaterializedProfileStates(
+			operation.ID, operation.ImportObjects, operation.EnvironmentActions,
+			operation.DestinationStage.ProfileStates,
+		) != nil {
+		return nil, ErrMigrationOperationInvalid
+	}
+	states := make([]profile.ImportedState, len(operation.DestinationStage.ProfileStates))
+	for index, value := range operation.DestinationStage.ProfileStates {
+		states[index] = profile.ImportedState{
+			ProfileName: value.ProfileName, StagePath: value.StagePath,
+			Owner: value.Owner(operation.ID),
+		}
+	}
+	return states, nil
 }
 
 func (service MigrationImportService) revalidateMigrationWorkspaceActionTargets(

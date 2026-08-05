@@ -81,6 +81,8 @@ func migrationDestinationInspectionFixture(
 	for _, disk := range stage.Disks {
 		required += disk.LogicalBytes
 	}
+	profileStateBytes := uint64(512)
+	staging := required + profileStateBytes
 	request := backend.DestinationInspectionRequest{
 		Binding: backend.MigrationEffectBinding{
 			OperationID:        migration.OpaqueID("operation_inspect_" + suffix + "1"),
@@ -92,16 +94,17 @@ func migrationDestinationInspectionFixture(
 			Version: "1.0.0", HostOS: "darwin", HostArch: "arm64",
 			Backend: "lima", BackendVersion: "2.2.0", GuestArch: "aarch64",
 		},
-		EnvironmentRefs: environments, Disks: stage.Disks, Edges: stage.Edges,
+		EnvironmentRefs: environments, Disks: stage.Disks,
+		ProfileStateBytes: profileStateBytes, Edges: stage.Edges,
 		RequiredCapabilities: []migration.RequiredCapability{{
 			ID: "full-state", Provider: "lima", MinimumVersion: "2.1.0",
 		}},
-		RequiredBytes: required + (9 << 20),
+		RequiredBytes: staging + (9 << 20),
 		Capacity: migration.CapacityRequirement{
 			Schema: migration.CapacityRequirementSchema, BundleBytes: 4096,
-			StagingBytes: required, ValidationBytes: 8 << 20,
-			RollbackReserveBytes: 1 << 20, FinalBytes: required,
-			PeakAdditionalBytes: required + (9 << 20),
+			StagingBytes: staging, ValidationBytes: 8 << 20,
+			RollbackReserveBytes: 1 << 20, FinalBytes: staging,
+			PeakAdditionalBytes: staging + (9 << 20),
 		},
 	}
 	if err := request.Validate(); err != nil {

@@ -624,6 +624,7 @@ type DestinationInspectionRequest struct {
 	SourceProduct        migration.SourceProduct        `json:"sourceProduct"`
 	EnvironmentRefs      []migration.OpaqueID           `json:"environmentRefs"`
 	Disks                []migration.DiskObject         `json:"disks"`
+	ProfileStateBytes    uint64                         `json:"profileStateBytes"`
 	Edges                []migration.DiskEdge           `json:"edges"`
 	RequiredCapabilities []migration.RequiredCapability `json:"requiredCapabilities"`
 	RequiredBytes        uint64                         `json:"requiredBytes"`
@@ -654,7 +655,9 @@ func (request DestinationInspectionRequest) Validate() error {
 		previousEnvironment = environmentRef
 	}
 	disks, aggregateLogical, err := validateDestinationDisks(request.Disks)
-	if err != nil || aggregateLogical != request.Capacity.StagingBytes {
+	if err != nil || request.ProfileStateBytes == 0 ||
+		request.ProfileStateBytes > migration.HardMaxLogicalBytes-aggregateLogical ||
+		aggregateLogical+request.ProfileStateBytes != request.Capacity.StagingBytes {
 		return fmt.Errorf("%w: destination inspection disks", ErrMigrationProviderRequest)
 	}
 	if err := validateDestinationEdges(environments, disks, request.Edges); err != nil {

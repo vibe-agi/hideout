@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -11,6 +12,7 @@ import (
 	"github.com/vibe-agi/hideout/internal/backend"
 	"github.com/vibe-agi/hideout/internal/environment"
 	"github.com/vibe-agi/hideout/internal/migration"
+	"github.com/vibe-agi/hideout/internal/profilestate"
 )
 
 func TestMigrationImportAdoptionPersistsImportTimePoliciesAndReplays(t *testing.T) {
@@ -104,6 +106,7 @@ func migrationImportAdoptionFixture(
 	root := t.TempDir()
 	store := MigrationStore{Root: root}
 	operation := migrationImportOperationFixture()
+	materializeMigrationOperationProfileStates(t, root, &operation)
 	operation.Phase = MigrationPhaseClaiming
 	if _, _, err := store.Reserve(operation); err != nil {
 		t.Fatal(err)
@@ -121,24 +124,10 @@ func migrationImportAdoptionFixture(
 	if _, _, err := store.BeginEffect(operation.ID, stageEffect.ID, stageEffect.Provider); err != nil {
 		t.Fatal(err)
 	}
-	stage := MigrationDestinationStageState{
-		StageHandle: migrationImportStageHandle(operation.ID),
-		ObjectHandles: []migration.OpaqueID{
-			"backend_clone1234", "backend_clone5678",
-		},
-		Checkpoints: []MigrationDestinationStageCheckpoint{
-			{
-				ComponentID: "component_disk0001", NextOffset: 4096,
-				ContentDigest: migration.Digest("sha256:" + strings.Repeat("a", 64)),
-			},
-			{
-				ComponentID: "component_disk0002", NextOffset: 8192,
-				ContentDigest: migration.Digest("sha256:" + strings.Repeat("b", 64)),
-			},
-		},
-		Profiles:       migrationMaterializedProfilesFixture(),
-		EvidenceDigest: migration.Digest("sha256:" + strings.Repeat("c", 64)),
-	}
+	stage := migrationDestinationStageStateFixtureForOperation(
+		operation, filepath.Join(root, "profiles"),
+	)
+	stage.StageHandle = migrationImportStageHandle(operation.ID)
 	if _, err := store.FinishDestinationStage(
 		operation.ID, stageEffect.ID, stageEffect.Provider, stage,
 		[]MigrationEffectEvidence{{
@@ -167,6 +156,39 @@ func migrationImportAdoptionFixture(
 		Store: store, Environments: environment.Store{Root: root}, Import: provider,
 	}}
 	return service, provider, operation
+}
+
+func materializeMigrationOperationProfileStates(
+	t *testing.T,
+	root string,
+	operation *MigrationOperation,
+) {
+	t.Helper()
+	profilesRoot := filepath.Join(root, "profiles")
+	for index := range operation.EnvironmentActions {
+		snapshot, _ := managerMaterializationProfileState(t)
+		action := &operation.EnvironmentActions[index]
+		action.ProfileStateContentDigest = migration.Digest(snapshot.Digest())
+		action.ProfileStateLogicalBytes = snapshot.LogicalBytes()
+		owner := profilestate.Owner{
+			OperationID: operation.ID, ProfileName: action.DestinationProfileName,
+			ComponentID:   string(action.ProfileStateComponentID),
+			ContentDigest: string(action.ProfileStateContentDigest),
+			LogicalBytes:  action.ProfileStateLogicalBytes,
+		}
+		materializer, err := profilestate.NewMaterializer(profilesRoot, owner)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := snapshot.Write(context.Background(), 73, materializer.Consume); err != nil {
+			_ = materializer.Abort()
+			t.Fatal(err)
+		}
+		if err := materializer.Finish(); err != nil {
+			_ = materializer.Abort()
+			t.Fatal(err)
+		}
+	}
 }
 
 func migrationDestinationAdoptionFixture(

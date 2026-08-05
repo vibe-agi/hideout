@@ -6,11 +6,15 @@ import (
 	"encoding/hex"
 	"errors"
 	"io"
+	"path/filepath"
 	"slices"
 	"sort"
+	"strings"
 
 	"github.com/vibe-agi/hideout/internal/backend"
 	"github.com/vibe-agi/hideout/internal/migration"
+	"github.com/vibe-agi/hideout/internal/profile"
+	"github.com/vibe-agi/hideout/internal/profilestate"
 	"github.com/vibe-agi/hideout/internal/secrets"
 )
 
@@ -25,20 +29,63 @@ type MigrationDestinationStager interface {
 }
 
 type MigrationDestinationMaterializeRequest struct {
-	BundlePath        string
-	ExpectedFile      MigrationBundleFileBinding
-	ExpectedBinding   migration.BundleBinding
-	SecretInputHandle string
-	ClientBinding     string
-	Destination       backend.DestinationStageRequest
-	OperationID       string
-	SecretActions     []migration.SecretAction
+	BundlePath         string
+	ExpectedFile       MigrationBundleFileBinding
+	ExpectedBinding    migration.BundleBinding
+	SecretInputHandle  string
+	ClientBinding      string
+	Destination        backend.DestinationStageRequest
+	OperationID        string
+	SecretActions      []migration.SecretAction
+	EnvironmentActions []migration.EnvironmentAction
 }
 
 type MigrationMaterializedProfile struct {
 	ComponentID   migration.OpaqueID        `json:"componentId"`
 	ContentDigest migration.Digest          `json:"contentDigest"`
 	Snapshot      migration.PortableProfile `json:"snapshot"`
+}
+
+type MigrationMaterializedProfileState struct {
+	SourceRef     migration.OpaqueID `json:"sourceRef"`
+	ProfileName   string             `json:"profileName"`
+	ComponentID   migration.OpaqueID `json:"componentId"`
+	ContentDigest migration.Digest   `json:"contentDigest"`
+	LogicalBytes  uint64             `json:"logicalBytes"`
+	StagePath     string             `json:"stagePath"`
+}
+
+func (value MigrationMaterializedProfileState) Owner(operationID string) profilestate.Owner {
+	return profilestate.Owner{
+		OperationID: operationID, ProfileName: value.ProfileName,
+		ComponentID: string(value.ComponentID), ContentDigest: string(value.ContentDigest),
+		LogicalBytes: value.LogicalBytes,
+	}
+}
+
+func (value MigrationMaterializedProfileState) Validate(operationID string) error {
+	if value.validateShape() != nil || !operationIDPattern.MatchString(operationID) {
+		return ErrMigrationOperationInvalid
+	}
+	owner := value.Owner(operationID)
+	expected, err := profilestate.StagePath(filepath.Dir(filepath.Clean(value.StagePath)), owner)
+	if err != nil || expected != filepath.Clean(value.StagePath) {
+		return ErrMigrationOperationInvalid
+	}
+	return nil
+}
+
+func (value MigrationMaterializedProfileState) validateShape() error {
+	clean := filepath.Clean(value.StagePath)
+	if !migrationValidOperationOpaqueID(value.SourceRef) ||
+		!migrationValidOperationOpaqueID(value.ComponentID) ||
+		profile.ValidateName(value.ProfileName) != nil || value.ContentDigest.Validate() != nil ||
+		value.LogicalBytes == 0 || value.LogicalBytes > migration.HardMaxLogicalBytes ||
+		!filepath.IsAbs(clean) || filepath.Base(filepath.Dir(clean)) != "profiles" ||
+		!strings.HasPrefix(filepath.Base(clean), ".migration-state-") {
+		return ErrMigrationOperationInvalid
+	}
+	return nil
 }
 
 func (value MigrationMaterializedProfile) Validate() error {
@@ -59,15 +106,29 @@ func (value MigrationMaterializedProfile) Validate() error {
 }
 
 type MigrationDestinationMaterialization struct {
-	Stage           backend.DestinationStage       `json:"stage"`
-	Profiles        []MigrationMaterializedProfile `json:"profiles"`
-	PreparedSecrets []MigrationPreparedSecret      `json:"preparedSecrets,omitempty"`
+	OperationID     string                              `json:"operationId"`
+	Stage           backend.DestinationStage            `json:"stage"`
+	Profiles        []MigrationMaterializedProfile      `json:"profiles"`
+	ProfileStates   []MigrationMaterializedProfileState `json:"profileStates"`
+	PreparedSecrets []MigrationPreparedSecret           `json:"preparedSecrets,omitempty"`
 }
 
 func (value MigrationDestinationMaterialization) Validate() error {
-	if value.Stage.Validate() != nil || len(value.Profiles) == 0 ||
+	if !operationIDPattern.MatchString(value.OperationID) ||
+		value.Stage.Validate() != nil || len(value.Profiles) == 0 ||
 		len(value.Profiles) > int(migration.HardMaxEnvironments) {
 		return ErrMigrationOperationInvalid
+	}
+	if len(value.ProfileStates) == 0 || len(value.ProfileStates) > int(migration.HardMaxEnvironments) {
+		return ErrMigrationOperationInvalid
+	}
+	var previousSource migration.OpaqueID
+	for _, state := range value.ProfileStates {
+		if state.Validate(value.OperationID) != nil ||
+			(previousSource != "" && previousSource >= state.SourceRef) {
+			return ErrMigrationOperationInvalid
+		}
+		previousSource = state.SourceRef
 	}
 	var previous migration.OpaqueID
 	for _, profile := range value.Profiles {
@@ -96,20 +157,13 @@ type MigrationMaterializationService struct {
 	Cache        *MigrationInspectionCache
 	Destination  MigrationDestinationStager
 	Secrets      secrets.RuntimeStore
-}
-
-func (service MigrationMaterializationService) StageDestination(
-	ctx context.Context,
-	request MigrationDestinationMaterializeRequest,
-) (backend.DestinationStage, error) {
-	result, err := service.StageDestinationWithProfiles(ctx, request)
-	return result.Stage, err
+	Profiles     profile.Store
 }
 
 func (service MigrationMaterializationService) StageDestinationWithProfiles(
 	ctx context.Context,
 	request MigrationDestinationMaterializeRequest,
-) (MigrationDestinationMaterialization, error) {
+) (materialization MigrationDestinationMaterialization, resultErr error) {
 	if ctx == nil || service.SecretInputs == nil || service.Cache == nil ||
 		service.Destination == nil || !validMigrationAbsolutePath(request.BundlePath) ||
 		request.ExpectedFile.Validate() != nil ||
@@ -117,8 +171,12 @@ func (service MigrationMaterializationService) StageDestinationWithProfiles(
 		!migrationSecretHandlePattern.MatchString(request.SecretInputHandle) ||
 		!validClientBinding(request.ClientBinding) || request.Destination.ReadComponent != nil ||
 		validateMigrationSecretActions(request.SecretActions) != nil ||
+		!operationIDPattern.MatchString(request.OperationID) ||
+		len(request.EnvironmentActions) != len(request.Destination.Objects) ||
+		strings.TrimSpace(service.Profiles.Root) == "" ||
+		!filepath.IsAbs(filepath.Clean(service.Profiles.Root)) ||
 		(migrationHasImportedSecretValues(request.SecretActions) &&
-			(!operationIDPattern.MatchString(request.OperationID) || service.Secrets == nil)) {
+			service.Secrets == nil) {
 		return MigrationDestinationMaterialization{}, ErrMigrationRequestInvalid
 	}
 	if err := ctx.Err(); err != nil {
@@ -157,7 +215,18 @@ func (service MigrationMaterializationService) StageDestinationWithProfiles(
 
 	var staged backend.DestinationStage
 	var profiles []MigrationMaterializedProfile
+	var profileStates []MigrationMaterializedProfileState
 	var preparedSecrets []MigrationPreparedSecret
+	var componentStream *migrationBundleComponentStream
+	retainProfileStates := false
+	defer func() {
+		if !retainProfileStates && componentStream != nil {
+			if cleanupErr := componentStream.CleanupProfileStates(); cleanupErr != nil {
+				materialization = MigrationDestinationMaterialization{}
+				resultErr = errors.Join(resultErr, cleanupErr)
+			}
+		}
+	}()
 	err = service.SecretInputs.Consume(MigrationSecretInputUse{
 		Handle: request.SecretInputHandle, Purpose: MigrationSecretPurposeImport,
 		ClientBinding: request.ClientBinding, BundleID: request.ExpectedBinding.BundleID,
@@ -170,11 +239,13 @@ func (service MigrationMaterializationService) StageDestinationWithProfiles(
 		defer reader.Close()
 		stream, streamErr := newMigrationBundleComponentStream(
 			ctx, reader, inspection.Manifest, destination.Components, destination.Objects,
-			request.ExpectedBinding, request.OperationID, request.SecretActions, service.Secrets,
+			request.ExpectedBinding, request.OperationID, request.SecretActions,
+			request.EnvironmentActions, service.Secrets, service.Profiles,
 		)
 		if streamErr != nil {
 			return streamErr
 		}
+		componentStream = stream
 		destination.ReadComponent = stream.ReadComponent
 		if validateErr := destination.Validate(); validateErr != nil {
 			return validateErr
@@ -187,6 +258,10 @@ func (service MigrationMaterializationService) StageDestinationWithProfiles(
 			return finishErr
 		}
 		profiles, streamErr = stream.Profiles()
+		if streamErr != nil {
+			return streamErr
+		}
+		profileStates, streamErr = stream.ProfileStates()
 		if streamErr != nil {
 			return streamErr
 		}
@@ -217,11 +292,13 @@ func (service MigrationMaterializationService) StageDestinationWithProfiles(
 		return MigrationDestinationMaterialization{}, err
 	}
 	result := MigrationDestinationMaterialization{
-		Stage: staged, Profiles: profiles, PreparedSecrets: preparedSecrets,
+		OperationID: request.OperationID, Stage: staged, Profiles: profiles,
+		ProfileStates: profileStates, PreparedSecrets: preparedSecrets,
 	}
 	if err := result.Validate(); err != nil {
 		return MigrationDestinationMaterialization{}, err
 	}
+	retainProfileStates = true
 	return result, nil
 }
 
@@ -389,14 +466,19 @@ func validateMigrationDestinationStageResult(
 }
 
 type migrationBundleComponentStream struct {
-	ctx              context.Context
-	reader           *migration.Reader
-	components       map[migration.OpaqueID]migration.ComponentIndexEntry
-	selected         map[migration.OpaqueID]struct{}
-	selectedProfiles map[migration.OpaqueID]struct{}
-	profiles         map[migration.OpaqueID]MigrationMaterializedProfile
-	secretPreparer   *migrationImportSecretPreparer
-	expected         migration.BundleBinding
+	ctx                       context.Context
+	operationID               string
+	reader                    *migration.Reader
+	components                map[migration.OpaqueID]migration.ComponentIndexEntry
+	selected                  map[migration.OpaqueID]struct{}
+	selectedProfiles          map[migration.OpaqueID]struct{}
+	profiles                  map[migration.OpaqueID]MigrationMaterializedProfile
+	profileStateEntries       map[migration.OpaqueID]migration.ComponentIndexEntry
+	profileStateMaterializers map[migration.OpaqueID]*profilestate.Materializer
+	profileStateOffsets       map[migration.OpaqueID]uint64
+	profileStateValues        map[migration.OpaqueID]MigrationMaterializedProfileState
+	secretPreparer            *migrationImportSecretPreparer
+	expected                  migration.BundleBinding
 
 	nextSequence  uint64
 	lastRequested migration.OpaqueID
@@ -413,10 +495,13 @@ func newMigrationBundleComponentStream(
 	expected migration.BundleBinding,
 	operationID string,
 	secretActions []migration.SecretAction,
+	environmentActions []migration.EnvironmentAction,
 	secretStore secrets.RuntimeStore,
+	profileStore profile.Store,
 ) (*migrationBundleComponentStream, error) {
 	if ctx == nil || reader == nil || validateMigrationBundleBinding(expected) != nil ||
-		len(selected) == 0 {
+		len(selected) == 0 || !operationIDPattern.MatchString(operationID) ||
+		len(environmentActions) != len(objects) {
 		return nil, ErrMigrationRequestInvalid
 	}
 	components := make(map[migration.OpaqueID]migration.ComponentIndexEntry, len(manifest.ComponentIndex))
@@ -443,19 +528,88 @@ func newMigrationBundleComponentStream(
 	if len(selectedProfiles) == 0 {
 		return nil, ErrMigrationPlanInvalid
 	}
+	profileStateEntries := make(map[migration.OpaqueID]migration.ComponentIndexEntry, len(objects))
+	profileStateMaterializers := make(map[migration.OpaqueID]*profilestate.Materializer, len(objects))
+	profileStateOffsets := make(map[migration.OpaqueID]uint64, len(objects))
+	profileStateValues := make(map[migration.OpaqueID]MigrationMaterializedProfileState, len(objects))
+	cleanupProfileStates := func() {
+		for _, materializer := range profileStateMaterializers {
+			_ = materializer.Abort()
+		}
+	}
+	keepProfileStates := false
+	defer func() {
+		if !keepProfileStates {
+			cleanupProfileStates()
+		}
+	}()
+	profilesRoot := filepath.Join(profileStore.Root, "profiles")
+	for index, object := range objects {
+		action := environmentActions[index]
+		entry, exists := components[action.ProfileStateComponentID]
+		if action.SourceRef != object.EnvironmentRef ||
+			action.ProfileComponentID != object.ProfileComponent ||
+			profile.ValidateName(action.DestinationProfileName) != nil ||
+			!exists || entry.Kind != "profile-state" ||
+			entry.ContentDigest != action.ProfileStateContentDigest ||
+			entry.LogicalBytes != action.ProfileStateLogicalBytes || entry.RecordCount == 0 {
+			return nil, ErrMigrationPlanInvalid
+		}
+		owner := profilestate.Owner{
+			OperationID: operationID, ProfileName: action.DestinationProfileName,
+			ComponentID: string(entry.ComponentID), ContentDigest: string(entry.ContentDigest),
+			LogicalBytes: entry.LogicalBytes,
+		}
+		materializer, err := newMigrationProfileStateMaterializer(profilesRoot, owner)
+		if err != nil {
+			return nil, err
+		}
+		profileStateEntries[entry.ComponentID] = entry
+		profileStateMaterializers[entry.ComponentID] = materializer
+		profileStateValues[entry.ComponentID] = MigrationMaterializedProfileState{
+			SourceRef: action.SourceRef, ProfileName: action.DestinationProfileName,
+			ComponentID: entry.ComponentID, ContentDigest: entry.ContentDigest,
+			LogicalBytes: entry.LogicalBytes, StagePath: materializer.Path(),
+		}
+	}
 	secretPreparer, err := newMigrationImportSecretPreparer(
 		ctx, operationID, secretActions, manifest, secretStore,
 	)
 	if err != nil {
 		return nil, err
 	}
-	return &migrationBundleComponentStream{
-		ctx: ctx, reader: reader, components: components, selected: selectedIDs,
-		selectedProfiles: selectedProfiles,
-		profiles:         make(map[migration.OpaqueID]MigrationMaterializedProfile, len(selectedProfiles)),
-		secretPreparer:   secretPreparer,
-		expected:         expected,
-	}, nil
+	stream := &migrationBundleComponentStream{
+		ctx: ctx, operationID: operationID, reader: reader,
+		components: components, selected: selectedIDs,
+		selectedProfiles:          selectedProfiles,
+		profiles:                  make(map[migration.OpaqueID]MigrationMaterializedProfile, len(selectedProfiles)),
+		profileStateEntries:       profileStateEntries,
+		profileStateMaterializers: profileStateMaterializers,
+		profileStateOffsets:       profileStateOffsets,
+		profileStateValues:        profileStateValues,
+		secretPreparer:            secretPreparer,
+		expected:                  expected,
+	}
+	keepProfileStates = true
+	return stream, nil
+}
+
+func newMigrationProfileStateMaterializer(
+	profilesRoot string,
+	owner profilestate.Owner,
+) (*profilestate.Materializer, error) {
+	materializer, err := profilestate.NewMaterializer(profilesRoot, owner)
+	if !errors.Is(err, profilestate.ErrStageExists) {
+		return materializer, err
+	}
+	stagePath, pathErr := profilestate.StagePath(profilesRoot, owner)
+	if pathErr != nil {
+		return nil, pathErr
+	}
+	if removeErr := profilestate.RemoveStage(stagePath, owner); removeErr != nil {
+		return nil, removeErr
+	}
+	return profilestate.NewMaterializer(profilesRoot, owner)
 }
 
 func (stream *migrationBundleComponentStream) ReadComponent(
@@ -621,9 +775,20 @@ func (stream *migrationBundleComponentStream) Finish() error {
 	if err != nil {
 		return err
 	}
+	for componentID, value := range stream.profileStateValues {
+		entry := stream.profileStateEntries[componentID]
+		if stream.profileStateOffsets[componentID] != entry.LogicalBytes ||
+			profilestate.VerifyStage(value.StagePath, value.Owner(stream.operationID)) != nil {
+			return migrationComponentStreamError(
+				componentID, stream.nextSequence,
+				errors.New("profile state materialization is incomplete"),
+			)
+		}
+	}
 	if summary.BundleID != stream.expected.BundleID || !summary.Sealed ||
 		summary.ManifestDigest != stream.expected.ManifestDigest ||
-		stream.completion != stream.expected.CompletionDigest {
+		stream.completion != stream.expected.CompletionDigest ||
+		len(stream.profileStateValues) != len(stream.profileStateMaterializers) {
 		return migrationComponentStreamError(
 			"", stream.nextSequence,
 			errors.New("materialized stream does not match the sealed binding"),
@@ -661,6 +826,44 @@ func (stream *migrationBundleComponentStream) Profiles() (
 	return profiles, nil
 }
 
+func (stream *migrationBundleComponentStream) ProfileStates() (
+	[]MigrationMaterializedProfileState,
+	error,
+) {
+	if stream == nil || !stream.finished ||
+		len(stream.profileStateValues) != len(stream.profileStateMaterializers) {
+		return nil, ErrMigrationOperationInvalid
+	}
+	states := make([]MigrationMaterializedProfileState, 0, len(stream.profileStateValues))
+	for componentID, value := range stream.profileStateValues {
+		materializer := stream.profileStateMaterializers[componentID]
+		if materializer == nil || materializer.Path() != value.StagePath ||
+			profilestate.VerifyStage(value.StagePath, value.Owner(stream.operationID)) != nil {
+			return nil, ErrMigrationOperationInvalid
+		}
+		states = append(states, value)
+	}
+	sort.Slice(states, func(left, right int) bool {
+		return states[left].SourceRef < states[right].SourceRef
+	})
+	return states, nil
+}
+
+func (stream *migrationBundleComponentStream) CleanupProfileStates() error {
+	if stream == nil {
+		return nil
+	}
+	var result error
+	for componentID, materializer := range stream.profileStateMaterializers {
+		if materializer == nil {
+			continue
+		}
+		result = errors.Join(result, materializer.Abort())
+		delete(stream.profileStateMaterializers, componentID)
+	}
+	return result
+}
+
 func (stream *migrationBundleComponentStream) consumeSkippedRecord(
 	record migration.Record,
 ) error {
@@ -673,6 +876,11 @@ func (stream *migrationBundleComponentStream) consumeSkippedRecord(
 		return err
 	}
 	if consumed {
+		return nil
+	}
+	if consumed, err := stream.consumeProfileStateRecord(record); err != nil {
+		return err
+	} else if consumed {
 		return nil
 	}
 	if _, selected := stream.selectedProfiles[record.Header.ComponentID]; !selected {
@@ -728,6 +936,53 @@ func (stream *migrationBundleComponentStream) consumeSkippedRecord(
 		Snapshot: snapshot,
 	}
 	return nil
+}
+
+func (stream *migrationBundleComponentStream) consumeProfileStateRecord(
+	record migration.Record,
+) (bool, error) {
+	entry, selected := stream.profileStateEntries[record.Header.ComponentID]
+	if !selected {
+		return false, nil
+	}
+	materializer := stream.profileStateMaterializers[record.Header.ComponentID]
+	if materializer == nil || record.Sequence < entry.FirstRecord ||
+		record.Sequence > entry.LastRecord || record.Header.ComponentID != entry.ComponentID {
+		return true, migrationComponentStreamError(
+			record.Header.ComponentID, record.Sequence,
+			errors.New("profile state component shape is invalid"),
+		)
+	}
+	offset := stream.profileStateOffsets[record.Header.ComponentID]
+	if record.Header.Type == migration.RecordCheckpoint {
+		if offset != entry.LogicalBytes || record.Sequence != entry.LastRecord {
+			return true, migrationComponentStreamError(
+				record.Header.ComponentID, record.Sequence,
+				errors.New("profile state checkpoint precedes complete content"),
+			)
+		}
+		if err := materializer.Finish(); err != nil {
+			return true, migrationComponentStreamError(record.Header.ComponentID, record.Sequence, err)
+		}
+		value := stream.profileStateValues[record.Header.ComponentID]
+		if err := profilestate.VerifyStage(value.StagePath, value.Owner(stream.operationID)); err != nil {
+			return true, migrationComponentStreamError(record.Header.ComponentID, record.Sequence, err)
+		}
+		return true, nil
+	}
+	if offset > entry.LogicalBytes || record.Header.Type != migration.RecordRawChunk ||
+		record.Header.LogicalOffset != offset || record.Header.PlaintextLength == 0 ||
+		record.Header.PlaintextLength > entry.LogicalBytes-offset {
+		return true, migrationComponentStreamError(
+			record.Header.ComponentID, record.Sequence,
+			errors.New("profile state record range is invalid"),
+		)
+	}
+	if err := materializer.Consume(record.Plaintext); err != nil {
+		return true, migrationComponentStreamError(record.Header.ComponentID, record.Sequence, err)
+	}
+	stream.profileStateOffsets[record.Header.ComponentID] = offset + record.Header.PlaintextLength
+	return true, nil
 }
 
 func (stream *migrationBundleComponentStream) nextRecord() (migration.Record, error) {

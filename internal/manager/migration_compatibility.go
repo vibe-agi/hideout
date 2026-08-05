@@ -18,14 +18,17 @@ const (
 func migrationImportCapacityRequirement(
 	bundleBytes int64,
 	disks []migration.DiskObject,
+	profileStateBytes uint64,
 ) (migration.CapacityRequirement, error) {
 	if bundleBytes <= 0 {
 		return migration.CapacityRequirement{}, ErrMigrationPlanInvalid
 	}
 	staging, err := migrationDiskLogicalBytes(disks)
-	if err != nil || staging == 0 {
+	if err != nil || profileStateBytes == 0 ||
+		profileStateBytes > migration.HardMaxLogicalBytes-staging {
 		return migration.CapacityRequirement{}, ErrMigrationPlanInvalid
 	}
+	staging += profileStateBytes
 	if staging > migration.HardMaxLogicalBytes-migrationValidationCapacityReserve ||
 		staging+migrationValidationCapacityReserve >
 			migration.HardMaxLogicalBytes-migrationRollbackCapacityReserve {

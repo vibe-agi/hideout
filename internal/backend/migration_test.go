@@ -303,18 +303,19 @@ func TestDestinationInspectionValidatesClosedGraphAndBoundedProviderResponse(t *
 			Version: "0.1.0", HostOS: "darwin", HostArch: "arm64",
 			Backend: "lima", BackendVersion: "2.2.0", GuestArch: "arm64",
 		},
-		EnvironmentRefs: []migration.OpaqueID{"environment_alpha1"},
-		Disks:           append([]migration.DiskObject(nil), stage.Disks...),
-		Edges:           append([]migration.DiskEdge(nil), stage.Edges...),
+		EnvironmentRefs:   []migration.OpaqueID{"environment_alpha1"},
+		Disks:             append([]migration.DiskObject(nil), stage.Disks...),
+		ProfileStateBytes: 512,
+		Edges:             append([]migration.DiskEdge(nil), stage.Edges...),
 		RequiredCapabilities: []migration.RequiredCapability{{
 			ID: "full-state", Provider: "lima", MinimumVersion: "2.2.0",
 		}},
-		RequiredBytes: 6144,
+		RequiredBytes: 6656,
 		Capacity: migration.CapacityRequirement{
 			Schema: migration.CapacityRequirementSchema, BundleBytes: 1024,
-			StagingBytes: 4096, ValidationBytes: 1024,
-			RollbackReserveBytes: 1024, FinalBytes: 4096,
-			PeakAdditionalBytes: 6144,
+			StagingBytes: 4608, ValidationBytes: 1024,
+			RollbackReserveBytes: 1024, FinalBytes: 4608,
+			PeakAdditionalBytes: 6656,
 		},
 	}
 	if err := request.Validate(); err != nil {

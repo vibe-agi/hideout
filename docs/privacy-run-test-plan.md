@@ -2217,7 +2217,15 @@ failure rate. A post-run review that finds preventable work adds or moves a
 preflight before the next expensive attempt.
 
 The portable migration real-Lima gate, formal gate, and local release aggregate
-retain this contract as `run-review.json`. The local aggregate also writes
+retain this contract as `run-review.json`. The real-Lima gate is the explicit
+exception to from-scratch cross-run execution after export: it retains the
+encrypted bundle plus a strict candidate/source/canary binding, while the
+unlocking secret remains in a dedicated macOS Keychain item. The checkpoint
+payload is authenticated with that secret; its modes, parent, schema, candidate
+commit/tree/archive, bundle digest/size, source-immutability digests, and
+canaries are revalidated. Only post-export work may resume, and success deletes
+both files and Keychain item. Missing, stale, aliased, substituted, or
+unauthenticated checkpoints fail closed. The local aggregate also writes
 `run-plan.json` before its first lane. It recognizes a same-candidate retry only
 for a clean source with the same commit, tree, gate digest, inventory digest,
 and Go toolchain. A hashed kernel boot marker distinguishes the same boot
@@ -2435,9 +2443,12 @@ receipt-derived inventory entry for `045-operator-observability-console`.
 
 The source-bound non-performance gate is `scripts/gates/migration.sh`. Its
 checked-in `scripts/gates/migration-tests.txt` inventory is sorted, unique, and
-fail-on-drift: the gate discovers every top-level test containing `Migration`,
-`Migrate`, or `ConfigOnly` in the 13 declared packages and requires the exact
-closed migration test set to pass. The separate sorted
+fail-on-drift: the gate scans every active repository package, discovers every
+top-level test containing `Migration`, `Migrate`, or `ConfigOnly`, and also owns
+every test in a migration-specific test file or the dedicated profile-state
+package. The resulting 225-test, 19-package closed set prevents both a newly
+introduced package and a generically named safety test from escaping because
+the old inventory did not already mention it. The separate sorted
 `scripts/gates/migration-hostile-tests.txt` matrix requires exactly nine
 categories—wrong key, truncation, duplication, reordering, sparse abuse,
 traversal, special files, expansion, and trailing content—and records their
@@ -2462,29 +2473,34 @@ scripts/gates/migration-lima.sh \
 
 It rejects dirty, unaccepted, rebuilt, or digest-mismatched candidates; installs
 the exact archive into a private prefix; and uses one isolated Lima home plus
-independent source/destination Manager stores. The source has a root-disk fixture,
-an attached-disk fixture, a host-workspace exclusion sentinel, recorded guest
-machine/SSH identity, and pre-export root/attached/record hashes. The gate then:
+independent source/destination Manager stores. The source has a root-disk
+fixture, an attached-disk fixture, four profile application-state fixtures
+(`home`, `config`, `data`, and `browser`), profile cache and generated-state
+negative controls, a host-workspace exclusion sentinel, recorded guest
+machine/SSH identity, and pre-export root/attached/profile/record hashes. The gate then:
 
-- exports one encrypted owner-only sealed bundle and retains its terminal
-  receipt;
+- exports one encrypted owner-only sealed bundle, authenticates an exact
+  post-export checkpoint, and retains its terminal receipt;
 - proves a wrong passphrase creates no destination environment;
-- authenticates an inventory containing exactly one environment and root plus
-  attached disks, with host workspace content excluded;
+- authenticates an inventory containing exactly one environment, one profile
+  application-state component, and root plus attached disks, with host workspace,
+  profile cache, and generated profile state excluded;
 - imports the same byte-identical bundle into three Safe Clone destinations and
   one separately acknowledged Exact Guest Restore destination;
 - kills the exact third-destination daemon during durable materialization,
   proves protected passphrase re-unlock and checkpoint resume, kills its fresh
   daemon again during adoption, and proves startup recovery completes without
   another bundle secret;
-- runs all four destinations and verifies both persistent fixtures;
+- runs all four destinations and verifies root-disk, attached-disk, and all four
+  profile application-state fixtures while proving cache exclusion and generated
+  destination profile state;
 - proves all control and backend identities are fresh and pairwise distinct;
 - proves all three Safe Clone machine IDs and SSH host keys are fresh and pairwise
   distinct, while Exact Guest Restore preserves both;
 - removes the package-owned zero-network executor only from an isolated copy of
   the installed prefix and proves full import refuses with the stable capability
   code before creating an operation or destination environment;
-- proves the source disk/record hashes and bundle hash did not change; and
+- proves the source disk/profile/record hashes and bundle hash did not change; and
 - writes only private digest-bound summaries and redacted terminal projections,
   with an explicit no-performance limitation.
 
@@ -2492,10 +2508,12 @@ machine/SSH identity, and pre-export root/attached/record hashes. The gate then:
 `migration-lima` candidate gate, binds its candidate-pointer/archive/installed
 binary hashes to the exact package, and now requires 12 unique release gates.
 Preflight validates the gate scripts and release evidence schema without
-starting a VM. It also runs one accepted and four rejected synthetic summary
-fixtures covering Safe Clone identity uniqueness, daemon-instance uniqueness,
-compatibility refusal before effects, and private artifact modes, so those
-judges fail before an expensive VM run when their semantics drift. A completed
+starting a VM. It also mutation-tests every root/attached/profile fidelity judge
+and the authenticated checkpoint validator (payload substitution, ciphertext
+substitution, and candidate rebinding), alongside accepted/rejected summary
+fixtures for Safe Clone identity uniqueness, daemon-instance uniqueness,
+compatibility refusal before effects, and private artifact modes. Those judges
+therefore fail before an expensive VM run when their semantics drift. A completed
 one-host run establishes provider mechanics across independent stores, not broad
 physical portability; the quickstart's source and two physical destination Macs
 remain the cross-computer acceptance requirement.

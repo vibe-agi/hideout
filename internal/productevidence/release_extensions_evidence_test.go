@@ -122,6 +122,20 @@ func TestMigrationLimaArtifactRequiresExactPackageAndIndependentIdentities(t *te
 		t.Fatalf("duplicate Safe Clone identity error=%v", err)
 	}
 	evidence = migrationLimaFixture()
+	evidence.SourceImmutability.ProfileState.AfterSHA256 = strings.Repeat("f", 64)
+	data, _ = json.Marshal(evidence)
+	if err := validateMigrationLimaArtifact(data, releaseExtensionCommit, packageIdentity); err == nil ||
+		!strings.Contains(err.Error(), "source immutability") {
+		t.Fatalf("mutated source profile state error=%v", err)
+	}
+	evidence = migrationLimaFixture()
+	evidence.Checks.ProfileApplicationStateFidelity = false
+	data, _ = json.Marshal(evidence)
+	if err := validateMigrationLimaArtifact(data, releaseExtensionCommit, packageIdentity); err == nil ||
+		!strings.Contains(err.Error(), "failed required check") {
+		t.Fatalf("missing profile-state fidelity error=%v", err)
+	}
+	evidence = migrationLimaFixture()
 	evidence.Artifacts = evidence.Artifacts[:6]
 	data, _ = json.Marshal(evidence)
 	if err := validateMigrationLimaArtifact(data, releaseExtensionCommit, packageIdentity); err == nil ||
@@ -279,6 +293,7 @@ func migrationLimaFixture() migrationLimaEvidence {
 	evidence.Bundle.ReusedDestinations = 4
 	evidence.SourceImmutability.RootDisk = migrationLimaBeforeAfter{BeforeSHA256: digest("1"), AfterSHA256: digest("1")}
 	evidence.SourceImmutability.AttachedDisk = migrationLimaBeforeAfter{BeforeSHA256: digest("2"), AfterSHA256: digest("2")}
+	evidence.SourceImmutability.ProfileState = migrationLimaBeforeAfter{BeforeSHA256: digest("3"), AfterSHA256: digest("3")}
 	evidence.SourceImmutability.EnvironmentRecord = migrationLimaBeforeAfter{BeforeSHA256: digest("3"), AfterSHA256: digest("3")}
 	evidence.IdentityEvidence.Control = migrationLimaDestinationIdentities{
 		SourceDigest: digest("1"), DestinationDigests: []string{digest("2"), digest("3"), digest("4"), digest("5")},
@@ -306,8 +321,10 @@ func migrationLimaFixture() migrationLimaEvidence {
 	evidence.CompatibilityEvidence.ErrorCode = "migration.capability.unavailable"
 	evidence.Checks = migrationLimaChecks{
 		PackageCandidateInstalled: true, EncryptedBundleSealed: true,
-		RootDiskFidelity: true, AttachedDiskFidelity: true, HostWorkspaceExcluded: true,
-		SourceImmutable: true, WrongPassphraseNoDestinationEnvironment: true,
+		RootDiskFidelity: true, AttachedDiskFidelity: true,
+		ProfileApplicationStateFidelity: true, GeneratedProfileStateExcluded: true,
+		HostWorkspaceExcluded: true,
+		SourceImmutable:       true, WrongPassphraseNoDestinationEnvironment: true,
 		IncompatibleAdoptionExecutorRejectedBeforeEffects: true, TerminalReceipts: true,
 		LimaInventoryStopped: true, NetworkAuthorityReapproved: true,
 		SameBundleThreeSafeClones: true, FreshControlIdentity: true,

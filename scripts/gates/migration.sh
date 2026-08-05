@@ -89,16 +89,48 @@ sha256_file() {
 }
 
 discover_migration_tests() {
-  packages_file="$1"
-  destination="$2"
+  local destination="$1"
+  local package_dir test_files package test_file file_owned test_name name_owned
+  local package_listing="$scratch/active-go-test-files"
+  local test_names="$scratch/active-go-test-names"
   : >"$destination"
-  while IFS= read -r package; do
-    go test "$package" -list 'Migration|Migrate|ConfigOnly' |
-      awk -v package="$package" \
-        '/^(Test|Example)[A-Za-z0-9_]+$/ {print package " " $0}' \
-        >>"$destination"
-  done <"$packages_file"
-  LC_ALL=C sort -o "$destination" "$destination"
+  go list -f \
+    '{{.Dir}}{{"\t"}}{{range .TestGoFiles}}{{.}}{{" "}}{{end}}{{range .XTestGoFiles}}{{.}}{{" "}}{{end}}' \
+    ./... >"$package_listing"
+  while IFS=$'\t' read -r package_dir test_files; do
+    case "$package_dir" in
+      "$root") package="./" ;;
+      "$root"/*) package="./${package_dir#"$root"/}" ;;
+      *)
+        printf 'migration-gate: package escaped repository root: %s\n' \
+          "$package_dir" >&2
+        return 1
+        ;;
+    esac
+    for test_file in $test_files; do
+      file_owned=0
+      case "$package:$test_file" in
+        ./internal/profilestate:* | \
+          *:*migration*_test.go | \
+          *:*migrate*_test.go | \
+          *:*config_only*_test.go)
+          file_owned=1
+          ;;
+      esac
+      sed -En 's/^func ((Test|Example)[A-Za-z0-9_]+)\(.*/\1/p' \
+        "$package_dir/$test_file" >"$test_names"
+      while IFS= read -r test_name; do
+        case "$test_name" in
+          *Migration* | *Migrate* | *ConfigOnly*) name_owned=1 ;;
+          *) name_owned=0 ;;
+        esac
+        if [ "$file_owned" -eq 1 ] || [ "$name_owned" -eq 1 ]; then
+          printf '%s %s\n' "$package" "$test_name" >>"$destination"
+        fi
+      done <"$test_names"
+    done
+  done <"$package_listing"
+  LC_ALL=C sort -u -o "$destination" "$destination"
 }
 
 prepare_migration_test_inventory() {
@@ -137,7 +169,12 @@ prepare_migration_test_inventory() {
     return 1
   fi
   awk '{print $1}' "$expected" | uniq >"$packages"
-  discover_migration_tests "$packages" "$discovered"
+  # Discover from every active repository package, not from the checked-in
+  # inventory itself. This makes a new migration test package visible to the
+  # drift check. Tests are owned either by their explicit migration name or by
+  # a migration-specific test file/package, so generic safety tests in those
+  # files cannot silently escape the release gate.
+  discover_migration_tests "$discovered"
   if [ -n "$(comm -3 "$expected" "$discovered")" ]; then
     printf 'migration-gate: migration test inventory drifted\n' >&2
     comm -3 "$expected" "$discovered" >&2

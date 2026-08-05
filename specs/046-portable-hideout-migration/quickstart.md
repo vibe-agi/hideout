@@ -10,6 +10,8 @@ The primary scenario exports one stopped environment on computer A, imports the
 same unchanged bundle on computers B and C, and proves:
 
 - files stored inside every persistent VM disk survive;
+- persistent profile application state survives while cache/generated identity
+  does not;
 - host workspace contents are not embedded in the bundle;
 - each destination gets fresh Hideout/control/backend identity;
 - Safe Clone creates pairwise-distinct guest machine IDs and SSH host keys;
@@ -43,6 +45,13 @@ Create a separate host workspace fixture under a mounted workspace. Record its
 hash; it must not appear when the bundle is inspected or imported without an
 explicit destination mapping.
 
+Resolve the selected profile directory from `hideout profile path PROFILE`, then
+create distinct fixtures under `home/`, `config/`, `data/`, and `browser/`.
+Also create negative controls under `cache/`, `machine/`, and
+`home/.gitconfig`. Record hashes for all fixtures. The first four must survive;
+cache must be absent, and machine identity/generated Git configuration must be
+destination-generated rather than copied.
+
 ## 2. Review source eligibility
 
 ```sh
@@ -57,9 +66,12 @@ hideout migrate export \
 
 Expected review:
 
-- `dev` and all reachable persistent disks are listed.
+- `dev`, its profile application-state component, and all reachable persistent
+  disks are listed with separate logical-byte estimates.
 - Host workspace contents, command/activity history, audit history, live process
-  state, RAM, logs, caches, and host runtime identity are listed as excluded.
+  state, RAM, logs, profile cache, generated profile identity/configuration, and
+  host runtime identity are listed as excluded. The review separately warns that
+  included profile application state may contain credentials.
 - The plan blocks while `dev` or any consumer of a shared disk is running.
 - It prints the exact stop remediation; it never stops the VM automatically.
 - Secrets are references only because no `--include-secret` was supplied.
@@ -96,7 +108,8 @@ Expected behavior:
 - Once the provider's immutable snapshots exist, status explicitly says the
   source may run again.
 - The final path appears only after authentication and sealing succeed.
-- The source VM and disks are unchanged.
+- The source VM, disks, profile application state, and profile record are
+  unchanged.
 
 Record the final bundle digest:
 
@@ -110,10 +123,11 @@ shasum -a 256 dev.hideout-migration
 hideout migrate inspect dev.hideout-migration
 ```
 
-Expected output identifies the environment, every persistent disk, logical and
-encoded sizes, compatibility requirements, excluded classes, secret-reference
-status, and Safe Clone default. It must not reveal disk file content, secret
-values, credentials, or host paths containing embedded credentials.
+Expected output identifies the environment, profile application-state component,
+every persistent disk, logical and encoded sizes, compatibility requirements,
+excluded classes, secret-reference status, and Safe Clone default. It must not
+reveal disk/profile file content, secret values, credentials, or host paths
+containing embedded credentials.
 
 Before entering the passphrase, make one byte-level copy and corrupt it. Inspection
 of that copy must fail as authentication/corruption without creating profiles,
@@ -167,8 +181,9 @@ Expected behavior:
 
 - Materialization uses fresh opaque backend objects.
 - The only preactivation boot is isolated and runs the packaged adoption helper.
-- The imported environment is not visible/runnable until disks, identity receipt,
-  secrets, profiles, claims, and configuration all verify.
+- The imported profile/environment is not visible/runnable until disks,
+  profile-state digest and exact owner, identity receipt, secrets, claims, and
+  configuration all verify.
 - Completion does not automatically start the environment.
 
 Start it only after completion using the ordinary Hideout run/attach flow. Inside
@@ -183,6 +198,11 @@ ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub
 
 Verify all attached-disk fixtures, modes, owners, symlinks, and xattrs. The guest
 machine ID and SSH fingerprint must differ from computer A.
+
+Resolve the destination profile path named by the receipt. Verify the `home`,
+`config`, `data`, and `browser` fixture hashes. Prove the cache fixture is absent,
+the source machine fixture was not copied, and generated Git configuration does
+not contain the source negative-control value.
 
 Confirm the host workspace fixture is absent until its destination host folder is
 explicitly mapped. Confirm disabled endpoint/proxy/script/pack proposals remain
@@ -202,7 +222,8 @@ hideout migrate import dev.hideout-migration \
 
 Repeat the persistent fixture checks. Assert:
 
-- B and C have the same expected persistent fixture bytes as A.
+- B and C have the same expected disk and included profile application-state
+  fixture bytes as A.
 - A, B, and C have distinct Hideout environment/control/backend IDs.
 - Safe Clone guest machine IDs are pairwise distinct across A, B, and C.
 - Safe Clone SSH host-key fingerprints are pairwise distinct.

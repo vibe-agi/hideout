@@ -4,8 +4,10 @@
 
 Use these terms consistently:
 
-- **Configuration only**: profiles and environment definitions; no VM disk data.
-- **Full VM state**: configuration plus every selected persistent VM disk.
+- **Configuration only**: portable profile settings and environment definitions;
+  no VM disk or profile application-state data.
+- **Full VM state**: configuration, the selected profile's persistent
+  `home`/`config`/`data`/`browser` state, and every selected persistent VM disk.
 - **Safe Clone**: recommended import; keeps files but creates new guest identity.
 - **Exact Guest Restore**: advanced import; keeps guest identity and may conflict
   if another copy runs.
@@ -41,11 +43,13 @@ The first screen must answer what is copied, what is not copied, and the safe pa
 ```text
 Move or copy Hideout environments to another computer.
 
-Full VM state keeps files stored inside the VM. Host workspace folders are not
-copied; you map them again when importing. Bundles are encrypted and reusable.
+Full VM state keeps files stored inside the VM and persistent profile application
+state. Profile caches and host workspace folders are not copied; you map host
+folders again when importing. Bundles are encrypted and reusable.
 
 Common tasks:
-  hideout migrate export --environment dev --mode full --output dev.hideout-migration
+  hideout migrate export --environment dev --mode full \
+    --out dev.hideout-migration --ack-guest-content --preview
   hideout migrate inspect dev.hideout-migration
   hideout migrate import dev.hideout-migration
 
@@ -61,13 +65,15 @@ sets; no Cobra dependency is introduced.
 Primary flags:
 
 ```text
---mode config|full          What to copy; required without an interactive prompt
+--mode config|full          What to copy; defaults to full
 --environment NAME         Environment to include; repeatable
 --all                      Select every environment; mutually exclusive with --environment
---output PATH              New bundle path; existing files are never overwritten
+--out PATH                 New bundle path; existing files are never overwritten
 --include-secret REF       Include one exportable secret value; repeatable and opt-in
---plan-only                Validate and print the immutable plan without starting
---confirm-plan DIGEST      Noninteractive confirmation of an unchanged prior plan
+--ack-secret-transfer      Required with every explicit secret-value selection
+--ack-guest-content        Required for full mode after sensitive-content review
+--preview                  Validate and print the immutable plan without starting
+--yes                      Apply the exact displayed, unblocked plan
 --json                     Machine-readable, redacted output
 ```
 
@@ -80,9 +86,9 @@ Rules:
   `hideout environment stop ...` command when stopping is required.
 - With an interactive terminal, missing choices open prompts and every apply shows
   a review/confirmation screen.
-- Without a terminal, missing `--mode`, selection, output, or confirmation is an
-  error with a copyable example. `--confirm-plan` succeeds only if regenerating
-  the plan produces the same digest.
+- Without a terminal, missing selection, output, or an explicit `--preview`/`--yes`
+  decision is an error with a copyable example. Apply always regenerates and
+  validates the plan before accepting `--yes`.
 - Passphrase and confirmation are read from a protected prompt, never a flag or
   environment variable.
 - Secret values are excluded by default. Each `--include-secret` item receives a
@@ -102,8 +108,10 @@ mutation. Default output shows:
 - source Hideout/backend versions and destination compatibility;
 - environment names and whether configuration/full VM state is present;
 - logical and encoded sizes;
+- included profile application-state bytes and their credential-risk warning;
 - included persistent disks and shared-disk relationships;
-- excluded host folders, history/activity, runtime state, and caches;
+- excluded host folders, history/activity, runtime state, profile cache, and
+  generated profile identity/configuration;
 - secret references and whether selected values exist, never the values;
 - guest identity facts as “will reset by default” or “can be preserved with
   advanced risk acknowledgement.”
@@ -122,13 +130,13 @@ Primary flags:
 --name SOURCE=DEST         Destination environment name; repeatable
 --workspace SOURCE=DEST    Destination host-folder mapping; repeatable
 --secret SOURCE=DEST       Rebind to an existing destination secret ref; repeatable
---import-secret SOURCE     Import one included encrypted value to a fresh ref
---guest-identity SPEC      SOURCE=safe-clone|exact-guest-restore; repeatable
+--secret SOURCE=DEST       Rebind or import one included encrypted value
+--policy SPEC              SOURCE=safe-clone|exact-guest-restore; repeatable
 --approve PROPOSAL_ID      Approve one reviewed authority proposal; repeatable
---acknowledge RISK_CODE    Accept one exact typed risk; repeatable
+--ack RISK_CODE            Accept one exact typed risk; repeatable
+--ack-secret-transfer      Required when importing included secret values
 --preview                  Inspect and build review only; never stage
---plan-only                Emit immutable plan/digest without starting
---confirm-plan DIGEST      Confirm an unchanged prior plan for automation
+--yes                      Apply the exact displayed, unblocked plan
 --json                     Machine-readable, redacted output
 ```
 
@@ -141,7 +149,7 @@ Defaults:
 - one bundle import creates a clone and never consumes the bundle.
 
 Exact Guest Restore requires both the explicit policy and its exact current
-`--acknowledge` code. A generic `--yes` is insufficient. The review says:
+`--ack` code. A generic `--yes` is insufficient. The review says:
 
 ```text
 This keeps the guest machine ID and SSH host keys. Hideout cannot verify that the
@@ -152,9 +160,10 @@ as unique.
 
 Before confirmation, output groups decisions as:
 
-1. **Will copy** — environment definitions and persistent VM disks.
-2. **Will create new** — Hideout/control/backend identities; guest identity under
-   Safe Clone.
+1. **Will copy** — environment definitions, profile application state, and
+   persistent VM disks.
+2. **Will create new** — Hideout/control/backend/profile identities and generated
+   profile configuration; guest identity under Safe Clone.
 3. **Will keep** — guest identity only where Exact Guest Restore was explicitly
    chosen; opaque application identity may remain inside disks.
 4. **Needs your choice** — names, host folders, secret mappings, unsupported facts.

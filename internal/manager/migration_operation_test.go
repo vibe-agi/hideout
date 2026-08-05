@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -13,6 +14,7 @@ import (
 	"github.com/vibe-agi/hideout/internal/backend"
 	"github.com/vibe-agi/hideout/internal/migration"
 	"github.com/vibe-agi/hideout/internal/profile"
+	"github.com/vibe-agi/hideout/internal/profilestate"
 )
 
 func TestMigrationOperationValidatesImmutableImportPlanAndFreshIdentityPolicy(t *testing.T) {
@@ -97,7 +99,9 @@ func TestMigrationCommitDecisionIsOneWayAndReplaySafe(t *testing.T) {
 func migrationVerifiedImportOperationFixture(t *testing.T) MigrationOperation {
 	t.Helper()
 	operation := migrationImportOperationFixture()
-	stage := migrationDestinationStageStateFixture()
+	stage := migrationDestinationStageStateFixtureForOperation(
+		operation, filepath.Join("/tmp", "hideout-migration-fixture", "profiles"),
+	)
 	operation.Effects[0].Status = MigrationEffectSucceeded
 	operation.DestinationStage = &stage
 	adoption := migrationDestinationAdoptionStateFixture(t, operation)
@@ -119,6 +123,35 @@ func migrationVerifiedImportOperationFixture(t *testing.T) MigrationOperation {
 }
 
 func migrationDestinationStageStateFixture() MigrationDestinationStageState {
+	operation := migrationImportOperationFixture()
+	return migrationDestinationStageStateFixtureForOperation(
+		operation, filepath.Join("/tmp", "hideout-migration-fixture", "profiles"),
+	)
+}
+
+func migrationDestinationStageStateFixtureForOperation(
+	operation MigrationOperation,
+	profilesRoot string,
+) MigrationDestinationStageState {
+	states := make([]MigrationMaterializedProfileState, len(operation.EnvironmentActions))
+	for index, action := range operation.EnvironmentActions {
+		owner := profilestate.Owner{
+			OperationID: operation.ID, ProfileName: action.DestinationProfileName,
+			ComponentID:   string(action.ProfileStateComponentID),
+			ContentDigest: string(action.ProfileStateContentDigest),
+			LogicalBytes:  action.ProfileStateLogicalBytes,
+		}
+		stagePath, err := profilestate.StagePath(profilesRoot, owner)
+		if err != nil {
+			panic(err)
+		}
+		states[index] = MigrationMaterializedProfileState{
+			SourceRef: action.SourceRef, ProfileName: action.DestinationProfileName,
+			ComponentID:   action.ProfileStateComponentID,
+			ContentDigest: action.ProfileStateContentDigest,
+			LogicalBytes:  action.ProfileStateLogicalBytes, StagePath: stagePath,
+		}
+	}
 	return MigrationDestinationStageState{
 		StageHandle: "stage_fixture1234",
 		ObjectHandles: []migration.OpaqueID{
@@ -135,6 +168,7 @@ func migrationDestinationStageStateFixture() MigrationDestinationStageState {
 			},
 		},
 		Profiles:       migrationMaterializedProfilesFixture(),
+		ProfileStates:  states,
 		EvidenceDigest: migration.Digest("sha256:" + strings.Repeat("c", 64)),
 	}
 }
@@ -346,17 +380,23 @@ func migrationImportOperationFixture() MigrationOperation {
 				SourceRef: "source_environment1", DestinationProfileName: "dev-clone",
 				Runtime:   "linux",
 				GuestUser: "developer", Backend: "lima",
-				ProfileComponentID:   "component_profile0001",
-				ProfileContentDigest: profiles[0].ContentDigest,
-				ProfileLogicalBytes:  profileSizes[0],
+				ProfileComponentID:        "component_profile0001",
+				ProfileContentDigest:      profiles[0].ContentDigest,
+				ProfileLogicalBytes:       profileSizes[0],
+				ProfileStateComponentID:   "component_state0001",
+				ProfileStateContentDigest: migration.Digest("sha256:" + strings.Repeat("c", 64)),
+				ProfileStateLogicalBytes:  1024,
 			},
 			{
 				SourceRef: "source_environment2", DestinationProfileName: "dev-exact",
 				Runtime:   "linux",
 				GuestUser: "developer", Backend: "lima",
-				ProfileComponentID:   "component_profile0002",
-				ProfileContentDigest: profiles[1].ContentDigest,
-				ProfileLogicalBytes:  profileSizes[1],
+				ProfileComponentID:        "component_profile0002",
+				ProfileContentDigest:      profiles[1].ContentDigest,
+				ProfileLogicalBytes:       profileSizes[1],
+				ProfileStateComponentID:   "component_state0002",
+				ProfileStateContentDigest: migration.Digest("sha256:" + strings.Repeat("d", 64)),
+				ProfileStateLogicalBytes:  2048,
 			},
 		},
 		ExpectedDisks: []migration.DiskObject{

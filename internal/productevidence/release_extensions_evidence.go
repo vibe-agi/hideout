@@ -150,6 +150,7 @@ type migrationLimaEvidence struct {
 	SourceImmutability struct {
 		RootDisk          migrationLimaBeforeAfter `json:"rootDisk"`
 		AttachedDisk      migrationLimaBeforeAfter `json:"attachedDisk"`
+		ProfileState      migrationLimaBeforeAfter `json:"profileState"`
 		EnvironmentRecord migrationLimaBeforeAfter `json:"environmentRecord"`
 	} `json:"sourceImmutability"`
 	IdentityEvidence struct {
@@ -196,6 +197,8 @@ type migrationLimaChecks struct {
 	EncryptedBundleSealed                             bool `json:"encryptedBundleSealed"`
 	RootDiskFidelity                                  bool `json:"rootDiskFidelity"`
 	AttachedDiskFidelity                              bool `json:"attachedDiskFidelity"`
+	ProfileApplicationStateFidelity                   bool `json:"profileApplicationStateFidelity"`
+	GeneratedProfileStateExcluded                     bool `json:"generatedProfileStateExcluded"`
 	HostWorkspaceExcluded                             bool `json:"hostWorkspaceExcluded"`
 	SourceImmutable                                   bool `json:"sourceImmutable"`
 	WrongPassphraseNoDestinationEnvironment           bool `json:"wrongPassphraseNoDestinationEnvironment"`
@@ -366,6 +369,7 @@ func validateMigrationLimaArtifact(data []byte, expectedCommit string, expectedP
 	for _, pair := range []migrationLimaBeforeAfter{
 		evidence.SourceImmutability.RootDisk,
 		evidence.SourceImmutability.AttachedDisk,
+		evidence.SourceImmutability.ProfileState,
 		evidence.SourceImmutability.EnvironmentRecord,
 	} {
 		if !isLowerHexSHA256(pair.BeforeSHA256) || pair.BeforeSHA256 != pair.AfterSHA256 {
@@ -558,7 +562,9 @@ func allDistinctDigests(values ...string) bool {
 
 func (checks migrationLimaChecks) allPassed() bool {
 	return checks.PackageCandidateInstalled && checks.EncryptedBundleSealed &&
-		checks.RootDiskFidelity && checks.AttachedDiskFidelity && checks.HostWorkspaceExcluded &&
+		checks.RootDiskFidelity && checks.AttachedDiskFidelity &&
+		checks.ProfileApplicationStateFidelity && checks.GeneratedProfileStateExcluded &&
+		checks.HostWorkspaceExcluded &&
 		checks.SourceImmutable && checks.WrongPassphraseNoDestinationEnvironment &&
 		checks.IncompatibleAdoptionExecutorRejectedBeforeEffects && checks.TerminalReceipts &&
 		checks.LimaInventoryStopped && checks.NetworkAuthorityReapproved &&

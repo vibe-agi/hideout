@@ -1578,7 +1578,9 @@
         ["environments", view.environmentEstimates.map(
           (value) => `${value.displayName} (${value.environmentRef}) · ${
             root.Migration.bytes(value.estimatedLogicalBytes)
-          } · config ${root.Migration.bytes(value.portableConfigLogicalBytes)} · disks ${
+          } · config ${root.Migration.bytes(value.portableConfigLogicalBytes)} · profile state ${
+            root.Migration.bytes(value.profileStateLogicalBytes || 0)
+          } · disks ${
             value.diskRefs.length ? value.diskRefs.join(", ") : "none"
           }`
         )],

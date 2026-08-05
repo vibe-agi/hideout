@@ -17,6 +17,7 @@ var (
 		"environment-declarations",
 		"persistent-disks",
 		"portable-profiles",
+		"profile-application-state",
 	}
 )
 
@@ -65,8 +66,25 @@ func (service MigrationService) buildMigrationExportPlanInventory(
 		logicalBytes := uint64(len(encoded))
 		digest := migrationExportBytesDigest(encoded)
 		clear(encoded)
+		profileStateLogicalBytes := uint64(0)
+		profileStateDigest := migration.Digest("")
+		if mode == migration.ExportModeFull {
+			profileState, exists := source.profileStates[record.ID]
+			if !exists || profileState.LogicalBytes() == 0 {
+				return migrationExportPlanInventory{}, ErrMigrationPlanStale
+			}
+			profileStateLogicalBytes = profileState.LogicalBytes()
+			profileStateDigest = migration.Digest(profileState.Digest())
+		}
 		total, err := migrationExportAddLogicalBytes(
 			review.estimatedPayloadLogicalBytes, logicalBytes,
+		)
+		if err != nil {
+			return migrationExportPlanInventory{}, err
+		}
+		review.estimatedPayloadLogicalBytes = total
+		total, err = migrationExportAddLogicalBytes(
+			review.estimatedPayloadLogicalBytes, profileStateLogicalBytes,
 		)
 		if err != nil {
 			return migrationExportPlanInventory{}, err
@@ -78,8 +96,10 @@ func (service MigrationService) buildMigrationExportPlanInventory(
 			DisplayName:                record.Name,
 			PortableConfigLogicalBytes: logicalBytes,
 			PortableConfigDigest:       digest,
+			ProfileStateLogicalBytes:   profileStateLogicalBytes,
+			ProfileStateDigest:         profileStateDigest,
 			DiskRefs:                   []migration.OpaqueID{},
-			EstimatedLogicalBytes:      logicalBytes,
+			EstimatedLogicalBytes:      logicalBytes + profileStateLogicalBytes,
 		}
 		environmentIndexes[ref] = index
 	}
@@ -113,8 +133,14 @@ func (service MigrationService) buildMigrationExportPlanInventory(
 				return migrationExportPlanInventory{}, err
 			}
 			estimate.ReferencedDiskLogicalBytes = referenced
+			profileBytes, err := migrationExportAddLogicalBytes(
+				estimate.PortableConfigLogicalBytes, estimate.ProfileStateLogicalBytes,
+			)
+			if err != nil {
+				return migrationExportPlanInventory{}, err
+			}
 			estimated, err := migrationExportAddLogicalBytes(
-				estimate.PortableConfigLogicalBytes, referenced,
+				profileBytes, referenced,
 			)
 			if err != nil {
 				return migrationExportPlanInventory{}, err
@@ -211,12 +237,22 @@ func validateMigrationExportPlanInventory(plan migration.ExportPlan) error {
 			estimate.PortableConfigLogicalBytes == 0 ||
 			estimate.PortableConfigLogicalBytes > migration.MaxPortableProfileBytes ||
 			estimate.PortableConfigDigest.Validate() != nil ||
+			(plan.Mode == migration.ExportModeFull &&
+				(estimate.ProfileStateLogicalBytes == 0 ||
+					estimate.ProfileStateDigest.Validate() != nil)) ||
+			(plan.Mode == migration.ExportModeConfig &&
+				(estimate.ProfileStateLogicalBytes != 0 || estimate.ProfileStateDigest != "")) ||
 			validateSortedMigrationOpaqueIDs(estimate.DiskRefs, true) != nil {
 			return ErrMigrationPlanInvalid
 		}
 		next, err := migrationExportAddLogicalBytes(
 			aggregate, estimate.PortableConfigLogicalBytes,
 		)
+		if err != nil {
+			return ErrMigrationPlanInvalid
+		}
+		aggregate = next
+		next, err = migrationExportAddLogicalBytes(aggregate, estimate.ProfileStateLogicalBytes)
 		if err != nil {
 			return ErrMigrationPlanInvalid
 		}
@@ -268,8 +304,14 @@ func validateMigrationExportPlanInventory(plan migration.ExportPlan) error {
 				referenced = next
 			}
 		}
+		profileBytes, err := migrationExportAddLogicalBytes(
+			estimate.PortableConfigLogicalBytes, estimate.ProfileStateLogicalBytes,
+		)
+		if err != nil {
+			return ErrMigrationPlanInvalid
+		}
 		estimated, err := migrationExportAddLogicalBytes(
-			estimate.PortableConfigLogicalBytes, referenced,
+			profileBytes, referenced,
 		)
 		if err != nil || estimate.ReferencedDiskLogicalBytes != referenced ||
 			estimate.EstimatedLogicalBytes != estimated {

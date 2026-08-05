@@ -1757,9 +1757,10 @@ func writeMigrationExportPlan(w io.Writer, plan migration.ExportPlan, names []st
 		}
 		fmt.Fprintf(
 			w,
-			"  Environment %s (%s): %d bytes; portable config=%d bytes; disks=%s\n",
+			"  Environment %s (%s): %d bytes; portable config=%d bytes; profile state=%d bytes; disks=%s\n",
 			estimate.DisplayName, estimate.EnvironmentRef, estimate.EstimatedLogicalBytes,
-			estimate.PortableConfigLogicalBytes, strings.Join(diskRefs, ", "),
+			estimate.PortableConfigLogicalBytes, estimate.ProfileStateLogicalBytes,
+			strings.Join(diskRefs, ", "),
 		)
 	}
 	for _, estimate := range plan.DiskEstimates {
@@ -1788,12 +1789,23 @@ func writeMigrationInspection(w io.Writer, inspection manager.MigrationReadOnlyI
 	fmt.Fprintf(w, "Migration bundle %s (format %d, sealed=%t)\n", value.BundleID, value.FormatVersion, value.Sealed)
 	fmt.Fprintf(w, "  Source: Hideout %s, %s/%s, %s %s\n", value.Source.ProductVersion, value.Source.HostOS, value.Source.HostArch, value.Source.Backend, value.Source.BackendVersion)
 	fmt.Fprintf(w, "  Size: encoded=%d logical=%d bytes\n", value.EncodedBytes, value.LogicalBytes)
+	fmt.Fprintf(
+		w,
+		"  Components: profiles=%d profile application states=%d environments=%d disks=%d secret values=%d provider metadata=%d total=%d\n",
+		value.Components.Profiles, value.Components.ProfileStates,
+		value.Components.Environments, value.Components.Disks,
+		value.Components.SecretValues, value.Components.ProviderMetadata,
+		value.Components.Total,
+	)
 	for _, environment := range value.Environments {
 		fmt.Fprintf(w, "  Environment: %s  source=%s  disks=%d\n", environment.DisplayNameHint, environment.SourceRef, len(environment.DiskIDs))
 	}
 	fmt.Fprintf(w, "  Excluded: %s\n", strings.Join(value.ExcludedClasses, ", "))
 	if len(value.Secrets) != 0 {
 		fmt.Fprintf(w, "  Secret references requiring review: %d (values are never displayed)\n", len(value.Secrets))
+	}
+	for _, warning := range value.Warnings {
+		fmt.Fprintf(w, "  Warning [%s]: %s\n", warning.Code, warning.Summary)
 	}
 }
 

@@ -96,6 +96,11 @@ all destination-local identities are fresh.
    preserves the guest machine identity and SSH host identity, and the review
    states that Hideout cannot prove the disconnected source will remain off or
    guarantee safe concurrent use.
+7. **Given** application state in the selected profile's `home`, `config`,
+   `data`, and `browser` roots, **When** a full migration completes, **Then**
+   those bytes are preserved under a fresh destination profile while profile
+   cache, generated machine identity, and generated Git configuration are not
+   copied.
 
 ---
 
@@ -177,11 +182,11 @@ secret value.
    payload, their values never appear in arguments, progress, logs, receipts,
    or inventories, and the destination writes them only to its local secret
    provider.
-4. **Given** a full-environment export, **When** the guest disk may contain
-   application-managed credentials or private data, **Then** the interface
-   explains that those opaque guest contents cannot be selectively scrubbed
-   while preserving the disk and requires an explicit sensitivity
-   acknowledgement.
+4. **Given** a full-environment export, **When** the guest disk or included
+   profile application state may contain application-managed credentials or
+   private data, **Then** the interface names both categories, explains that
+   their contents cannot be classified safely, and requires an explicit
+   sensitivity acknowledgement.
 5. **Given** ordinary host project directories, local command/file/network
    observation history, release evidence, download caches, or installed host
    applications, **When** any migration scope is selected, **Then** those
@@ -400,8 +405,12 @@ effects, confirmation requirements, and terminal receipts.
   point-in-time filesystem state; a lifecycle change during capture MUST abort
   or invalidate the affected capture.
 - **FR-018**: A full import MUST preserve selected guest filesystem contents,
-  installed guest tools, guest user configuration, and application data except
-  for identities transformed by the selected Guest Identity Policy.
+  installed guest tools, guest user configuration, and the selected profile's
+  persistent application state under `home/`, `config/`, `data/`, and
+  `browser/`. Profile cache, generated profile machine identity, and generated
+  Git configuration MUST be excluded; destination-generated profile state and
+  identities transformed by the selected Guest Identity Policy MUST be
+  recreated during import.
 - **FR-019**: Import MUST regenerate all Hideout-owned machine-incarnation,
   boot, session, broker, UI, workspace, operation, endpoint, ephemeral secret,
   and backend-local identities independently on every destination before the
@@ -436,8 +445,9 @@ effects, confirmation requirements, and terminal receipts.
   portable values; import MUST rebind through the destination provider and
   preserve destination-local generation and availability semantics.
 - **FR-029**: Full-environment export MUST disclose that application-managed
-  secrets inside an opaque guest disk are necessarily included and MUST require
-  a separate explicit acknowledgement from Hideout-managed secret selection.
+  secrets inside an opaque guest disk or included profile application state are
+  necessarily included and MUST require a separate explicit acknowledgement
+  from Hideout-managed secret selection.
 - **FR-030**: Host application packs, executables, platform permissions, and
   other host prerequisites MUST be re-observed on the destination; declarations
   or receipts MAY migrate, but source host binaries or permission state MUST
@@ -532,6 +542,11 @@ effects, confirmation requirements, and terminal receipts.
   persistent guest state plus the portable declaration needed to adopt it on a
   compatible destination. It excludes live processes, RAM, and source-local
   control-plane identity.
+- **Profile Application State**: The bounded deterministic full-mode component
+  containing the selected profile's `home`, `config`, `data`, and `browser`
+  roots. It may contain credentials; it excludes cache and generated profile
+  identity/configuration, is staged under an exact operation owner, and becomes
+  visible only with its fresh destination profile.
 - **Path Binding Proposal**: A source logical path requirement awaiting an
   operator-selected destination path and destination safety validation.
 - **Authority Proposal**: Imported configuration that could add or broaden host
@@ -644,9 +659,10 @@ effects, confirmation requirements, and terminal receipts.
   credentials, but opaque provider records are never copied as if they were
   portable.
 - A guest disk is opaque application state and may itself contain credentials,
-  SSH keys, caches, licenses, or private files unknown to Hideout. Full export
-  protects that whole payload but cannot truthfully redact selected guest files
-  while promising an exact filesystem copy.
+  SSH keys, caches, licenses, or private files unknown to Hideout. Included
+  profile application state may likewise contain credentials or browser
+  sessions. Full export protects both payload classes but cannot truthfully
+  classify or redact arbitrary application data while promising continuity.
 - A destination must re-observe host applications, permissions, runtime
   prerequisites, and backend capability. A source receipt is not proof that a
   destination prerequisite exists.

@@ -5055,8 +5055,9 @@ backend, path, Keychain, or lifecycle authority.
 
 The v1 bundle is one owner-only append-only file. Its public prologue contains
 only bounded format facts needed to request a protected unlock. Authenticated
-records carry normalized portable configuration, selected encrypted secret
-values, sparse disk extents, checkpoints, one manifest, and one sealed footer.
+records carry normalized portable configuration, bounded profile application
+state, selected encrypted secret values, sparse disk extents, checkpoints, one
+manifest, and one sealed footer.
 Argon2id wraps the random bundle key; HKDF domain-separates record keys; each
 record uses XChaCha20-Poly1305 with ordering and bundle identity in associated
 data. Reader limits cover header, manifest, metadata, chunk, record count,
@@ -5085,10 +5086,15 @@ continues. Cancellation explicitly retains or removes that proved partial. A
 partial never passes sealed inspection.
 
 Config-only mode uses the same bundle and operation contracts without requiring
-persistent-disk capability. Full mode requires a runtime-proved typed Lima
-migration capability and includes every reachable root/attached disk for the
-selected stopped closure. Selected secret values require named refs plus the
-separate transfer acknowledgement; default export carries references only.
+persistent-disk capability and carries no profile application-state component.
+Full mode requires a runtime-proved typed Lima migration capability, includes
+every reachable root/attached disk for the selected stopped closure, and captures
+the referenced profile's `home`, `config`, `data`, and `browser` roots. Capture
+is deterministic and source-stability bound; cache, generated profile machine
+identity, and generated Git configuration are excluded. Profile application
+state may contain credentials and is covered by the full-content sensitivity
+acknowledgement. Selected secret values require named refs plus the separate
+transfer acknowledgement; default export carries references only.
 
 The import protocol is:
 
@@ -5097,7 +5103,7 @@ authenticate and inspect without mutation
   -> explicit source scope and destination mappings
   -> compatibility/capacity/conflict/authority plan
   -> deterministic claims
-  -> private disk/config/secret staging
+  -> private disk/config/profile-state/secret staging
   -> isolated no-network guest adoption
   -> provider and identity verification
   -> durable one-way activation decision
@@ -5105,18 +5111,22 @@ authenticate and inspect without mutation
   -> terminal receipt and claim release
 ```
 
-Staged objects are not addressable by ordinary run/attach paths. A restart
-reconciles the durable effect set and advertises only a revision-valid finish,
-rollback, resume, cancel, or partial-removal action. Compensation runs in reverse
-ownership order and never treats the immutable input bundle or pre-existing
-destination objects as cleanup targets.
+Staged objects are not addressable by ordinary run/attach paths. Profile state
+uses deterministic operation/profile/component ownership, rejects traversal,
+alias, symlink escape, special-file, substitution, and expansion failures, and
+is atomically renamed into place only with the fresh destination profile. A
+restart reconciles the durable effect set and advertises only a revision-valid
+finish, rollback, resume, cancel, or partial-removal action. Compensation runs
+in reverse ownership order and never treats the immutable input bundle or
+pre-existing destination objects as cleanup targets.
 
-Hideout control, environment, backend, operation, session, broker, workspace,
-and ephemeral credential identity is always fresh per import. Guest identity is
-the only import policy: Safe Clone regenerates machine ID and SSH host keys on
-the staged copy; Exact Guest Restore preserves them after the exact collision
-acknowledgement. Export remains destination-neutral so the same unchanged bundle
-can be imported repeatedly under different policies.
+Hideout control, environment, backend, profile, operation, session, broker,
+workspace, and ephemeral credential identity is always fresh per import.
+Generated profile state is recreated around the preserved application roots.
+Guest identity is the only import policy: Safe Clone regenerates machine ID and
+SSH host keys on the staged copy; Exact Guest Restore preserves them after the
+exact collision acknowledgement. Export remains destination-neutral so the same
+unchanged bundle can be imported repeatedly under different policies.
 
 Host workspace contents and ambient host authority are excluded. Paths,
 HostFS/workspace access, endpoints, network settings, scripts, packs, and host
@@ -5132,8 +5142,12 @@ noncanonical, or trailing data fails closed with re-export/recreate guidance.
 This clean boundary is possible because no user installation depends on a
 development format.
 
-Source mechanics are gated by the explicit closed 13-package test inventory in
-`scripts/gates/migration.sh`. A full-state release additionally requires
-`scripts/gates/migration-lima.sh` against the exact clean package candidate and
-the physical cross-computer acceptance described in the test plan. Performance
+Source mechanics are gated by the explicit closed package and hostile-input test
+inventories in `scripts/gates/migration.sh`. A full-state release additionally
+requires `scripts/gates/migration-lima.sh` against the exact clean package
+candidate. It distinguishes root-disk, attached-disk, and profile application
+state fidelity, proves cache/generated-state exclusion and source immutability,
+and may resume post-export work only from a candidate-bound,
+secret-authenticated checkpoint. Invalid checkpoints fail closed. Physical
+cross-computer acceptance remains as described in the test plan. Performance
 remains a separate deferred, process-scoped claim.

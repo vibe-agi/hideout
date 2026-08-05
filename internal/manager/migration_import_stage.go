@@ -5,12 +5,16 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"os"
+	"path/filepath"
 	"slices"
 	"sort"
 
 	"github.com/vibe-agi/hideout/internal/backend"
 	"github.com/vibe-agi/hideout/internal/environment"
 	"github.com/vibe-agi/hideout/internal/migration"
+	"github.com/vibe-agi/hideout/internal/profile"
+	"github.com/vibe-agi/hideout/internal/profilestate"
 )
 
 type MigrationImportMaterializeRequest struct {
@@ -168,17 +172,31 @@ func (service MigrationImportService) MaterializeImportDestination(
 	materialized, err := (MigrationMaterializationService{
 		SecretInputs: service.SecretInputs, Cache: service.InspectionCache,
 		Destination: service.Import, Secrets: service.Secrets,
+		Profiles: profile.Store{Root: service.Store.Root},
 	}).StageDestinationWithProfiles(ctx, MigrationDestinationMaterializeRequest{
 		BundlePath: operation.BundlePath, ExpectedFile: *operation.BundleFile,
 		ExpectedBinding: bundleBinding, SecretInputHandle: request.SecretInputHandle,
 		ClientBinding: request.ClientBinding, Destination: stageRequest,
 		OperationID: operation.ID, SecretActions: cloneMigrationSecretActions(operation.SecretActions),
+		EnvironmentActions: append([]migration.EnvironmentAction(nil), operation.EnvironmentActions...),
 	})
 	if err != nil {
 		return service.importMaterializationFailure(operation.ID, err)
 	}
+	profileStatesDurable := false
+	defer func() {
+		if !profileStatesDurable {
+			_ = removeMigrationMaterializedProfileStates(operation.ID, materialized.ProfileStates)
+		}
+	}()
 	if err := validateMigrationMaterializedProfiles(
 		operation.EnvironmentActions, materialized.Profiles,
+	); err != nil {
+		return service.importMaterializationFailure(operation.ID, err)
+	}
+	if err := validateMigrationMaterializedProfileStates(
+		operation.ID, operation.ImportObjects, operation.EnvironmentActions,
+		materialized.ProfileStates,
 	); err != nil {
 		return service.importMaterializationFailure(operation.ID, err)
 	}
@@ -201,6 +219,7 @@ func (service MigrationImportService) MaterializeImportDestination(
 	if err != nil {
 		return MigrationOperation{}, backend.DestinationStage{}, err
 	}
+	profileStatesDurable = true
 	if migrationHasImportedSecretValues(operation.SecretActions) {
 		digest, digestErr := CanonicalDigest(
 			"migration-import-prepared-secrets", materialized.PreparedSecrets,
@@ -240,6 +259,24 @@ func (service MigrationImportService) MaterializeImportDestination(
 	return operation, materialized.Stage, nil
 }
 
+func removeMigrationMaterializedProfileStates(
+	operationID string,
+	states []MigrationMaterializedProfileState,
+) error {
+	var result error
+	for _, state := range states {
+		if state.Validate(operationID) != nil {
+			result = errors.Join(result, ErrMigrationOperationInvalid)
+			continue
+		}
+		removeErr := profilestate.RemoveStage(state.StagePath, state.Owner(operationID))
+		if !errors.Is(removeErr, os.ErrNotExist) {
+			result = errors.Join(result, removeErr)
+		}
+	}
+	return result
+}
+
 func migrationDestinationStageState(
 	materialized MigrationDestinationMaterialization,
 	evidenceDigest migration.Digest,
@@ -259,6 +296,7 @@ func migrationDestinationStageState(
 		ObjectHandles:  append([]migration.OpaqueID(nil), stage.ObjectHandles...),
 		Checkpoints:    checkpoints,
 		Profiles:       cloneMigrationMaterializedProfiles(materialized.Profiles),
+		ProfileStates:  append([]MigrationMaterializedProfileState(nil), materialized.ProfileStates...),
 		EvidenceDigest: evidenceDigest,
 	}
 }
@@ -309,7 +347,8 @@ func buildMigrationImportStageRequest(
 		if !exists || operation.DestinationIdentities[index].SourceRef != object.SourceRef ||
 			action.SourceRef != object.SourceRef || action.Runtime != environment.Runtime ||
 			action.GuestUser != environment.GuestUser || action.Backend != environment.Backend ||
-			action.ProfileComponentID != environment.ProfileComponentID {
+			action.ProfileComponentID != environment.ProfileComponentID ||
+			action.ProfileStateComponentID != environment.ProfileStateComponentID {
 			return backend.DestinationStageRequest{}, ErrMigrationPlanInvalid
 		}
 		objects[index] = backend.MigrationDestinationObject{
@@ -559,7 +598,20 @@ func (service MigrationImportService) compensateImportProviderState(
 	if err := rollback.Validate(); err != nil {
 		return MigrationOperation{}, err
 	}
+	profileStates, err := migrationProfileStatesForRollback(operation, service.Store.Root)
+	if err != nil {
+		return MigrationOperation{}, err
+	}
 	if err := service.Import.RollbackMigrationDestination(ctx, rollback); err != nil {
+		failed, transitionErr := service.Store.TransitionPhase(
+			operation.ID, MigrationPhaseRecoverableFailure, nil,
+		)
+		if transitionErr != nil {
+			return MigrationOperation{}, errors.Join(err, transitionErr)
+		}
+		return failed, err
+	}
+	if err := removeMigrationMaterializedProfileStates(operation.ID, profileStates); err != nil {
 		failed, transitionErr := service.Store.TransitionPhase(
 			operation.ID, MigrationPhaseRecoverableFailure, nil,
 		)
@@ -607,6 +659,45 @@ func (service MigrationImportService) compensateImportProviderState(
 		}
 	}
 	return operation, nil
+}
+
+func migrationProfileStatesForRollback(
+	operation MigrationOperation,
+	storeRoot string,
+) ([]MigrationMaterializedProfileState, error) {
+	if operation.DestinationStage != nil && len(operation.DestinationStage.ProfileStates) != 0 {
+		states := append([]MigrationMaterializedProfileState(nil), operation.DestinationStage.ProfileStates...)
+		if validateMigrationMaterializedProfileStates(
+			operation.ID, operation.ImportObjects, operation.EnvironmentActions, states,
+		) != nil {
+			return nil, ErrMigrationOperationInvalid
+		}
+		return states, nil
+	}
+	if migrationImportObjectsConfigOnly(operation.ImportObjects) {
+		return []MigrationMaterializedProfileState{}, nil
+	}
+	profilesRoot := filepath.Join(storeRoot, "profiles")
+	states := make([]MigrationMaterializedProfileState, len(operation.EnvironmentActions))
+	for index, action := range operation.EnvironmentActions {
+		owner := profilestate.Owner{
+			OperationID: operation.ID, ProfileName: action.DestinationProfileName,
+			ComponentID:   string(action.ProfileStateComponentID),
+			ContentDigest: string(action.ProfileStateContentDigest),
+			LogicalBytes:  action.ProfileStateLogicalBytes,
+		}
+		stagePath, err := profilestate.StagePath(profilesRoot, owner)
+		if err != nil {
+			return nil, err
+		}
+		states[index] = MigrationMaterializedProfileState{
+			SourceRef: action.SourceRef, ProfileName: action.DestinationProfileName,
+			ComponentID:   action.ProfileStateComponentID,
+			ContentDigest: action.ProfileStateContentDigest,
+			LogicalBytes:  action.ProfileStateLogicalBytes, StagePath: stagePath,
+		}
+	}
+	return states, nil
 }
 
 func migrationEffectNeedsCompensation(status MigrationEffectStatus) bool {
@@ -727,7 +818,13 @@ func (service MigrationImportService) revalidateImportOperationDestination(
 		return err
 	}
 	requiredBytes, err := migrationDiskLogicalBytes(stage.Disks)
-	if err != nil || !operation.Progress.LogicalTotalKnown ||
+	profileStateBytes, stateErr := migrationProfileStateLogicalBytes(operation.EnvironmentActions)
+	if err != nil || stateErr != nil ||
+		profileStateBytes > migration.HardMaxLogicalBytes-requiredBytes {
+		return ErrMigrationPlanStale
+	}
+	requiredBytes += profileStateBytes
+	if !operation.Progress.LogicalTotalKnown ||
 		requiredBytes != operation.Progress.TotalLogicalBytes {
 		return ErrMigrationPlanStale
 	}
@@ -735,7 +832,7 @@ func (service MigrationImportService) revalidateImportOperationDestination(
 		return ErrMigrationPlanStale
 	}
 	capacity, err := migrationImportCapacityRequirement(
-		operation.BundleFile.Size, stage.Disks,
+		operation.BundleFile.Size, stage.Disks, profileStateBytes,
 	)
 	if err != nil {
 		return ErrMigrationPlanStale
@@ -753,7 +850,8 @@ func (service MigrationImportService) revalidateImportOperationDestination(
 		Binding: stage.Binding, ManifestDigest: operation.Bundle.ManifestDigest,
 		SourceProduct:   manifest.SourceProduct,
 		EnvironmentRefs: migrationImportObjectRefs(operation.ImportObjects),
-		Disks:           stage.Disks, Edges: stage.Edges,
+		Disks:           stage.Disks, ProfileStateBytes: profileStateBytes,
+		Edges: stage.Edges,
 		RequiredCapabilities: append(
 			[]migration.RequiredCapability(nil), manifest.RequiredCapabilities...,
 		),

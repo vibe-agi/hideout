@@ -32,14 +32,50 @@ func TestMigrationExportCLIRendersSharedGoldenPlan(t *testing.T) {
 	var output bytes.Buffer
 	writeMigrationExportPlan(&output, plan, []string{"dev"})
 	for _, expected := range []string{
-		"Included: environment-declarations, persistent-disks, portable-profiles",
-		"Payload estimate: 9216 bytes (complete logical payload)",
-		"Environment dev (environment_source1): 9216 bytes",
+		"Included: environment-declarations, persistent-disks, portable-profiles, profile-application-state",
+		"Payload estimate: 9728 bytes (complete logical payload)",
+		"Environment dev (environment_source1): 9728 bytes; portable config=1024 bytes; profile state=512 bytes",
 		"Disk disk_root0000001 (root): logical=8192 bytes",
 		"used by=environment_source1",
 	} {
 		if !strings.Contains(output.String(), expected) {
 			t.Fatalf("CLI golden plan omitted %q:\n%s", expected, output.String())
+		}
+	}
+}
+
+func TestMigrationInspectionCLIExposesProfileStateAndSensitivityWarning(t *testing.T) {
+	inspection := manager.MigrationReadOnlyInspection{
+		Inventory: manager.MigrationBundleInspectionProjection{
+			BundleID: "migb_cliinspection01", FormatVersion: migration.BundleFormatVersion,
+			Sealed: true, EncodedBytes: 1024, LogicalBytes: 512,
+			Source: manager.MigrationBundleSourceProjection{
+				ProductVersion: "v1.2.3", HostOS: "darwin", HostArch: "arm64",
+				Backend: "lima", BackendVersion: "1.0.0",
+			},
+			Environments: []manager.MigrationBundleEnvironmentProjection{{
+				SourceRef: "environment_source1", DisplayNameHint: "dev",
+				DiskIDs: []migration.OpaqueID{"disk_root0000001"},
+			}},
+			ExcludedClasses: []string{"host-workspace-content"},
+			Components: manager.MigrationBundleComponentCounts{
+				Profiles: 1, ProfileStates: 1, Environments: 1, Disks: 1, Total: 4,
+			},
+			Warnings: []migration.PlanNotice{{
+				Code:    "migration.bundle.full_state_may_contain_secrets",
+				Summary: "Full state can contain credentials.",
+			}},
+		},
+	}
+	var output bytes.Buffer
+	writeMigrationInspection(&output, inspection)
+	for _, expected := range []string{
+		"profile application states=1", "Environment: dev", "disks=1",
+		"Warning [migration.bundle.full_state_may_contain_secrets]",
+		"Full state can contain credentials.",
+	} {
+		if !strings.Contains(output.String(), expected) {
+			t.Fatalf("inspection omitted %q:\n%s", expected, output.String())
 		}
 	}
 }

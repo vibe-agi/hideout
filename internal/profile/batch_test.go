@@ -1,6 +1,7 @@
 package profile
 
 import (
+	"context"
 	"errors"
 	"os"
 	"path/filepath"
@@ -9,6 +10,7 @@ import (
 	"time"
 
 	"github.com/vibe-agi/hideout/internal/environment"
+	"github.com/vibe-agi/hideout/internal/profilestate"
 )
 
 func TestEnvironmentBatchParticipantHasOneCrossStoreVisibilityPoint(t *testing.T) {
@@ -201,6 +203,168 @@ func TestEnvironmentBatchParticipantBindingRejectsProfileMutationOnReplay(t *tes
 	); !errors.Is(err, environment.ErrBatchConflict) {
 		t.Fatalf("changed participant replay error=%v", err)
 	}
+}
+
+func TestMigrationEnvironmentBatchParticipantAtomicallyPublishesImportedApplicationState(t *testing.T) {
+	root := t.TempDir()
+	profileStore := Store{Root: root}
+	environmentStore := environment.Store{Root: root}
+	const batchID = "op_profile_state_batch01"
+	portable := Default("imported-state")
+	portable.Metadata = nil
+	owner, stage, sentinel := profileBatchImportedStateFixture(
+		t, root, batchID, portable.Name,
+	)
+	participant := EnvironmentBatchParticipant{
+		Store: profileStore, Profiles: []Profile{portable},
+		ImportedStates: []ImportedState{{
+			ProfileName: portable.Name, StagePath: stage, Owner: owner,
+		}},
+	}
+	record := profileBatchEnvironmentFixture(t, portable.Name)
+
+	publication, err := environmentStore.PreflightBatchWithParticipant(
+		batchID, []environment.Record{record}, participant,
+	)
+	if err != nil || publication.Validate() != nil {
+		t.Fatalf("preflight publication=%+v error=%v", publication, err)
+	}
+	if _, err := os.Lstat(profileStore.ProfileDir(portable.Name)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("preflight exposed destination profile: %v", err)
+	}
+	if err := profilestate.VerifyStage(stage, owner); err != nil {
+		t.Fatalf("preflight mutated private state stage: %v", err)
+	}
+
+	publication, err = environmentStore.PublishBatchWithParticipant(
+		batchID, []environment.Record{record}, participant,
+	)
+	if err != nil || publication.Validate() != nil {
+		t.Fatalf("publish publication=%+v error=%v", publication, err)
+	}
+	final := profileStore.ProfileDir(portable.Name)
+	content, err := os.ReadFile(filepath.Join(final, "home", ".claude", "history.jsonl"))
+	if err != nil || string(content) != sentinel {
+		t.Fatalf("published application state=%q error=%v", content, err)
+	}
+	if _, err := os.Lstat(stage); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("private stage survived atomic rename: %v", err)
+	}
+	gitConfig, err := os.ReadFile(filepath.Join(final, "home", ".gitconfig"))
+	if err != nil || strings.Contains(string(gitConfig), "SOURCE-IDENTITY-MUST-NOT-SURVIVE") {
+		t.Fatalf("source-generated identity survived: %q error=%v", gitConfig, err)
+	}
+	for _, marker := range profilestate.MarkerNames() {
+		if _, err := os.Lstat(filepath.Join(final, marker)); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("temporary state marker %q survived finalization: %v", marker, err)
+		}
+	}
+	loaded, err := profileStore.Load(portable.Name)
+	if err != nil || loaded.Metadata["profileId"] == "" ||
+		loaded.Metadata["identityId"] == "" || loaded.Metadata["machineId"] == "" ||
+		loaded.Metadata["createdFrom"] != batchID {
+		t.Fatalf("fresh destination identity=%+v error=%v", loaded.Metadata, err)
+	}
+	if _, err := environmentStore.PublishBatchWithParticipant(
+		batchID, []environment.Record{record}, participant,
+	); err != nil {
+		t.Fatalf("completed publication did not replay: %v", err)
+	}
+}
+
+func TestMigrationEnvironmentBatchParticipantRejectsTamperedImportedStateBeforeVisibility(t *testing.T) {
+	root := t.TempDir()
+	profileStore := Store{Root: root}
+	environmentStore := environment.Store{Root: root}
+	const batchID = "op_profile_state_tamper01"
+	portable := Default("tampered-state")
+	portable.Metadata = nil
+	owner, stage, _ := profileBatchImportedStateFixture(t, root, batchID, portable.Name)
+	if err := os.WriteFile(
+		filepath.Join(stage, "home", ".claude", "history.jsonl"),
+		[]byte("tampered\n"), 0o600,
+	); err != nil {
+		t.Fatal(err)
+	}
+	participant := EnvironmentBatchParticipant{
+		Store: profileStore, Profiles: []Profile{portable},
+		ImportedStates: []ImportedState{{
+			ProfileName: portable.Name, StagePath: stage, Owner: owner,
+		}},
+	}
+	record := profileBatchEnvironmentFixture(t, portable.Name)
+	if _, err := environmentStore.PreflightBatchWithParticipant(
+		batchID, []environment.Record{record}, participant,
+	); !errors.Is(err, ErrBatchConflict) {
+		t.Fatalf("tampered state preflight error=%v", err)
+	}
+	if _, err := os.Lstat(profileStore.ProfileDir(portable.Name)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("tampered state exposed profile: %v", err)
+	}
+	if records, err := environmentStore.List(); err != nil || len(records) != 0 {
+		t.Fatalf("tampered state exposed environments=%+v error=%v", records, err)
+	}
+}
+
+func profileBatchImportedStateFixture(
+	t *testing.T,
+	destinationRoot string,
+	operationID string,
+	profileName string,
+) (profilestate.Owner, string, string) {
+	t.Helper()
+	source := filepath.Join(t.TempDir(), "source-profile")
+	if err := os.Mkdir(source, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range profilestate.IncludedRoots() {
+		if err := os.Mkdir(filepath.Join(source, name), 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Mkdir(filepath.Join(source, "home", ".local"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	sentinel := "claude-history-survives\n"
+	stateDir := filepath.Join(source, "home", ".claude")
+	if err := os.Mkdir(stateDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(
+		filepath.Join(stateDir, "history.jsonl"), []byte(sentinel), 0o600,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(
+		filepath.Join(source, "home", ".gitconfig"),
+		[]byte("SOURCE-IDENTITY-MUST-NOT-SURVIVE\n"), 0o600,
+	); err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := profilestate.Capture(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	owner := profilestate.Owner{
+		OperationID: operationID, ProfileName: profileName,
+		ComponentID:   "profilestate_batch_component",
+		ContentDigest: snapshot.Digest(), LogicalBytes: snapshot.LogicalBytes(),
+	}
+	materializer, err := profilestate.NewMaterializer(
+		filepath.Join(destinationRoot, "profiles"), owner,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := snapshot.Write(context.Background(), 31, materializer.Consume); err != nil {
+		_ = materializer.Abort()
+		t.Fatal(err)
+	}
+	if err := materializer.Finish(); err != nil {
+		_ = materializer.Abort()
+		t.Fatal(err)
+	}
+	return owner, materializer.Path(), sentinel
 }
 
 type profileBatchParticipantFailure struct {

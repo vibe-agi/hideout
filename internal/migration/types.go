@@ -249,18 +249,19 @@ type SourceProduct struct {
 }
 
 type EnvironmentSnapshot struct {
-	SourceEnvironmentRef  OpaqueID              `json:"sourceEnvironmentRef"`
-	DisplayNameHint       string                `json:"displayNameHint"`
-	Runtime               string                `json:"runtime"`
-	GuestUser             string                `json:"guestUser"`
-	Backend               string                `json:"backend"`
-	Mode                  ExportMode            `json:"mode"`
-	ImageProvenance       *ImageProvenance      `json:"imageProvenance,omitempty"`
-	ProfileComponentID    OpaqueID              `json:"profileComponentId"`
-	WorkspaceProposals    []WorkspaceProposal   `json:"workspaceProposals"`
-	AuthorityProposalRefs []OpaqueID            `json:"authorityProposalRefs"`
-	GuestIdentityEvidence GuestIdentityEvidence `json:"guestIdentityEvidence"`
-	DiskRefs              []OpaqueID            `json:"diskRefs"`
+	SourceEnvironmentRef    OpaqueID              `json:"sourceEnvironmentRef"`
+	DisplayNameHint         string                `json:"displayNameHint"`
+	Runtime                 string                `json:"runtime"`
+	GuestUser               string                `json:"guestUser"`
+	Backend                 string                `json:"backend"`
+	Mode                    ExportMode            `json:"mode"`
+	ImageProvenance         *ImageProvenance      `json:"imageProvenance,omitempty"`
+	ProfileComponentID      OpaqueID              `json:"profileComponentId"`
+	ProfileStateComponentID OpaqueID              `json:"profileStateComponentId,omitempty"`
+	WorkspaceProposals      []WorkspaceProposal   `json:"workspaceProposals"`
+	AuthorityProposalRefs   []OpaqueID            `json:"authorityProposalRefs"`
+	GuestIdentityEvidence   GuestIdentityEvidence `json:"guestIdentityEvidence"`
+	DiskRefs                []OpaqueID            `json:"diskRefs"`
 }
 
 type ImageProvenance struct {
@@ -404,6 +405,8 @@ type ExportEnvironmentEstimate struct {
 	DisplayName                string     `json:"displayName"`
 	PortableConfigLogicalBytes uint64     `json:"portableConfigLogicalBytes"`
 	PortableConfigDigest       Digest     `json:"portableConfigDigest"`
+	ProfileStateLogicalBytes   uint64     `json:"profileStateLogicalBytes,omitempty"`
+	ProfileStateDigest         Digest     `json:"profileStateDigest,omitempty"`
 	DiskRefs                   []OpaqueID `json:"diskRefs"`
 	ReferencedDiskLogicalBytes uint64     `json:"referencedDiskLogicalBytes"`
 	EstimatedLogicalBytes      uint64     `json:"estimatedLogicalBytes"`
@@ -539,14 +542,17 @@ type ConflictAction struct {
 // until materialization; their exact component digest and size are nevertheless
 // part of the confirmed destination plan.
 type EnvironmentAction struct {
-	SourceRef              OpaqueID `json:"sourceRef"`
-	DestinationProfileName string   `json:"destinationProfileName"`
-	Runtime                string   `json:"runtime"`
-	GuestUser              string   `json:"guestUser"`
-	Backend                string   `json:"backend"`
-	ProfileComponentID     OpaqueID `json:"profileComponentId"`
-	ProfileContentDigest   Digest   `json:"profileContentDigest"`
-	ProfileLogicalBytes    uint64   `json:"profileLogicalBytes"`
+	SourceRef                 OpaqueID `json:"sourceRef"`
+	DestinationProfileName    string   `json:"destinationProfileName"`
+	Runtime                   string   `json:"runtime"`
+	GuestUser                 string   `json:"guestUser"`
+	Backend                   string   `json:"backend"`
+	ProfileComponentID        OpaqueID `json:"profileComponentId"`
+	ProfileContentDigest      Digest   `json:"profileContentDigest"`
+	ProfileLogicalBytes       uint64   `json:"profileLogicalBytes"`
+	ProfileStateComponentID   OpaqueID `json:"profileStateComponentId,omitempty"`
+	ProfileStateContentDigest Digest   `json:"profileStateContentDigest,omitempty"`
+	ProfileStateLogicalBytes  uint64   `json:"profileStateLogicalBytes,omitempty"`
 }
 
 // WorkspaceAction is destination authority frozen by an import plan. Source

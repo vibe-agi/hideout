@@ -299,6 +299,17 @@ func validateMigrationEnvironmentActions(
 			action.ProfileLogicalBytes > migration.MaxPortableProfileBytes {
 			return ErrMigrationPlanInvalid
 		}
+		if objects[index].Mode == migration.ExportModeFull {
+			if !migrationValidOperationOpaqueID(action.ProfileStateComponentID) ||
+				action.ProfileStateContentDigest.Validate() != nil ||
+				action.ProfileStateLogicalBytes == 0 ||
+				action.ProfileStateLogicalBytes > migration.HardMaxLogicalBytes {
+				return ErrMigrationPlanInvalid
+			}
+		} else if action.ProfileStateComponentID != "" ||
+			action.ProfileStateContentDigest != "" || action.ProfileStateLogicalBytes != 0 {
+			return ErrMigrationPlanInvalid
+		}
 	}
 	return nil
 }

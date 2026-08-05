@@ -88,10 +88,29 @@ Normalized source facts, never a destination Manager record.
 | `workspace_proposals` | Source guest paths and redacted host-path hints |
 | `authority_proposals` | Disabled host/network/script/pack/endpoint proposals |
 | `guest_identity_evidence` | Facts used to prove policy outcome |
+| `profile_state_component_id` | Full-only bounded application-state ref |
 | `disk_refs` | References into the manifest disk graph |
 
 Source environment, machine, boot, session, and backend instance IDs are not
 eligible destination IDs.
+
+### ProfileApplicationState
+
+One full-mode component per selected environment/profile binding. Its canonical
+archive contains only regular files, directories, and non-escaping relative
+symlinks rooted at `home/`, `config/`, `data/`, or `browser/`. Paths are sorted;
+entry count, metadata, target, chunk, and aggregate logical bytes are bounded.
+Hard links, special files, traversal, source drift, aliases, and generated
+`home/.config`, `home/.cache`, `home/.local/share`, and `home/.gitconfig` paths
+fail closed or are excluded as declared. Cache and machine roots never enter the
+component. The component index binds record range, logical bytes, and content
+digest.
+
+Import materializes the component beneath a deterministic operation/profile/
+component stage owner. Content and owner markers must verify before the stage is
+atomically renamed into the new profile. Destination profile identity and
+generated configuration are then created around the preserved roots; rollback
+may remove only the exact marked stage.
 
 ### DiskObject
 
@@ -261,12 +280,14 @@ refs reachable; it does not overwrite an existing destination secret.
 MigrationBundleHeader 1──1 MigrationManifest
 MigrationManifest     1──* EnvironmentSnapshot
 MigrationManifest     1──* DiskObject
+EnvironmentSnapshot   1──1 ProfileApplicationState (full mode)
 EnvironmentSnapshot   *──* DiskObject       (through disk_edges)
 
 MigrationBundle       1──* ImportDraft      (across destinations)
 ImportDraft           1──1 ImportPlan       (latest validated version only)
 ImportPlan            1──1 ImportOperation
 ImportOperation       1──* ProviderHandle
+ImportOperation       1──* ProfileApplicationStateStage
 ImportOperation       1──* ProvisionalSecret
 ImportOperation       1──* AdoptionReceipt
 ImportOperation       1──1 ActivationCommit (at most one)
@@ -331,23 +352,26 @@ Rules:
 2. Export effects do not write the source environment or its persistent disks.
 3. Every persistent disk edge from a selected full-state environment resolves to
    exactly one captured `DiskObject`.
-4. Destination control-plane and backend identities never equal source identities
-   and are pairwise unique across imports.
-5. `SafeClone` guest identity never equals the source or another Safe Clone result
+4. Every full environment resolves to exactly one authenticated profile-state
+   component; config-only resolves to none. Preserved profile state and the fresh
+   destination profile become visible atomically or neither does.
+5. Destination control-plane, profile, and backend identities never equal source
+   identities and are pairwise unique across imports.
+6. `SafeClone` guest identity never equals the source or another Safe Clone result
    from the same bundle.
-6. `ExactGuestRestore` guest identity equals the source; no cross-host uniqueness
+7. `ExactGuestRestore` guest identity equals the source; no cross-host uniqueness
    guarantee is asserted.
-7. No authority proposal is effective unless its exact destination value was
+8. No authority proposal is effective unless its exact destination value was
    validated, included in the confirmed plan, and explicitly approved.
-8. A plan, identity policy, bundle binding, and effect list cannot change after
+9. A plan, identity policy, bundle binding, and effect list cannot change after
    confirmation.
-9. A destination name/backend object/secret destination has at most one live
+10. A destination name/backend object/secret destination has at most one live
    claim.
-10. No unsealed, tampered, failed, rolling-back, or merely staged object is
+11. No unsealed, tampered, failed, rolling-back, or merely staged object is
     runnable.
-11. Each durable effect and compensation is applied at most once for its operation
+12. Each durable effect and compensation is applied at most once for its operation
     binding.
-12. Secret plaintext is absent from serializable entities, progress, logs, audit,
+13. Secret plaintext is absent from serializable entities, progress, logs, audit,
     errors, and UI snapshots.
 
 ## Retention and cleanup
@@ -356,8 +380,9 @@ Rules:
 - Export partial files and provider snapshots are operation-owned. Completed,
   cancelled, and failed operations report whether they remain and provide an
   explicit recover/remove action.
-- Import staging, provisional secrets, adoption mounts, and temp backend objects
-  are operation-owned and removed after rollback or after their active records no
-  longer need them.
+- Import profile-state staging, provisional secrets, adoption mounts, and temp
+  backend objects are operation-owned and removed after rollback or after their
+  active records no longer need them. Cleanup requires the exact durable owner;
+  a path alone never authorizes recursive removal.
 - Migration operation/audit evidence follows the Manager store lifetime. It holds
   only redacted metadata, never disk content or secret values.

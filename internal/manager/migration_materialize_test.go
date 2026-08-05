@@ -18,6 +18,7 @@ import (
 	"github.com/vibe-agi/hideout/internal/environment"
 	"github.com/vibe-agi/hideout/internal/migration"
 	"github.com/vibe-agi/hideout/internal/profile"
+	"github.com/vibe-agi/hideout/internal/profilestate"
 )
 
 func TestMigrationImportOperationMaterializesThenReplaysWithoutAnotherSecret(t *testing.T) {
@@ -119,6 +120,9 @@ func TestMigrationImportOperationMaterializesThenReplaysWithoutAnotherSecret(t *
 		!reflect.DeepEqual(replayed.DestinationStage.Profiles, operation.DestinationStage.Profiles) {
 		t.Fatalf("replay lost authenticated profile staging: %+v", replayed.DestinationStage)
 	}
+	stagedProfileStates := append(
+		[]MigrationMaterializedProfileState(nil), operation.DestinationStage.ProfileStates...,
+	)
 	rolledBack, err := service.RollbackImportDestination(
 		context.Background(), MigrationImportRollbackRequest{OperationID: operation.ID},
 	)
@@ -133,6 +137,11 @@ func TestMigrationImportOperationMaterializesThenReplaysWithoutAnotherSecret(t *
 		!slices.Equal(provider.rollbackRequest.ObjectHandles, stage.ObjectHandles) {
 		t.Fatalf("rolled back operation=%+v request=%+v", rolledBack, provider.rollbackRequest)
 	}
+	for _, state := range stagedProfileStates {
+		if _, err := os.Lstat(state.StagePath); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("rolled-back profile state remains at %q: %v", state.StagePath, err)
+		}
+	}
 	replayedRollback, err := service.RollbackImportDestination(
 		context.Background(), MigrationImportRollbackRequest{OperationID: operation.ID},
 	)
@@ -145,7 +154,7 @@ func TestMigrationImportOperationMaterializesThenReplaysWithoutAnotherSecret(t *
 func TestMigrationDestinationValidationRejectsDiskStreamOrderMismatch(t *testing.T) {
 	fixture := writeManagerMaterializationBundle(t)
 	manifest := fixture.manifest
-	manifest.ComponentIndex[1].ComponentID = "component_z_root00001"
+	manifest.ComponentIndex[2].ComponentID = "component_z_root00001"
 	attachedDigest := migration.Digest("sha256:" + strings.Repeat("8", 64))
 	attached := migration.DiskObject{
 		DiskID: "disk_attached0001", Role: migration.DiskRoleAttached, Format: "raw",
@@ -170,7 +179,7 @@ func TestMigrationDestinationValidationRejectsDiskStreamOrderMismatch(t *testing
 	}
 	manifest.ComponentIndex = append(manifest.ComponentIndex, migration.ComponentIndexEntry{
 		ComponentID: "component_a_attached01", Kind: "disk", DiskID: "disk_attached0001",
-		LogicalBytes: 1, FirstRecord: 5, LastRecord: 5, RecordCount: 1,
+		LogicalBytes: 1, FirstRecord: 7, LastRecord: 7, RecordCount: 1,
 		ContentDigest: attachedDigest,
 	})
 	if err := manifest.Validate(migration.DefaultLimits()); err != nil {
@@ -387,6 +396,7 @@ func TestMigrationMaterializationStreamsOneImmutableBundleToIndependentDestinati
 	stager := &managerMaterializationStager{}
 	service := MigrationMaterializationService{
 		SecretInputs: secretInputs, Cache: cache, Destination: stager,
+		Profiles: profile.Store{Root: t.TempDir()},
 	}
 
 	for index := 1; index <= 2; index++ {
@@ -403,11 +413,9 @@ func TestMigrationMaterializationStreamsOneImmutableBundleToIndependentDestinati
 			fixture.manifest, index,
 		)
 		materialized, err := service.StageDestinationWithProfiles(
-			context.Background(), MigrationDestinationMaterializeRequest{
-				BundlePath: fixture.path, ExpectedFile: inspection.BundleFile,
-				ExpectedBinding: inspection.Binding, SecretInputHandle: handle.Handle,
-				ClientBinding: client, Destination: destination,
-			},
+			context.Background(), managerMaterializationRequest(
+				fixture, inspection, handle.Handle, client, destination,
+			),
 		)
 		if err != nil {
 			t.Fatal(err)
@@ -422,6 +430,23 @@ func TestMigrationMaterializationStreamsOneImmutableBundleToIndependentDestinati
 			materialized.Profiles[0].ComponentID != fixture.manifest.Environments[0].ProfileComponentID ||
 			!reflect.DeepEqual(materialized.Profiles[0].Snapshot, fixture.profile) {
 			t.Fatalf("destination %d profiles=%+v", index, materialized.Profiles)
+		}
+		if len(materialized.ProfileStates) != 1 ||
+			materialized.ProfileStates[0].ContentDigest != fixture.profileStateDigest ||
+			materialized.ProfileStates[0].LogicalBytes != fixture.profileStateBytes {
+			t.Fatalf("destination %d profile states=%+v", index, materialized.ProfileStates)
+		}
+		state := materialized.ProfileStates[0]
+		if err := profilestate.VerifyStage(
+			state.StagePath, state.Owner(materialized.OperationID),
+		); err != nil {
+			t.Fatal(err)
+		}
+		content, err := os.ReadFile(filepath.Join(
+			state.StagePath, "home", ".claude", "history.jsonl",
+		))
+		if err != nil || string(content) != fixture.profileStateContent {
+			t.Fatalf("destination %d profile content=%q err=%v", index, content, err)
 		}
 		if _, err := secretInputs.Lookup(MigrationSecretInputLookup{
 			Handle: handle.Handle, Purpose: MigrationSecretPurposeImport,
@@ -464,6 +489,7 @@ func TestMigrationMaterializationFailsBeforeProviderForWrongKeyAndManifestSubsti
 	stager := &managerMaterializationStager{}
 	service := MigrationMaterializationService{
 		SecretInputs: secretInputs, Cache: cache, Destination: stager,
+		Profiles: profile.Store{Root: t.TempDir()},
 	}
 
 	wrong, err := secretInputs.Create(MigrationSecretInputRequest{
@@ -474,13 +500,11 @@ func TestMigrationMaterializationFailsBeforeProviderForWrongKeyAndManifestSubsti
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := service.StageDestination(
-		context.Background(), MigrationDestinationMaterializeRequest{
-			BundlePath: fixture.path, ExpectedFile: inspection.BundleFile,
-			ExpectedBinding: inspection.Binding, SecretInputHandle: wrong.Handle,
-			ClientBinding: "wrong-key-client",
-			Destination:   managerMaterializationDestinationRequest(fixture.manifest, 1),
-		},
+	wrongDestination := managerMaterializationDestinationRequest(fixture.manifest, 1)
+	if _, err := service.StageDestinationWithProfiles(
+		context.Background(), managerMaterializationRequest(
+			fixture, inspection, wrong.Handle, "wrong-key-client", wrongDestination,
+		),
 	); !errors.Is(err, migration.ErrAuthenticationFailed) {
 		t.Fatalf("wrong-key materialization error=%v", err)
 	}
@@ -498,12 +522,10 @@ func TestMigrationMaterializationFailsBeforeProviderForWrongKeyAndManifestSubsti
 	}
 	destination := managerMaterializationDestinationRequest(fixture.manifest, 1)
 	destination.Objects[0].GuestUser = "substituted"
-	if _, err := service.StageDestination(
-		context.Background(), MigrationDestinationMaterializeRequest{
-			BundlePath: fixture.path, ExpectedFile: inspection.BundleFile,
-			ExpectedBinding: inspection.Binding, SecretInputHandle: substituted.Handle,
-			ClientBinding: "substitution-client", Destination: destination,
-		},
+	if _, err := service.StageDestinationWithProfiles(
+		context.Background(), managerMaterializationRequest(
+			fixture, inspection, substituted.Handle, "substitution-client", destination,
+		),
 	); !errors.Is(err, ErrMigrationPlanInvalid) {
 		t.Fatalf("guest-user substitution error=%v", err)
 	}
@@ -544,14 +566,13 @@ func TestMigrationMaterializationRejectsProviderCursorAndReceiptSubstitution(t *
 			}
 			stager := &managerMaterializationStager{}
 			mutate(stager)
+			destination := managerMaterializationDestinationRequest(fixture.manifest, 1)
 			_, err = (MigrationMaterializationService{
 				SecretInputs: secretInputs, Cache: cache, Destination: stager,
-			}).StageDestination(context.Background(), MigrationDestinationMaterializeRequest{
-				BundlePath: fixture.path, ExpectedFile: inspection.BundleFile,
-				ExpectedBinding: inspection.Binding, SecretInputHandle: handle.Handle,
-				ClientBinding: "cursor-client",
-				Destination:   managerMaterializationDestinationRequest(fixture.manifest, 1),
-			})
+				Profiles: profile.Store{Root: t.TempDir()},
+			}).StageDestinationWithProfiles(context.Background(), managerMaterializationRequest(
+				fixture, inspection, handle.Handle, "cursor-client", destination,
+			))
 			if err == nil {
 				t.Fatal("provider substitution unexpectedly succeeded")
 			}
@@ -559,11 +580,32 @@ func TestMigrationMaterializationRejectsProviderCursorAndReceiptSubstitution(t *
 	}
 }
 
+func TestMigrationProfileStateEncryptedBundleContainsNoApplicationPlaintext(t *testing.T) {
+	fixture := writeManagerMaterializationBundle(t)
+	bundle, err := os.ReadFile(fixture.path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, plaintext := range []string{
+		fixture.profileStateContent,
+		"theme=dark\n",
+		"durable-data\n",
+		"authenticated-browser-state\n",
+	} {
+		if bytes.Contains(bundle, []byte(plaintext)) {
+			t.Fatalf("encrypted migration bundle exposed profile application plaintext %q", plaintext)
+		}
+	}
+}
+
 type managerMaterializationFixture struct {
-	path       string
-	manifest   migration.Manifest
-	diskDigest migration.Digest
-	profile    migration.PortableProfile
+	path                string
+	manifest            migration.Manifest
+	diskDigest          migration.Digest
+	profileStateDigest  migration.Digest
+	profileStateBytes   uint64
+	profileStateContent string
+	profile             migration.PortableProfile
 }
 
 const managerMaterializationPassphrase = "manager materialization passphrase"
@@ -597,16 +639,45 @@ func writeManagerMaterializationBundle(t *testing.T) managerMaterializationFixtu
 		_ = file.Close()
 		t.Fatal(err)
 	}
+	profileState, profileStateContent := managerMaterializationProfileState(t)
+	var profileStateArchive bytes.Buffer
+	if err := profileState.Write(context.Background(), 64<<10, func(chunk []byte) error {
+		_, writeErr := profileStateArchive.Write(chunk)
+		return writeErr
+	}); err != nil {
+		_ = writer.Close()
+		_ = file.Close()
+		t.Fatal(err)
+	}
 	first := bytes.Repeat([]byte{0x31}, 1024)
 	last := bytes.Repeat([]byte{0x72}, 1024)
-	records := []migration.RecordInput{
+	for _, record := range []migration.RecordInput{
 		{Type: migration.RecordMetadata, ComponentID: "component_profile0001", Plaintext: profileBytes},
+		{Type: migration.RecordRawChunk, ComponentID: "component_state00001", Plaintext: profileStateArchive.Bytes()},
+	} {
+		if _, err := writer.Append(record); err != nil {
+			_ = writer.Close()
+			_ = file.Close()
+			t.Fatal(err)
+		}
+	}
+	if _, _, err := writer.AppendCheckpoint(migration.CheckpointInput{
+		OperationID: "op_materializefixture1",
+		CompletedComponents: []migration.OpaqueID{
+			"component_profile0001", "component_state00001",
+		},
+		CurrentComponent: "component_state00001",
+	}); err != nil {
+		_ = writer.Close()
+		_ = file.Close()
+		t.Fatal(err)
+	}
+	for _, record := range []migration.RecordInput{
 		{Type: migration.RecordRawChunk, ComponentID: "component_root00001", Ordinal: 0, LogicalOffset: 0, Plaintext: first},
 		{Type: migration.RecordZeroExtent, ComponentID: "component_root00001", Ordinal: 1, LogicalOffset: 1024, ExtentLength: 512},
 		{Type: migration.RecordHoleExtent, ComponentID: "component_root00001", Ordinal: 2, LogicalOffset: 1536, ExtentLength: 512},
 		{Type: migration.RecordDataChunk, ComponentID: "component_root00001", Ordinal: 3, LogicalOffset: 2048, Plaintext: last},
-	}
-	for _, record := range records {
+	} {
 		if _, err := writer.Append(record); err != nil {
 			_ = writer.Close()
 			_ = file.Close()
@@ -629,9 +700,10 @@ func writeManagerMaterializationBundle(t *testing.T) managerMaterializationFixtu
 				Reference: "https://example.invalid/runtime.qcow2",
 				Digest:    migration.Digest("sha256:" + strings.Repeat("a", 64)),
 			},
-			ProfileComponentID:    "component_profile0001",
-			WorkspaceProposals:    []migration.WorkspaceProposal{},
-			AuthorityProposalRefs: []migration.OpaqueID{},
+			ProfileComponentID:      "component_profile0001",
+			ProfileStateComponentID: "component_state00001",
+			WorkspaceProposals:      []migration.WorkspaceProposal{},
+			AuthorityProposalRefs:   []migration.OpaqueID{},
 			GuestIdentityEvidence: migration.GuestIdentityEvidence{
 				MachineIDDigest: migration.Digest("sha256:" + strings.Repeat("6", 64)),
 				SSHHostKeyDigests: []migration.Digest{
@@ -659,8 +731,13 @@ func writeManagerMaterializationBundle(t *testing.T) managerMaterializationFixtu
 				RecordCount: 1, ContentDigest: managerMaterializationBytesDigest(profileBytes),
 			},
 			{
+				ComponentID: "component_state00001", Kind: "profile-state",
+				LogicalBytes: profileState.LogicalBytes(), FirstRecord: 1, LastRecord: 2,
+				RecordCount: 2, ContentDigest: migration.Digest(profileState.Digest()),
+			},
+			{
 				ComponentID: "component_root00001", Kind: "disk", DiskID: "disk_root0001",
-				LogicalBytes: 3072, FirstRecord: 1, LastRecord: 4, RecordCount: 4,
+				LogicalBytes: 3072, FirstRecord: 3, LastRecord: 6, RecordCount: 4,
 				ContentDigest: diskDigest,
 			},
 		},
@@ -688,8 +765,58 @@ func writeManagerMaterializationBundle(t *testing.T) managerMaterializationFixtu
 		t.Fatal(err)
 	}
 	return managerMaterializationFixture{
-		path: path, manifest: manifest, diskDigest: diskDigest, profile: portableProfile,
+		path: path, manifest: manifest, diskDigest: diskDigest,
+		profileStateDigest: migration.Digest(profileState.Digest()),
+		profileStateBytes:  profileState.LogicalBytes(), profileStateContent: profileStateContent,
+		profile: portableProfile,
 	}
+}
+
+func managerMaterializationProfileState(t *testing.T) (profilestate.Snapshot, string) {
+	t.Helper()
+	root := filepath.Join(t.TempDir(), "source-profile")
+	if err := os.Mkdir(root, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range profilestate.IncludedRoots() {
+		if err := os.Mkdir(filepath.Join(root, name), 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	content := "claude-session-survives-full-migration\n"
+	stateDir := filepath.Join(root, "home", ".claude")
+	if err := os.Mkdir(stateDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	// The source profile has already passed normal profile materialization.
+	// .local itself is application-visible; only its generated share link is
+	// excluded from the portable state archive.
+	if err := os.Mkdir(filepath.Join(root, "home", ".local"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(stateDir, "history.jsonl"), []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(
+		filepath.Join(root, "home", ".gitconfig"),
+		[]byte("SOURCE-IDENTITY-MUST-NOT-SURVIVE\n"), 0o600,
+	); err != nil {
+		t.Fatal(err)
+	}
+	for relative, value := range map[string]string{
+		"config/tool.conf": "theme=dark\n",
+		"data/index.db":    "durable-data\n",
+		"browser/cookies":  "authenticated-browser-state\n",
+	} {
+		if err := os.WriteFile(filepath.Join(root, relative), []byte(value), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	snapshot, err := profilestate.Capture(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return snapshot, content
 }
 
 func inspectManagerMaterializationBundle(
@@ -721,6 +848,43 @@ func inspectManagerMaterializationBundle(
 		t.Fatal(err)
 	}
 	return inspection
+}
+
+func managerMaterializationRequest(
+	fixture managerMaterializationFixture,
+	inspection MigrationReadOnlyInspection,
+	handle string,
+	client string,
+	destination backend.DestinationStageRequest,
+) MigrationDestinationMaterializeRequest {
+	var profileComponent, stateComponent migration.ComponentIndexEntry
+	for _, component := range fixture.manifest.ComponentIndex {
+		switch component.Kind {
+		case "profile":
+			profileComponent = component
+		case "profile-state":
+			stateComponent = component
+		}
+	}
+	environment := fixture.manifest.Environments[0]
+	return MigrationDestinationMaterializeRequest{
+		BundlePath: fixture.path, ExpectedFile: inspection.BundleFile,
+		ExpectedBinding: inspection.Binding, SecretInputHandle: handle,
+		ClientBinding: client, Destination: destination,
+		OperationID: string(destination.Binding.OperationID),
+		EnvironmentActions: []migration.EnvironmentAction{{
+			SourceRef:              environment.SourceEnvironmentRef,
+			DestinationProfileName: "materialized-clone",
+			Runtime:                environment.Runtime, GuestUser: environment.GuestUser,
+			Backend:                   environment.Backend,
+			ProfileComponentID:        profileComponent.ComponentID,
+			ProfileContentDigest:      profileComponent.ContentDigest,
+			ProfileLogicalBytes:       profileComponent.LogicalBytes,
+			ProfileStateComponentID:   stateComponent.ComponentID,
+			ProfileStateContentDigest: stateComponent.ContentDigest,
+			ProfileStateLogicalBytes:  stateComponent.LogicalBytes,
+		}},
+	}
 }
 
 func managerMaterializationDestinationRequest(

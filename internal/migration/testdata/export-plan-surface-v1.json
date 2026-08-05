@@ -1,12 +1,17 @@
 {
   "schema": "hideout.migration-export-plan/v1",
   "planId": "migplan_surfaceparity001",
-  "planDigest": "sha256:e3bf1110022d2ad2e120dcd5e40097646024e251634b41227effe8af043a29e0",
+  "planDigest": "sha256:2cf2b90cff077d3aeec71e1e1eccfd7c15ce3bdf70126f331ee7d9cd911ded22",
   "baseRevisions": [
     {
       "resource": "environment:environment_source1",
       "revision": 1,
       "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    {
+      "resource": "profile-state:environment_source1",
+      "revision": 1,
+      "digest": "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
     }
   ],
   "mode": "full",
@@ -20,7 +25,8 @@
   "includedClasses": [
     "environment-declarations",
     "persistent-disks",
-    "portable-profiles"
+    "portable-profiles",
+    "profile-application-state"
   ],
   "excludedClasses": [
     "host-workspace-content",
@@ -32,11 +38,13 @@
       "displayName": "dev",
       "portableConfigLogicalBytes": 1024,
       "portableConfigDigest": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      "profileStateLogicalBytes": 512,
+      "profileStateDigest": "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
       "diskRefs": [
         "disk_root0000001"
       ],
       "referencedDiskLogicalBytes": 8192,
-      "estimatedLogicalBytes": 9216
+      "estimatedLogicalBytes": 9728
     }
   ],
   "diskEstimates": [
@@ -50,7 +58,7 @@
       ]
     }
   ],
-  "estimatedPayloadLogicalBytes": 9216,
+  "estimatedPayloadLogicalBytes": 9728,
   "estimatedPayloadComplete": true,
   "outputPath": "/tmp/surface-parity.hideout-migration",
   "providerCapabilityRevision": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",

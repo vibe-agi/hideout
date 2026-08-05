@@ -70,6 +70,7 @@ type MigrationBundleAuthorityProjection struct {
 
 type MigrationBundleComponentCounts struct {
 	Profiles         uint32 `json:"profiles"`
+	ProfileStates    uint32 `json:"profileStates"`
 	Environments     uint32 `json:"environments"`
 	Disks            uint32 `json:"disks"`
 	SecretValues     uint32 `json:"secretValues"`
@@ -182,6 +183,8 @@ func ProjectMigrationBundleInspection(
 		switch component.Kind {
 		case "profile":
 			projection.Components.Profiles++
+		case "profile-state":
+			projection.Components.ProfileStates++
 		case "environment":
 			projection.Components.Environments++
 		case "disk":
@@ -224,6 +227,15 @@ func validateSealedBundleInspection(inspection migration.SealedBundleInspection)
 		}
 		logical += disk.LogicalBytes
 	}
+	for _, component := range inspection.Manifest.ComponentIndex {
+		if component.Kind != "profile-state" {
+			continue
+		}
+		if component.LogicalBytes > ^uint64(0)-logical {
+			return ErrMigrationPlanInvalid
+		}
+		logical += component.LogicalBytes
+	}
 	if logical != inspection.Summary.LogicalBytes {
 		return ErrMigrationPlanInvalid
 	}
@@ -237,8 +249,8 @@ func migrationInspectionWarnings(manifest migration.Manifest) []migration.PlanNo
 			continue
 		}
 		warnings = append(warnings, migration.PlanNotice{
-			Code:        "migration.bundle.guest_disk_may_contain_secrets",
-			Summary:     "A full guest disk can contain application-managed credentials that Hideout cannot enumerate.",
+			Code:        "migration.bundle.full_state_may_contain_secrets",
+			Summary:     "A full guest disk and profile application state can contain credentials that Hideout cannot enumerate.",
 			Remediation: "Review the source guest before importing it onto another computer.",
 		})
 		break

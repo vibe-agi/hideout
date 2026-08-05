@@ -30,8 +30,9 @@ JSON.stringify(view);
 		Included             []string `json:"included"`
 		PayloadEstimate      string   `json:"payloadEstimate"`
 		EnvironmentEstimates []struct {
-			EnvironmentRef string `json:"environmentRef"`
-			DisplayName    string `json:"displayName"`
+			EnvironmentRef           string `json:"environmentRef"`
+			DisplayName              string `json:"displayName"`
+			ProfileStateLogicalBytes uint64 `json:"profileStateLogicalBytes"`
 		} `json:"environmentEstimates"`
 		DiskEstimates []struct {
 			DiskRef   string   `json:"diskRef"`
@@ -41,10 +42,11 @@ JSON.stringify(view);
 	if err := json.Unmarshal([]byte(value.String()), &view); err != nil {
 		t.Fatal(err)
 	}
-	if len(view.Included) != 3 || view.PayloadEstimate != "9.0 KiB (complete logical payload)" ||
+	if len(view.Included) != 4 || view.PayloadEstimate != "9.5 KiB (complete logical payload)" ||
 		len(view.EnvironmentEstimates) != 1 ||
 		view.EnvironmentEstimates[0].EnvironmentRef != "environment_source1" ||
 		view.EnvironmentEstimates[0].DisplayName != "dev" ||
+		view.EnvironmentEstimates[0].ProfileStateLogicalBytes != 512 ||
 		len(view.DiskEstimates) != 1 || view.DiskEstimates[0].DiskRef != "disk_root0000001" ||
 		len(view.DiskEstimates[0].Consumers) != 1 ||
 		view.DiskEstimates[0].Consumers[0] != "environment_source1" {
@@ -66,20 +68,21 @@ const plan = {
   selectedSecretRefs:["local-proxy"],
   includedClasses:[
     "environment-declarations","persistent-disks","portable-profiles",
-    "selected-secret-values"
+    "profile-application-state","selected-secret-values"
   ],
   excludedClasses:["host-workspace-content"],
   environmentEstimates:[{
     environmentRef:"environment_source1",displayName:"dev",
     portableConfigLogicalBytes:1024,portableConfigDigest:"sha256:"+"b".repeat(64),
+    profileStateLogicalBytes:512,profileStateDigest:"sha256:"+"c".repeat(64),
     diskRefs:["disk_root0000001"],referencedDiskLogicalBytes:8192,
-    estimatedLogicalBytes:9216
+    estimatedLogicalBytes:9728
   }],
   diskEstimates:[{
     diskRef:"disk_root0000001",role:"root",logicalBytes:8192,
     allocatedBytesHint:4096,consumers:["environment_source1"]
   }],
-  estimatedPayloadLogicalBytes:9216,estimatedPayloadComplete:false,
+  estimatedPayloadLogicalBytes:9728,estimatedPayloadComplete:false,
   effects:[],riskAcknowledgements:[],warnings:[],confirmationText:"Review."
 };
 const view = migration.exportPlanView(plan);
@@ -89,7 +92,16 @@ try {
   delete invalid.environmentEstimates;
   migration.exportPlanView(invalid);
 } catch (_) { rejectedMissingInventory = true; }
-JSON.stringify({view,rejectedMissingInventory});
+let rejectedMissingState = false;
+try {
+  const invalid = JSON.parse(JSON.stringify(plan));
+  delete invalid.environmentEstimates[0].profileStateLogicalBytes;
+  delete invalid.environmentEstimates[0].profileStateDigest;
+  invalid.environmentEstimates[0].estimatedLogicalBytes -= 512;
+  invalid.estimatedPayloadLogicalBytes -= 512;
+  migration.exportPlanView(invalid);
+} catch (_) { rejectedMissingState = true; }
+JSON.stringify({view,rejectedMissingInventory,rejectedMissingState});
 `)
 	if err != nil {
 		t.Fatalf("run browser export inventory: %v", err)
@@ -109,16 +121,18 @@ JSON.stringify({view,rejectedMissingInventory});
 			} `json:"diskEstimates"`
 		} `json:"view"`
 		RejectedMissingInventory bool `json:"rejectedMissingInventory"`
+		RejectedMissingState     bool `json:"rejectedMissingState"`
 	}
 	if err := json.Unmarshal([]byte(value.String()), &proof); err != nil {
 		t.Fatal(err)
 	}
-	if !proof.RejectedMissingInventory || len(proof.View.Included) != 4 ||
+	if !proof.RejectedMissingInventory || !proof.RejectedMissingState ||
+		len(proof.View.Included) != 5 ||
 		!strings.Contains(proof.View.PayloadEstimate, "minimum") ||
 		!strings.Contains(proof.View.PayloadEstimate, "secret value sizes hidden") ||
 		len(proof.View.EnvironmentEstimates) != 1 ||
 		proof.View.EnvironmentEstimates[0].DisplayName != "dev" ||
-		proof.View.EnvironmentEstimates[0].EstimatedLogical != 9216 ||
+		proof.View.EnvironmentEstimates[0].EstimatedLogical != 9728 ||
 		len(proof.View.EnvironmentEstimates[0].DiskRefs) != 1 ||
 		len(proof.View.DiskEstimates) != 1 ||
 		proof.View.DiskEstimates[0].Role != "root" {

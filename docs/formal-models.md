@@ -46,7 +46,7 @@ each has an explicit Manager plan mapping and behavioral parity tests.
 | `AttachReservation` | The attach-establishment reservation excludes reconciliation without the rejected lock cycle; reconcile scrubs only provably orphaned residue, cancellation removes only the run's own state, and daemon-crash residue stays scrubbable. |
 | `DisposableRecovery` | Disposable owner cleanup binds an exact lifecycle generation and cannot remove retained evidence before backend absence and metadata cleanup are proved. |
 | `MigrationBundle` | A stopped source is claimed only until an independent snapshot exists; authenticated checkpoints survive crash, unverified tails are discarded, only a complete footer publishes, cancellation never publishes, an explicitly retained partial remains non-importable until separately removed, tampering blocks import, and export never changes source content. |
-| `MigrationAdoption` | One immutable bundle may feed several destination operations; name claims remain exclusive; conflicts default to refusal; rename preserves the existing owner; replacement requires a separate confirmation and destructive effect followed by a fresh import plan; staged objects never run; control/backend IDs are fresh; Safe Clone guest IDs are pairwise fresh; Exact Guest Restore preserves identity without a uniqueness claim; and imported authority stays disabled without approval. |
+| `MigrationAdoption` | One immutable bundle may feed several destination operations; name claims remain exclusive; conflicts default to refusal; rename preserves the existing owner; replacement requires a separate confirmation and destructive effect followed by a fresh import plan; backend and profile application state are stage-owned and become visible only together at activation; staged objects never run; control/backend IDs are fresh; Safe Clone guest IDs are pairwise fresh; Exact Guest Restore preserves identity without a uniqueness claim; and imported authority stays disabled without approval. |
 | `OperatorConfiguration` | Multiple clients share CAS revisions, canonical operation identity, leases, crash recovery, rollback evidence, and fail-closed terminal publication. |
 | `SecretTransition` | Live secret rotation proves route stage/probe/activate/prove/drain before the provider generation changes; daemon authority reset closes connections, exact committed or unchanged generations reconcile without replay, and mismatches remain recovery-required. |
 | `WorkloadObservation` / `WorkloadObservationLiveness` | The full boundary proves owner isolation, known loss, retention truncation, coverage degradation, exact cleanup, and observer tail-drain safety. A second configuration checks the same combined state machine's weak-fair transition/progress properties without multiplying the full safety graph. |
@@ -77,7 +77,9 @@ They deliberately put identity transformation on each import rather than in
 the reusable export. The adoption model checks Safe Clone uniqueness across
 destinations but does not assert uniqueness for Exact Guest Restore: without a
 cross-computer coordinator, source retirement is an operator statement rather
-than a fact Hideout can prove. Pure production-shaped Go transitions now refine
+than a fact Hideout can prove. It also tracks profile application-state staging
+and visibility independently, requiring exact stage ownership and atomic
+visibility with the destination profile/environment. Pure production-shaped Go transitions now refine
 the export, crash/resume, cancellation, multi-destination identity, authority,
 conflict, and rollback traces. The Lima snapshot, staging, adoption, verification,
 and cleanup effects are implemented, but TLC does not prove those provider calls;

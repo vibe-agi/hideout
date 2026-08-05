@@ -420,7 +420,8 @@
   /** @param {Object} plan */
   function exportPlanView(plan) {
     validatePlan(plan, EXPORT_PLAN_SCHEMA);
-    if (!Array.isArray(plan.environmentRefs) ||
+    if (!["config", "full"].includes(plan.mode) ||
+        !Array.isArray(plan.environmentRefs) ||
         !Array.isArray(plan.diskRefs) ||
         !Array.isArray(plan.selectedSecretRefs) ||
         !Array.isArray(plan.includedClasses) ||
@@ -440,11 +441,19 @@
           !Number.isSafeInteger(value.portableConfigLogicalBytes) ||
           value.portableConfigLogicalBytes <= 0 ||
           !DIGEST_PATTERN.test(value.portableConfigDigest || "") ||
+          !nonnegativeInteger(value.profileStateLogicalBytes || 0) ||
           !Array.isArray(value.diskRefs) ||
-          !Number.isSafeInteger(value.referencedDiskLogicalBytes) ||
+          !nonnegativeInteger(value.referencedDiskLogicalBytes) ||
           !Number.isSafeInteger(value.estimatedLogicalBytes) ||
           value.estimatedLogicalBytes <= 0) {
         throw new Error("migration export environment estimate is invalid");
+      }
+      const stateBytes = value.profileStateLogicalBytes || 0;
+      if ((plan.mode === "full" &&
+           (stateBytes <= 0 || !DIGEST_PATTERN.test(value.profileStateDigest || ""))) ||
+          (plan.mode === "config" &&
+           (stateBytes !== 0 || cleanText(value.profileStateDigest || "")))) {
+        throw new Error("migration export profile state estimate is invalid");
       }
     });
     plan.diskEstimates.forEach((value, index) => {
@@ -456,6 +465,29 @@
         throw new Error("migration export disk estimate is invalid");
       }
     });
+    let aggregate = 0;
+    plan.environmentEstimates.forEach((value) => {
+      let referenced = 0;
+      value.diskRefs.forEach((diskRef) => {
+        const diskIndex = plan.diskRefs.indexOf(diskRef);
+        if (diskIndex < 0) {
+          throw new Error("migration export disk reference is invalid");
+        }
+        referenced += plan.diskEstimates[diskIndex].logicalBytes;
+      });
+      const expected = value.portableConfigLogicalBytes +
+        (value.profileStateLogicalBytes || 0) + referenced;
+      if (!Number.isSafeInteger(referenced) ||
+          value.referencedDiskLogicalBytes !== referenced ||
+          value.estimatedLogicalBytes !== expected) {
+        throw new Error("migration export environment total is invalid");
+      }
+      aggregate += value.portableConfigLogicalBytes + (value.profileStateLogicalBytes || 0);
+    });
+    plan.diskEstimates.forEach((value) => { aggregate += value.logicalBytes; });
+    if (!Number.isSafeInteger(aggregate) || aggregate !== plan.estimatedPayloadLogicalBytes) {
+      throw new Error("migration export payload total is invalid");
+    }
     return {
       kind: "export", id: plan.planId, digest: plan.planDigest,
       mode: plan.mode, outputPath: plan.outputPath,

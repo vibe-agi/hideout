@@ -106,14 +106,23 @@ func TestInspectSealedBundleRejectsHostileManifestClosureAndRecordBindings(t *te
 			manifest.DiskEdges = nil
 		},
 		"record-range": func(manifest *Manifest) {
-			manifest.ComponentIndex[1].FirstRecord++
-			manifest.ComponentIndex[1].LastRecord++
+			manifest.ComponentIndex[2].FirstRecord++
+			manifest.ComponentIndex[2].LastRecord++
 		},
 		"record-component-substitution": func(manifest *Manifest) {
 			manifest.ComponentIndex[0].ComponentID = "component_profile9999"
 			manifest.Environments[0].ProfileComponentID = "component_profile9999"
 		},
 		"disk-digest-substitution": func(manifest *Manifest) {
+			manifest.ComponentIndex[2].ContentDigest = digestForTest("f")
+		},
+		"missing-profile-state": func(manifest *Manifest) {
+			manifest.Environments[0].ProfileStateComponentID = ""
+		},
+		"profile-state-substitution": func(manifest *Manifest) {
+			manifest.Environments[0].ProfileStateComponentID = "component_state9999"
+		},
+		"profile-state-digest": func(manifest *Manifest) {
 			manifest.ComponentIndex[1].ContentDigest = digestForTest("f")
 		},
 		"duplicate-secret": func(manifest *Manifest) {
@@ -187,6 +196,7 @@ func sealedInspectionManifestFixture(
 ) (Manifest, []RecordInput) {
 	t.Helper()
 	profile := []byte(`{"schema":"fixture.profile/v1","value":"fixture profile payload"}`)
+	profileState := []byte("HIDPST01 fixture encrypted profile application state")
 	diskBytes := bytes.Repeat([]byte("disk"), 1024)
 	secret := []byte("super-secret-selected-value")
 	digester, err := NewLogicalDigester(uint64(len(diskBytes)))
@@ -204,6 +214,7 @@ func sealedInspectionManifestFixture(
 	}
 	records := []RecordInput{
 		{Type: RecordMetadata, ComponentID: "component_profile0001", Plaintext: profile},
+		{Type: RecordRawChunk, ComponentID: "component_state00001", Plaintext: profileState},
 		{Type: RecordRawChunk, ComponentID: "component_disk000001", Plaintext: diskBytes},
 		{Type: RecordSecretValue, ComponentID: "component_secret0001", Plaintext: secret},
 	}
@@ -216,7 +227,8 @@ func sealedInspectionManifestFixture(
 		Environments: []EnvironmentSnapshot{{
 			SourceEnvironmentRef: "environment_source1", DisplayNameHint: "dev",
 			Runtime: "linux", GuestUser: "developer", Backend: "lima", Mode: ExportModeFull,
-			ProfileComponentID: "component_profile0001",
+			ProfileComponentID:      "component_profile0001",
+			ProfileStateComponentID: "component_state00001",
 			WorkspaceProposals: []WorkspaceProposal{{
 				ProposalID: "workspace_source01", GuestPath: "/workspace",
 				HostPathHint: "[destination path required]", State: "disabled",
@@ -257,13 +269,18 @@ func sealedInspectionManifestFixture(
 				RecordCount: 1, ContentDigest: digestBytes(profile),
 			},
 			{
+				ComponentID: "component_state00001", Kind: "profile-state",
+				LogicalBytes: uint64(len(profileState)), FirstRecord: 1, LastRecord: 1,
+				RecordCount: 1, ContentDigest: digestBytes(profileState),
+			},
+			{
 				ComponentID: "component_disk000001", Kind: "disk", DiskID: "disk_root0001",
-				LogicalBytes: uint64(len(diskBytes)), FirstRecord: 1, LastRecord: 1,
+				LogicalBytes: uint64(len(diskBytes)), FirstRecord: 2, LastRecord: 2,
 				RecordCount: 1, ContentDigest: diskDigest,
 			},
 			{
 				ComponentID: "component_secret0001", Kind: "secret-value",
-				LogicalBytes: uint64(len(secret)), FirstRecord: 2, LastRecord: 2,
+				LogicalBytes: uint64(len(secret)), FirstRecord: 3, LastRecord: 3,
 				RecordCount: 1, ContentDigest: digestBytes(secret),
 			},
 		},

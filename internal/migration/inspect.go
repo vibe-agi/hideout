@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"errors"
 	"fmt"
+	"hash"
 	"io"
 )
 
@@ -38,6 +39,7 @@ type inspectedComponentRecords struct {
 	count        uint64
 	logicalBytes uint64
 	types        uint16
+	contentHash  hash.Hash
 }
 
 // InspectPublicBundle performs bounded parsing without deriving a key or
@@ -189,7 +191,7 @@ func InspectSealedBundle(
 	}
 	defer reader.Close()
 
-	components := make(map[OpaqueID]inspectedComponentRecords)
+	components := make(map[OpaqueID]*inspectedComponentRecords)
 	var completionDigest Digest
 	for {
 		if err := ctx.Err(); err != nil {
@@ -219,6 +221,9 @@ func InspectSealedBundle(
 		if record.Header.Type != RecordFinalManifest &&
 			record.Header.Type != RecordCompletion {
 			facts := components[record.Header.ComponentID]
+			if facts == nil {
+				facts = &inspectedComponentRecords{}
+			}
 			if facts.count == 0 {
 				facts.first = record.Sequence
 			}
@@ -230,6 +235,12 @@ func InspectSealedBundle(
 					return SealedBundleInspection{}, corruptManifest("component logical size overflowed")
 				}
 				facts.logicalBytes += record.Header.PlaintextLength
+				if record.Header.Type == RecordRawChunk {
+					if facts.contentHash == nil {
+						facts.contentHash = sha256.New()
+					}
+					_, _ = facts.contentHash.Write(record.Plaintext)
+				}
 			}
 			facts.types |= uint16(1) << uint16(record.Header.Type-1)
 			components[record.Header.ComponentID] = facts
@@ -318,7 +329,7 @@ func VerifySealedBundleFile(
 
 func validateManifestRecordIndex(
 	manifest Manifest,
-	observed map[OpaqueID]inspectedComponentRecords,
+	observed map[OpaqueID]*inspectedComponentRecords,
 	manifestSequence uint64,
 	observedLogicalBytes uint64,
 ) error {
@@ -326,23 +337,28 @@ func validateManifestRecordIndex(
 		return corruptManifest("component record set does not match its index")
 	}
 	var indexedRecords uint64
-	var indexedDiskBytes uint64
+	var indexedLogicalBytes uint64
 	for _, entry := range manifest.ComponentIndex {
 		facts, exists := observed[entry.ComponentID]
-		if !exists || facts.first != entry.FirstRecord || facts.last != entry.LastRecord ||
+		if !exists || facts == nil || facts.first != entry.FirstRecord || facts.last != entry.LastRecord ||
 			facts.count != entry.RecordCount || facts.logicalBytes != entry.LogicalBytes ||
 			!validManifestComponentRecordTypes(entry.Kind, facts.types) {
 			return corruptManifest("component record range does not match its index")
 		}
 		indexedRecords += entry.RecordCount
-		if entry.Kind == "disk" {
-			if entry.LogicalBytes > mathRemaining(indexedDiskBytes) {
-				return corruptManifest("indexed disk size overflowed")
+		if entry.Kind == "profile-state" {
+			if facts.contentHash == nil || bytesToDigest(facts.contentHash.Sum(nil)) != entry.ContentDigest {
+				return corruptManifest("profile state content digest does not match its index")
 			}
-			indexedDiskBytes += entry.LogicalBytes
+		}
+		if entry.Kind == "disk" || entry.Kind == "profile-state" {
+			if entry.LogicalBytes > mathRemaining(indexedLogicalBytes) {
+				return corruptManifest("indexed logical size overflowed")
+			}
+			indexedLogicalBytes += entry.LogicalBytes
 		}
 	}
-	if indexedRecords != manifestSequence || indexedDiskBytes != observedLogicalBytes {
+	if indexedRecords != manifestSequence || indexedLogicalBytes != observedLogicalBytes {
 		return corruptManifest("manifest aggregate record binding is invalid")
 	}
 	return nil
@@ -358,6 +374,9 @@ func validManifestComponentRecordTypes(kind string, mask uint16) bool {
 			recordTypeMask(RecordDataChunk) | recordTypeMask(RecordRawChunk) |
 			recordTypeMask(RecordZeroExtent) | recordTypeMask(RecordHoleExtent)
 		required = permitted &^ checkpoint
+	case "profile-state":
+		permitted = checkpoint | recordTypeMask(RecordRawChunk)
+		required = recordTypeMask(RecordRawChunk)
 	case "secret-value":
 		permitted = checkpoint | recordTypeMask(RecordSecretValue)
 		required = recordTypeMask(RecordSecretValue)

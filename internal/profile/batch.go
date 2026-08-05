@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/vibe-agi/hideout/internal/environment"
+	"github.com/vibe-agi/hideout/internal/profilestate"
 	"golang.org/x/sys/unix"
 )
 
@@ -38,18 +39,31 @@ var (
 // strict destination metadata deterministically derived by an import operation.
 // Source lineage/identity metadata is never accepted.
 type EnvironmentBatchParticipant struct {
-	Store    Store
-	Profiles []Profile
+	Store          Store
+	Profiles       []Profile
+	ImportedStates []ImportedState
+}
+
+type ImportedState struct {
+	ProfileName string
+	StagePath   string
+	Owner       profilestate.Owner
 }
 
 type profileBatchInput struct {
 	Profile Profile
 	Digest  string
+	State   *ImportedState
 }
 
 type profileBatchBinding struct {
 	Name        string `json:"name"`
 	InputDigest string `json:"inputDigest"`
+}
+
+type profileBatchDigestInput struct {
+	Profile Profile             `json:"profile"`
+	State   *profilestate.Owner `json:"state,omitempty"`
 }
 
 type profileBatchMarker struct {
@@ -134,11 +148,21 @@ func (participant EnvironmentBatchParticipant) Preflight(
 	}
 	defer lock.Unlock()
 	if lock.snapshotAbsent {
+		if len(participant.ImportedStates) != 0 {
+			return ErrBatchConflict
+		}
 		return nil
 	}
 	for _, input := range inputs {
 		info, err := os.Lstat(participant.Store.ProfileDir(input.Profile.Name))
 		if errors.Is(err, os.ErrNotExist) {
+			if input.State != nil {
+				if verifyErr := profilestate.VerifyStage(
+					input.State.StagePath, input.State.Owner,
+				); verifyErr != nil {
+					return errors.Join(ErrBatchConflict, verifyErr)
+				}
+			}
 			continue
 		}
 		if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 ||
@@ -149,6 +173,11 @@ func (participant EnvironmentBatchParticipant) Preflight(
 			publication, input,
 		); err != nil {
 			return fmt.Errorf("preflight profile %q for environment batch: %w", input.Profile.Name, err)
+		}
+		if input.State != nil && profilestate.VerifyContent(
+			participant.Store.ProfileDir(input.Profile.Name), input.State.Owner,
+		) != nil {
+			return ErrBatchConflict
 		}
 	}
 	return nil
@@ -183,6 +212,20 @@ func (participant EnvironmentBatchParticipant) Finalize(
 		if !pending {
 			continue
 		}
+		if input.State != nil {
+			if err := profilestate.VerifyContent(
+				participant.Store.ProfileDir(input.Profile.Name), input.State.Owner,
+			); err != nil {
+				return errors.Join(ErrBatchVisibilityUnproved, err)
+			}
+			for _, name := range profilestate.MarkerNames() {
+				if err := os.Remove(filepath.Join(
+					participant.Store.ProfileDir(input.Profile.Name), name,
+				)); err != nil && !errors.Is(err, os.ErrNotExist) {
+					return err
+				}
+			}
+		}
 		if err := os.Remove(filepath.Join(
 			participant.Store.ProfileDir(input.Profile.Name), profileBatchPendingFile,
 		)); err != nil && !errors.Is(err, os.ErrNotExist) {
@@ -198,6 +241,20 @@ func (participant EnvironmentBatchParticipant) Finalize(
 func (participant EnvironmentBatchParticipant) normalizedInputs() ([]profileBatchInput, error) {
 	if len(participant.Profiles) == 0 || len(participant.Profiles) > 256 {
 		return nil, ErrBatchConflict
+	}
+	states := make(map[string]ImportedState, len(participant.ImportedStates))
+	profilesRoot := filepath.Join(participant.Store.Root, "profiles")
+	for _, value := range participant.ImportedStates {
+		expected, err := profilestate.StagePath(profilesRoot, value.Owner)
+		if err != nil || ValidateName(value.ProfileName) != nil ||
+			value.ProfileName != value.Owner.ProfileName ||
+			filepath.Clean(value.StagePath) != expected {
+			return nil, errors.Join(ErrBatchConflict, err)
+		}
+		if _, duplicate := states[value.ProfileName]; duplicate {
+			return nil, ErrBatchConflict
+		}
+		states[value.ProfileName] = value
 	}
 	inputs := make([]profileBatchInput, len(participant.Profiles))
 	for index, value := range participant.Profiles {
@@ -215,7 +272,15 @@ func (participant EnvironmentBatchParticipant) normalizedInputs() ([]profileBatc
 		if err := candidate.Validate(); err != nil {
 			return nil, errors.Join(ErrBatchConflict, err)
 		}
-		encoded, err := json.Marshal(candidate)
+		state, hasState := states[candidate.Name]
+		var stateOwner *profilestate.Owner
+		if hasState {
+			owner := state.Owner
+			stateOwner = &owner
+		}
+		encoded, err := json.Marshal(profileBatchDigestInput{
+			Profile: candidate, State: stateOwner,
+		})
 		if err != nil {
 			return nil, err
 		}
@@ -225,6 +290,14 @@ func (participant EnvironmentBatchParticipant) normalizedInputs() ([]profileBatc
 				[]byte("hideout-profile-batch-input/v1\x00"), encoded...,
 			)),
 		}
+		if hasState {
+			copyState := state
+			inputs[index].State = &copyState
+			delete(states, candidate.Name)
+		}
+	}
+	if len(states) != 0 {
+		return nil, ErrBatchConflict
 	}
 	sort.Slice(inputs, func(left, right int) bool {
 		return inputs[left].Profile.Name < inputs[right].Profile.Name
@@ -249,6 +322,9 @@ func (s Store) prepareBatchProfileUnlocked(
 			return ErrBatchConflict
 		}
 		_, err := s.validatePreparedBatchProfileUnlocked(publication, input)
+		if err == nil && input.State != nil {
+			err = profilestate.VerifyContent(final, input.State.Owner)
+		}
 		return err
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return err
@@ -257,14 +333,28 @@ func (s Store) prepareBatchProfileUnlocked(
 	if err := os.MkdirAll(parent, 0o700); err != nil {
 		return err
 	}
-	staging, err := os.MkdirTemp(parent, ".batching-"+input.Profile.Name+"-")
-	if err != nil {
-		return err
+	staging := ""
+	cleanup := func() {}
+	if input.State != nil {
+		if err := profilestate.VerifyStage(input.State.StagePath, input.State.Owner); err != nil {
+			return errors.Join(ErrBatchConflict, err)
+		}
+		staging = input.State.StagePath
+		cleanup = func() {
+			_ = profilestate.RemoveStage(staging, input.State.Owner)
+		}
+	} else {
+		var err error
+		staging, err = os.MkdirTemp(parent, ".batching-"+input.Profile.Name+"-")
+		if err != nil {
+			return err
+		}
+		cleanup = func() { _ = os.RemoveAll(staging) }
 	}
 	published := false
 	defer func() {
 		if !published {
-			_ = os.RemoveAll(staging)
+			cleanup()
 		}
 	}()
 	actual := cloneProfile(input.Profile)
@@ -285,6 +375,13 @@ func (s Store) prepareBatchProfileUnlocked(
 	}
 	if err := MaterializeIdentityState(staging, actual); err != nil {
 		return err
+	}
+	if input.State != nil {
+		snapshot, err := profilestate.Capture(staging)
+		if err != nil || snapshot.Digest() != input.State.Owner.ContentDigest ||
+			snapshot.LogicalBytes() != input.State.Owner.LogicalBytes {
+			return errors.Join(ErrBatchConflict, err)
+		}
 	}
 	data, err := json.MarshalIndent(actual, "", "  ")
 	if err != nil {
@@ -389,7 +486,14 @@ func (s Store) validatePreparedBatchProfileUnlocked(
 	); err != nil {
 		return false, errors.Join(ErrBatchConflict, err)
 	}
-	encodedCurrent, err := json.Marshal(current)
+	var stateOwner *profilestate.Owner
+	if input.State != nil {
+		owner := input.State.Owner
+		stateOwner = &owner
+	}
+	encodedCurrent, err := json.Marshal(profileBatchDigestInput{
+		Profile: current, State: stateOwner,
+	})
 	if err != nil {
 		return false, errors.Join(ErrBatchConflict, err)
 	}

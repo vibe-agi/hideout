@@ -24,20 +24,32 @@ Configuration-only export contains:
 - selected Hideout-managed secret values only when every named value and the
   separate secret-transfer acknowledgement were supplied.
 
-Full export adds the root disk and every reachable attached persistent disk for
-each selected stopped environment. A shared disk closes over all of its
-consumers; Hideout refuses a partial or running consumer set.
+Full export adds two kinds of persistent state for each selected stopped
+environment:
+
+- the root disk and every reachable attached persistent disk; and
+- the referenced profile's application state under `home/`, `config/`,
+  `data/`, and `browser/`.
+
+A shared disk closes over all of its consumers; Hideout refuses a partial or
+running consumer set. Profile application state is captured as a bounded,
+deterministically ordered component and is named separately in inventory and
+size estimates because it may contain login history, browser sessions, tokens,
+or other application-managed credentials.
 
 Every v1 scope excludes host workspace contents, HostFS contents, command/file/
-network activity history, audit and release evidence, caches, live processes,
-RAM, host applications, and ambient host credentials. Imported workspace paths
-and authority-bearing host/network/script settings are proposals and remain
-disabled until explicitly mapped or approved on the destination.
+network activity history, audit and release evidence, Hideout profile caches,
+live processes, RAM, host applications, and ambient host credentials. Full
+profile-state capture also excludes generated profile machine identity and
+Hideout-generated Git configuration; import recreates them for the destination.
+An opaque guest disk can still contain its own caches or credentials. Imported
+workspace paths and authority-bearing host/network/script settings are proposals
+and remain disabled until explicitly mapped or approved on the destination.
 
-A full guest disk is opaque. It can contain application-managed credentials,
-private source, SSH material, or other data that Hideout cannot selectively
-remove without changing the filesystem. Full export therefore requires
-`--ack-guest-content`.
+A full guest disk is opaque, and included profile application state is private
+application data. Either can contain application-managed credentials, private
+source, SSH material, browser sessions, or other data that Hideout cannot
+classify safely. Full export therefore requires `--ack-guest-content`.
 
 ## Clean v1 Compatibility Policy
 
@@ -77,8 +89,8 @@ hideout migrate export \
 ```
 
 For a full stopped-VM copy, first review the concrete environments, portable
-configuration bytes, unique disks, logical size, named exclusions, and any stop
-plan:
+configuration bytes, profile application-state bytes, unique disks, total
+logical size, named exclusions, and any stop plan:
 
 ```sh
 hideout migrate export \
@@ -153,6 +165,12 @@ Every import creates fresh Hideout environment/control, backend instance,
 operation, session, broker, workspace, and ephemeral credential identities.
 This rule has no switch.
 
+The destination profile is also fresh. Its preserved `home/`, `config/`,
+`data/`, and `browser/` roots are published atomically with that profile, while
+profile machine identity and generated Git configuration are recreated and
+cache remains absent. This destination-local reset is independent of the guest
+identity policy below.
+
 Guest identity is selected independently for each environment and each import:
 
 - `safe-clone` is the default. It regenerates the guest machine identity and SSH
@@ -194,10 +212,12 @@ hideout migrate recover OPERATION_ID
 ```
 
 Resume authenticates the retained checkpoint and discards an unverified torn
-tail. A partial export is never importable. Import stages private backend objects
-and publishes an environment only after disk, identity, configuration, secret,
-and provider verification. Recovery advertises only the action valid for the
-current operation revision.
+tail. A partial export is never importable. Import stages private backend
+objects and exact-owner profile application state, then publishes the fresh
+profile and environment only after profile-state digest, disk, identity,
+configuration, secret, and provider verification. Rollback removes only the
+operation-bound stage. Recovery advertises only the action valid for the current
+operation revision.
 
 ## Release Evidence and Non-claims
 
@@ -207,13 +227,16 @@ The portable, schema, fuzz, refinement, and no-side-effect inventory gate is:
 scripts/gates/migration.sh
 ```
 
-It fail-closes on drift from the checked-in migration test inventory across 13 packages,
-the separate nine-category hostile-input matrix, and an exact 13-cut durable
-restart inventory covering every export/import boundary listed in the feature
-quickstart. Six migration fuzz targets consume checked-in wrong-shape,
-traversal, sparse-abuse, trailing, and expansion seeds; four TLA+
-configurations and seven Go refinement traces remain separate required
-evidence.
+It fail-closes on drift from the checked-in 225-test migration inventory across
+19 packages, the separate nine-category hostile-input matrix, and an exact
+13-cut durable restart inventory covering every export/import boundary listed
+in the feature quickstart. Discovery scans every active repository package and
+owns both explicitly migration-named tests and every test in migration-specific
+files or the dedicated profile-state package; a new package or generically
+named safety test therefore cannot disappear behind the old inventory. Six
+migration fuzz targets consume checked-in wrong-shape, traversal, sparse-abuse,
+trailing, and expansion seeds; four TLA+ configurations and seven Go refinement
+traces remain separate required evidence.
 
 The full-state release claim additionally consumes the exact clean package
 candidate without rebuilding it:
@@ -223,12 +246,16 @@ scripts/gates/migration-lima.sh \
   --candidate-result .artifacts/045/package/result.json
 ```
 
-That gate uses independent stores, root and attached disks, one unchanged
-encrypted bundle, three Safe Clone imports, one Exact Guest Restore import,
-materialization/adoption daemon crash recovery, fail-closed missing-executor
-compatibility, terminal receipts, identity separation, host-workspace exclusion,
-and source immutability. Its current physical-host limitation is recorded in its
-evidence; cross-computer acceptance remains required before claiming broad
+That gate uses independent stores, distinct root-disk, attached-disk, and
+profile `home`/`config`/`data`/`browser` sentinels, explicit cache/generated-state
+negative controls, one unchanged encrypted bundle, three Safe Clone imports,
+one Exact Guest Restore import, materialization/adoption daemon crash recovery,
+fail-closed missing-executor compatibility, terminal receipts, identity
+separation, host-workspace exclusion, and source immutability. After export it
+retains a candidate-bound, secret-authenticated checkpoint so a post-export
+failure can resume without repeating source setup and export; invalid or stale
+checkpoints fail closed. Its current physical-host limitation is recorded in
+its evidence; cross-computer acceptance remains required before claiming broad
 portability.
 
 Migration performance qualification is separately deferred. Until its quiet-host

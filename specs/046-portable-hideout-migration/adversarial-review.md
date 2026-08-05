@@ -65,3 +65,96 @@ go run ./cmd/hideout-schema-validate schemas/formal-inventory.schema.json formal
 ```
 
 All commands passed after the mutation was restored.
+
+## 2026-08-05 release-convergence review: profile application state
+
+### Root finding
+
+The original full-mode contract preserved VM disks and portable profile policy,
+but not the persistent application state stored outside the VM beneath a profile.
+For tools such as Claude this meant history/configuration could disappear even
+though the migration was described as preserving application state. The defect
+crossed inventory, encryption, staging, atomic visibility, UX, evidence, and
+recovery; adding only another copied directory would not have closed it.
+
+### Implemented boundary
+
+- Full mode now has one authenticated `profile-state` component for every
+  selected environment/profile binding. Config-only has none.
+- Capture includes only `home/`, `config/`, `data/`, and `browser/`; cache,
+  profile machine state, and generated Git/config redirect paths are excluded.
+- The deterministic archive rejects traversal, escaping symlinks, hard-link
+  aliases, special files, source drift, duplicate/noncanonical entries, and
+  logical/working-limit overflow. Plaintext streams directly from the stable
+  source snapshot into authenticated bundle records; no plaintext migration
+  artifact is published.
+- Import creates an exact operation/profile/component owner, revalidates record
+  order/offset/digest, and publishes preserved roots only by atomically renaming
+  the stage into the freshly identified destination profile. Cleanup proves the
+  owner marker before recursive removal.
+- The TLA+ adoption model now tracks profile-state staging and visibility
+  independently from backend state. Safety and liveness configurations assert
+  that profile state is stage-owned, never runnable early, and visible exactly
+  with activation; both configurations completed without invariant/property
+  violations.
+
+### Negative and mutation proof
+
+The new Go fixtures cover source mutation, hard links, escaping links, special
+files, fragmented records, content/owner substitution, wrong-owner cleanup, and
+cache/generated-state exclusion. Manifest/plan schemas reject missing full-mode
+state, state in config-only mode, and partial import-state triples. CLI, TUI, and
+Web fixtures consume the shared plan golden; the browser judge also rejects a
+full plan with missing profile state.
+
+Three release-worktree mutation runs proved the key new assertions red before
+the original implementation was restored:
+
+1. Removing `home/.gitconfig` from the generated-state exclusion made
+   `TestMigrationProfileStateCaptureAndMaterializePreservesApplicationStateOnly`
+   fail because the
+   source-generated file appeared in the destination archive.
+2. Dropping the imported-state binding before profile batch preparation made
+   `TestMigrationEnvironmentBatchParticipantAtomicallyPublishesImportedApplicationState`
+   fail with `profile state stage owner does not match`; no profile/environment
+   publication succeeded.
+3. Making `StageDestination` leave `profileStateStaged` false made TLC stop at
+   depth 4 with `Invariant ProfileStateOwnedByStage is violated`. Restoring the
+   transition completed 3,058,408 generated / 992,088 distinct states with no
+   error.
+
+The real-Lima preflight now mutation-tests every independent root, attached,
+profile-home/config/data/browser, cache, and generated-state judge. Its reusable
+post-export checkpoint is bound to candidate commit/tree/archive, encrypted
+bundle bytes/digest, source identities and immutability hashes, and canaries;
+payload substitution, bundle substitution, and candidate rebinding are rejected.
+The checkpoint path, modes, schema, and macOS Keychain secret must all validate
+before a post-export resume.
+
+### Release-gate discovery review
+
+The first source-bound pass was green with 211 explicitly inventoried tests,
+but the discovery algorithm derived its package search space from that same
+inventory and selected tests only by `Migration`, `Migrate`, or `ConfigOnly` in
+the function name. That was circular: a migration test in a new package, or a
+generically named safety test in a migration-specific file, could remain
+unseen. A repository-wide active-source audit exposed 14 such tests, including
+four backend contract tests, three durable/hostile Manager tests, and seven
+package/evidence integration tests.
+
+The preflight now derives its search space from `go list ./...`, parses only the
+active target's test files, and owns both explicit migration names and complete
+migration-specific files plus the dedicated profile-state package. The checked-
+in inventory is therefore 225 sorted unique tests across 19 packages. The
+current generic-name and previously unlisted-package fixtures are retained as
+self-proving drift sentinels: reverting either half of the discovery rule makes
+preflight fail before any expensive fuzz, TLA+, package, or VM work begins.
+
+### Validation status
+
+Targeted Go packages, JSON schemas, shell syntax/ShellCheck, all 47 real-Lima
+semantic preflight fixtures, and both updated MigrationAdoption TLC
+configurations pass in the release worktree. This is implementation evidence,
+not public release evidence. The exact clean signed package must still pass the
+full source migration gate and real-Lima candidate gate before this section can
+be promoted as a release claim; performance remains explicitly unqualified.

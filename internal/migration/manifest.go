@@ -33,7 +33,7 @@ var manifestAuthorityClasses = map[string]struct{}{
 
 var manifestComponentKinds = map[string]struct{}{
 	"profile": {}, "environment": {}, "disk": {}, "secret-value": {},
-	"provider-metadata": {},
+	"provider-metadata": {}, "profile-state": {},
 }
 
 var manifestExcludedClasses = map[string]struct{}{
@@ -266,6 +266,19 @@ func validateManifestEnvironments(
 			return nil, corruptManifest("environment profile component is invalid")
 		}
 		profile.used = true
+		if environment.Mode == ExportModeFull {
+			if !validManifestOpaqueID(environment.ProfileStateComponentID) {
+				return nil, corruptManifest("environment profile state component is absent")
+			}
+			profileState, exists := components[environment.ProfileStateComponentID]
+			if !exists || profileState.entry.Kind != "profile-state" ||
+				profileState.entry.LogicalBytes == 0 {
+				return nil, corruptManifest("environment profile state component is invalid")
+			}
+			profileState.used = true
+		} else if environment.ProfileStateComponentID != "" {
+			return nil, corruptManifest("config environment carries profile state")
+		}
 		if environment.ImageProvenance != nil &&
 			(!validManifestText(environment.ImageProvenance.Reference, 1, 2048) ||
 				environment.ImageProvenance.Digest.Validate() != nil) {
@@ -327,6 +340,11 @@ func validateManifestEnvironments(
 			entry: environment, diskRefs: diskRefs,
 		}
 		previous = environment.SourceEnvironmentRef
+	}
+	for _, component := range components {
+		if component.entry.Kind == "profile-state" && !component.used {
+			return nil, corruptManifest("profile state component is unreferenced")
+		}
 	}
 	return environments, nil
 }

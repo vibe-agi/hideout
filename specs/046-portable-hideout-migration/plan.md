@@ -10,11 +10,13 @@
 ## Summary
 
 Add an encrypted, resumable migration workflow that exports normalized Hideout
-configuration and, when requested, the complete persistent disk state of stopped
-Lima environments. The sealed bundle is immutable and destination-neutral. Each
+configuration and, when requested, the persistent disk state of stopped Lima
+environments plus the selected profile's `home`/`config`/`data`/`browser`
+application state. The sealed bundle is immutable and destination-neutral. Each
 import independently previews host-specific mappings and authority, stages all
-artifacts, generates fresh Hideout identities, applies the selected guest identity
-policy, validates the result, and only then activates it atomically.
+artifacts under exact owners, generates fresh Hideout/profile identities, applies
+the selected guest identity policy, validates the result, and only then activates
+the profile and environment atomically.
 
 The implementation adds a pure Go bundle layer, a durable Manager migration
 operation built on the existing plan/review/apply and operation-ledger patterns,
@@ -34,7 +36,8 @@ existing Bubble Tea/Bubbles/Lipgloss v2 UI stack; existing Lima CLI adapter
 
 **Storage**: Append-only encrypted `.hideout-migration` bundles; existing
 Manager JSON stores and operation ledger; macOS Keychain-backed secret broker;
-Lima instance root disks and operation-owned staging directories
+Lima instance root disks, profile application roots, and operation-owned staging
+directories
 
 **Testing**: `go test`, race tests for new stateful services, fuzz/property tests
 for hostile bundle input, shellcheck/gofmt/vet/static gates, bounded TLC models,
@@ -48,16 +51,18 @@ the existing Hideout host supports it
 **Project Type**: Single Go CLI/daemon with Manager API, terminal UI, embedded
 WebUI, backend adapters, packaged guest helper, schemas, and formal models
 
-**Performance Goals**: Stream export/import without loading a disk into memory;
+**Performance Goals**: Stream export/import without loading a disk or profile
+application-state component into memory;
 keep migration-process peak working memory at or below 256 MiB under the initial
 supported envelope; preserve sparse regions; emit monotonic byte/component
 progress; resume without rereading completed payload records for output
 
 **Constraints**: Source must be provably stopped for full-state capture; no
-plaintext disk or secret intermediate; bundle files are owner-only; incomplete or
-tampered bundles never activate; passphrases never appear in argv, environment,
-logs, audit data, or persisted Manager state; no imported script/config executes
-during ordinary validation; unsupported backend/layout/disk graphs fail closed
+plaintext disk, profile-state, or secret intermediate; bundle files are
+owner-only; incomplete or tampered bundles never activate; passphrases never
+appear in argv, environment, logs, audit data, or persisted Manager state; no
+imported script/config executes during ordinary validation; unsupported
+backend/layout/disk graphs and unsafe profile-state paths fail closed
 
 **Resolved provider constraint**: Stock Lima 2.1.x/2.2.x VZ always attaches its
 default user-mode network when no named network is configured. Full-state import
@@ -66,20 +71,22 @@ the staged guest with no network device and expose a revision-bound proof. This
 does not block destination-neutral full-state export or config-only migration.
 
 **Scale/Scope**: Initial explicit envelope is at most 32 environments, 4 TiB
-aggregate logical persistent data, 1,048,576 authenticated payload records, and
-4 MiB plaintext chunks. Values outside the envelope are rejected before costly
-allocation or key derivation. Physical two-host acceptance is required before the
-feature is marked generally available.
+aggregate logical persistent disk/profile data, 1,048,576 authenticated payload
+records, and 4 MiB plaintext chunks. Values outside the envelope are rejected
+before costly allocation or key derivation. Physical two-host acceptance is
+required before the feature is marked generally available.
 
 ## Constitution Check
 
 *GATE: Passed before Phase 0 research and re-checked after Phase 1 design.*
 
 - **Privacy Boundary — PASS**: Full migration can expose every byte in a guest
-  disk, plus profiles, endpoint references, and selected secrets. Capture requires
-  exact stopped-state proof. Host workspaces, activity records, audit history,
-  runtime files, caches, and host-app observations are excluded. Unknown layouts,
-  shared disks, invalid paths, absent permissions, and ambiguous ownership fail
+  disk and included profile application state, plus endpoint references and
+  selected secrets. Capture requires exact stopped-state and profile-source
+  stability proof. Host workspaces, activity records, audit history, runtime
+  files, profile cache, generated profile identity/configuration, and host-app
+  observations are excluded. Unknown layouts, shared disks, invalid paths,
+  aliases, special files, absent permissions, and ambiguous ownership fail
   closed. No partial bundle is importable.
 - **Typed Authority — PASS**: The Manager owns immutable draft, plan, review,
   confirm, apply, recovery, and rollback state. Go validators parse every bundle
@@ -160,6 +167,7 @@ internal/
 ├── liveconsole/                    # Shared migration projections/actions
 ├── manager/                        # Plan/apply API, claims, ledger, recovery
 ├── migration/                      # Pure format, crypto, limits, and validation
+├── profilestate/                   # Deterministic capture and exact-owner staging
 └── tui/                            # Migration wizard/modal and progress view
 
 schemas/

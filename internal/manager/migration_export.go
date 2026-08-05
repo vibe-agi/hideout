@@ -20,6 +20,7 @@ import (
 	"github.com/vibe-agi/hideout/internal/environment"
 	"github.com/vibe-agi/hideout/internal/migration"
 	"github.com/vibe-agi/hideout/internal/profile"
+	"github.com/vibe-agi/hideout/internal/profilestate"
 	"github.com/vibe-agi/hideout/internal/secrets"
 )
 
@@ -75,9 +76,10 @@ type MigrationApplyResult struct {
 }
 
 type migrationExportSource struct {
-	records    []environment.Record
-	selections []backend.MigrationSourceSelection
-	revisions  []migration.BaseRevision
+	records       []environment.Record
+	selections    []backend.MigrationSourceSelection
+	revisions     []migration.BaseRevision
+	profileStates map[string]profilestate.Snapshot
 }
 
 func (service MigrationService) PlanExport(
@@ -108,6 +110,10 @@ func (service MigrationService) PlanExport(
 		return migration.ExportPlan{}, err
 	}
 	source, err := service.resolveExportNames(normalized.EnvironmentNames, capability.Provider)
+	if err != nil {
+		return migration.ExportPlan{}, err
+	}
+	source, err = service.captureMigrationExportProfileStates(source)
 	if err != nil {
 		return migration.ExportPlan{}, err
 	}
@@ -379,6 +385,10 @@ func (service MigrationService) revalidateExportPlan(
 	if err != nil {
 		return migrationExportSource{}, backend.SourceInventory{}, ErrMigrationPlanStale
 	}
+	source, err = service.captureMigrationExportProfileStates(source)
+	if err != nil {
+		return migrationExportSource{}, backend.SourceInventory{}, ErrMigrationPlanStale
+	}
 	inventory, err := service.Export.InspectMigrationSource(
 		ctx, backend.SourceInspectionRequest{
 			Binding: binding, Mode: migration.ExportModeFull, Selections: source.selections,
@@ -421,6 +431,10 @@ func (service MigrationService) revalidateExportOperation(
 	}
 	refs := migrationOperationClaimRefs(operation.Claims, MigrationClaimSourceEnvironment)
 	source, err := service.resolveExportRefs(refs, capability.Provider)
+	if err != nil {
+		return migrationExportSource{}, backend.SourceInventory{}, ErrMigrationPlanStale
+	}
+	source, err = service.captureMigrationExportProfileStates(source)
 	if err != nil {
 		return migrationExportSource{}, backend.SourceInventory{}, ErrMigrationPlanStale
 	}
@@ -494,6 +508,16 @@ func (service MigrationService) buildExportOperation(
 		}
 	}
 	logicalTotal := uint64(0)
+	profileStateComponents := 0
+	for _, estimate := range plan.EnvironmentEstimates {
+		if estimate.ProfileStateLogicalBytes > migration.HardMaxLogicalBytes-logicalTotal {
+			return MigrationOperation{}, ErrMigrationOperationInvalid
+		}
+		logicalTotal += estimate.ProfileStateLogicalBytes
+		if estimate.ProfileStateLogicalBytes != 0 {
+			profileStateComponents++
+		}
+	}
 	for _, disk := range inventory.Disks {
 		if disk.LogicalBytes > migration.HardMaxLogicalBytes-logicalTotal {
 			return MigrationOperation{}, ErrMigrationOperationInvalid
@@ -516,7 +540,8 @@ func (service MigrationService) buildExportOperation(
 		Progress: MigrationProgress{
 			LogicalTotalKnown: true, TotalLogicalBytes: logicalTotal,
 			ComponentsTotal: uint32(
-				len(inventory.Disks) + len(source.records) + len(plan.SelectedSecretRefs),
+				len(inventory.Disks) + len(source.records) + profileStateComponents +
+					len(plan.SelectedSecretRefs),
 			),
 			PhaseStartedAt: now,
 		},
@@ -617,6 +642,28 @@ func (service MigrationService) exportSource(
 			Digest: migration.Digest(digest),
 		})
 		previous = record.ID
+	}
+	return source, nil
+}
+
+func (service MigrationService) captureMigrationExportProfileStates(
+	source migrationExportSource,
+) (migrationExportSource, error) {
+	if len(source.records) == 0 || len(source.profileStates) != 0 {
+		return migrationExportSource{}, ErrMigrationPlanStale
+	}
+	source.profileStates = make(map[string]profilestate.Snapshot, len(source.records))
+	for _, record := range source.records {
+		snapshot, err := profilestate.Capture(service.Profiles.ProfileDir(record.Profile))
+		if err != nil || snapshot.LogicalBytes() == 0 ||
+			snapshot.LogicalBytes() > migration.HardMaxLogicalBytes {
+			return migrationExportSource{}, errors.Join(ErrMigrationPlanStale, err)
+		}
+		source.profileStates[record.ID] = snapshot
+		source.revisions = append(source.revisions, migration.BaseRevision{
+			Resource: "profile-state:" + record.ID,
+			Revision: snapshot.EntryCount(), Digest: migration.Digest(snapshot.Digest()),
+		})
 	}
 	return source, nil
 }

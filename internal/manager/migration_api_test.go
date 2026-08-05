@@ -270,19 +270,25 @@ func TestMigrationManagerExportPlanApplyAndSnapshotContract(t *testing.T) {
 		t.Fatalf("planning created output: %v", err)
 	}
 	if len(plan.EnvironmentRefs) != 1 || plan.EnvironmentRefs[0] != migration.OpaqueID(record.ID) ||
-		len(plan.DiskRefs) != 2 || plan.SourceInventoryDigest.Validate() != nil ||
+		len(plan.DiskRefs) != 2 || len(plan.BaseRevisions) != 2 ||
+		plan.SourceInventoryDigest.Validate() != nil ||
 		!slices.Equal(plan.IncludedClasses, []string{
 			"environment-declarations", "persistent-disks", "portable-profiles",
+			"profile-application-state",
 		}) || len(plan.EnvironmentEstimates) != 1 || len(plan.DiskEstimates) != 2 ||
 		plan.EnvironmentEstimates[0].DisplayName != "dev" ||
 		plan.EnvironmentEstimates[0].PortableConfigLogicalBytes == 0 ||
 		plan.EnvironmentEstimates[0].PortableConfigDigest.Validate() != nil ||
+		plan.EnvironmentEstimates[0].ProfileStateLogicalBytes == 0 ||
+		plan.EnvironmentEstimates[0].ProfileStateDigest.Validate() != nil ||
 		!slices.Equal(plan.EnvironmentEstimates[0].DiskRefs, plan.DiskRefs) ||
 		plan.EnvironmentEstimates[0].ReferencedDiskLogicalBytes != 12288 ||
 		plan.EnvironmentEstimates[0].EstimatedLogicalBytes !=
-			plan.EnvironmentEstimates[0].PortableConfigLogicalBytes+12288 ||
+			plan.EnvironmentEstimates[0].PortableConfigLogicalBytes+
+				plan.EnvironmentEstimates[0].ProfileStateLogicalBytes+12288 ||
 		plan.EstimatedPayloadLogicalBytes !=
-			plan.EnvironmentEstimates[0].PortableConfigLogicalBytes+12288 ||
+			plan.EnvironmentEstimates[0].PortableConfigLogicalBytes+
+				plan.EnvironmentEstimates[0].ProfileStateLogicalBytes+12288 ||
 		!plan.EstimatedPayloadComplete {
 		t.Fatalf("unexpected export plan: %+v", plan)
 	}
@@ -441,7 +447,8 @@ func TestMigrationManagerExportPlanApplyAndSnapshotContract(t *testing.T) {
 		t.Fatalf("inspect sealed export: inspect=%v close=%v", inspectErr, closeErr)
 	}
 	if inspection.Binding != written.Binding || len(inspection.Manifest.Environments) != 1 ||
-		len(inspection.Manifest.DiskObjects) != 2 || len(inspection.Manifest.ComponentIndex) != 3 ||
+		len(inspection.Manifest.DiskObjects) != 2 || len(inspection.Manifest.ComponentIndex) != 4 ||
+		inspection.Manifest.Environments[0].ProfileStateComponentID == "" ||
 		len(inspection.Manifest.Environments[0].WorkspaceProposals) != 1 ||
 		inspection.Manifest.Environments[0].WorkspaceProposals[0].State != "disabled" ||
 		!slices.Equal(inspection.Manifest.ExcludedClasses,
@@ -551,8 +558,9 @@ func TestMigrationExportResumesAuthenticatedPartialWithoutRereadingPrefix(t *tes
 	}
 	if interrupted.Phase != MigrationPhaseRecoverableFailure ||
 		interrupted.Progress.CheckpointDigest == "" ||
-		interrupted.Progress.CompletedLogicalBytes != 2048 ||
-		interrupted.Progress.ComponentsComplete != 2 {
+		interrupted.Progress.CompletedLogicalBytes !=
+			plan.EnvironmentEstimates[0].ProfileStateLogicalBytes+2048 ||
+		interrupted.Progress.ComponentsComplete != 3 {
 		t.Fatalf("interrupted operation=%+v", interrupted)
 	}
 	partial := migrationExportPartialPath(output, apply.OperationID)
@@ -1731,6 +1739,7 @@ func createManagerImportSecretHandle(
 func managerMigrationManifestFixture(bundleID migration.BundleID) migration.Manifest {
 	rootDigest := migration.Digest("sha256:" + strings.Repeat("4", 64))
 	attachedDigest := migration.Digest("sha256:" + strings.Repeat("5", 64))
+	profileState, profileStateDigest := managerMigrationProfileStateFixture()
 	return migration.Manifest{
 		Schema: "hideout.migration-manifest/v1", BundleID: bundleID,
 		FormatVersion: migration.BundleFormatVersion,
@@ -1741,9 +1750,10 @@ func managerMigrationManifestFixture(bundleID migration.BundleID) migration.Mani
 		Environments: []migration.EnvironmentSnapshot{{
 			SourceEnvironmentRef: "environment_source1", DisplayNameHint: "dev",
 			Runtime: "linux", GuestUser: "developer", Backend: "lima", Mode: migration.ExportModeFull,
-			ProfileComponentID:    "component_profile1",
-			WorkspaceProposals:    []migration.WorkspaceProposal{},
-			AuthorityProposalRefs: []migration.OpaqueID{},
+			ProfileComponentID:      "component_profile1",
+			ProfileStateComponentID: "component_state001",
+			WorkspaceProposals:      []migration.WorkspaceProposal{},
+			AuthorityProposalRefs:   []migration.OpaqueID{},
 			GuestIdentityEvidence: migration.GuestIdentityEvidence{
 				MachineIDDigest: migration.Digest("sha256:" + strings.Repeat("6", 64)),
 				SSHHostKeyDigests: []migration.Digest{
@@ -1788,14 +1798,25 @@ func managerMigrationManifestFixture(bundleID migration.BundleID) migration.Mani
 				ContentDigest: migration.Digest("sha256:" + strings.Repeat("8", 64)),
 			},
 			{
+				ComponentID: "component_state001", Kind: "profile-state",
+				LogicalBytes: uint64(len(profileState)), FirstRecord: 2, LastRecord: 3,
+				RecordCount: 2, ContentDigest: profileStateDigest,
+			},
+			{
 				ComponentID: "component_root0001", Kind: "disk", DiskID: "disk_root0001",
-				LogicalBytes: 8192, FirstRecord: 2, LastRecord: 2, RecordCount: 1,
+				LogicalBytes: 8192, FirstRecord: 4, LastRecord: 4, RecordCount: 1,
 				ContentDigest: rootDigest,
 			},
 		},
 		ExcludedClasses:      []string{"activity-history", "host-workspace-content", "runtime-state"},
 		RequiredCapabilities: []migration.RequiredCapability{},
 	}
+}
+
+func managerMigrationProfileStateFixture() ([]byte, migration.Digest) {
+	content := []byte("hideout-profile-state-fixture-v1\n")
+	digest := sha256.Sum256(content)
+	return content, migration.Digest("sha256:" + hex.EncodeToString(digest[:]))
 }
 
 var _ backend.MigrationExportProvider = (*managerMigrationProviderFixture)(nil)

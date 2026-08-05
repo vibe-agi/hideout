@@ -87,11 +87,50 @@ func TestMigrationSchemasRejectUnknownFieldsSecretsAndBounds(t *testing.T) {
 		t.Fatal("manifest accepted more than 32 environments")
 	}
 
+	manifest = migrationManifestFixture()
+	delete(
+		manifest["environments"].([]any)[0].(map[string]any),
+		"profileStateComponentId",
+	)
+	if err := manifestSchema.Validate(manifest); err == nil {
+		t.Fatal("full manifest accepted a missing profile application state")
+	}
+
+	manifest = migrationManifestFixture()
+	manifest["environments"].([]any)[0].(map[string]any)["mode"] = "config"
+	if err := manifestSchema.Validate(manifest); err == nil {
+		t.Fatal("config manifest accepted a profile application state component")
+	}
+
 	planSchema := compileFeatureSchema(t, "migration-plan.schema.json")
+	exportPlan := migrationExportPlanFixture()
+	delete(
+		exportPlan["environmentEstimates"].([]any)[0].(map[string]any),
+		"profileStateDigest",
+	)
+	if err := planSchema.Validate(exportPlan); err == nil {
+		t.Fatal("full export plan accepted incomplete profile application state evidence")
+	}
+
+	exportPlan = migrationExportPlanFixture()
+	exportPlan["mode"] = "config"
+	if err := planSchema.Validate(exportPlan); err == nil {
+		t.Fatal("config export plan accepted profile application state evidence")
+	}
+
 	plan := migrationImportPlanFixture()
 	plan["secretInputHandle"] = "one-shot-handle-must-not-be-durable"
 	if err := planSchema.Validate(plan); err == nil {
 		t.Fatal("durable import plan accepted a secret-input handle")
+	}
+
+	plan = migrationImportPlanFixture()
+	delete(
+		plan["environmentActions"].([]any)[0].(map[string]any),
+		"profileStateContentDigest",
+	)
+	if err := planSchema.Validate(plan); err == nil {
+		t.Fatal("import plan accepted a partially bound profile application state")
 	}
 
 	draft := migrationImportDraftFixture()
@@ -248,12 +287,13 @@ func migrationManifestFixture() map[string]any {
 			"guestArch": "aarch64",
 		},
 		"environments": []any{map[string]any{
-			"sourceEnvironmentRef": "envref_dev1234",
-			"displayNameHint":      "dev",
-			"runtime":              "linux",
-			"backend":              "lima",
-			"mode":                 "full",
-			"profileComponentId":   "component_profile1234",
+			"sourceEnvironmentRef":    "envref_dev1234",
+			"displayNameHint":         "dev",
+			"runtime":                 "linux",
+			"backend":                 "lima",
+			"mode":                    "full",
+			"profileComponentId":      "component_profile1234",
+			"profileStateComponentId": "component_state12345",
 			"workspaceProposals": []any{map[string]any{
 				"proposalId":   "proposal_workspace1234",
 				"guestPath":    "/workspace",
@@ -295,9 +335,14 @@ func migrationManifestFixture() map[string]any {
 				"recordCount": 1, "contentDigest": migrationDigestFixture("4"),
 			},
 			map[string]any{
+				"componentId": "component_state12345", "kind": "profile-state",
+				"logicalBytes": 512, "firstRecord": 1, "lastRecord": 1,
+				"recordCount": 1, "contentDigest": migrationDigestFixture("9"),
+			},
+			map[string]any{
 				"componentId": "component_disk1234", "kind": "disk",
 				"diskId": "disk_root1234", "logicalBytes": 1073741824,
-				"firstRecord": 1, "lastRecord": 256, "recordCount": 256,
+				"firstRecord": 2, "lastRecord": 257, "recordCount": 256,
 				"contentDigest": migrationDigestFixture("3"),
 			},
 		},
@@ -335,22 +380,25 @@ func migrationExportPlanFixture() map[string]any {
 		"diskRefs": []any{"disk_root1234"}, "selectedSecretRefs": []any{},
 		"includedClasses": []any{
 			"environment-declarations", "persistent-disks", "portable-profiles",
+			"profile-application-state",
 		},
 		"excludedClasses": []any{"host-workspace-content"},
 		"environmentEstimates": []any{map[string]any{
 			"environmentRef": "envref_dev1234", "displayName": "dev",
 			"portableConfigLogicalBytes": 1024,
 			"portableConfigDigest":       migrationDigestFixture("4"),
+			"profileStateLogicalBytes":   512,
+			"profileStateDigest":         migrationDigestFixture("9"),
 			"diskRefs":                   []any{"disk_root1234"},
 			"referencedDiskLogicalBytes": 1073741824,
-			"estimatedLogicalBytes":      1073742848,
+			"estimatedLogicalBytes":      1073743360,
 		}},
 		"diskEstimates": []any{map[string]any{
 			"diskRef": "disk_root1234", "role": "root",
 			"logicalBytes": 1073741824, "allocatedBytesHint": 536870912,
 			"consumers": []any{"envref_dev1234"},
 		}},
-		"estimatedPayloadLogicalBytes": 1073742848,
+		"estimatedPayloadLogicalBytes": 1073743360,
 		"estimatedPayloadComplete":     true,
 		"outputPath":                   "/tmp/dev.hideout-migration",
 		"providerCapabilityRevision":   migrationDigestFixture("7"),
@@ -406,9 +454,12 @@ func migrationImportPlanFixture() map[string]any {
 			"sourceRef": "envref_dev1234", "destinationProfileName": "dev-clone",
 			"runtime":   "linux",
 			"guestUser": "developer", "backend": "lima",
-			"profileComponentId":   "component_profile1234",
-			"profileContentDigest": migrationDigestFixture("4"),
-			"profileLogicalBytes":  1024,
+			"profileComponentId":        "component_profile1234",
+			"profileContentDigest":      migrationDigestFixture("4"),
+			"profileLogicalBytes":       1024,
+			"profileStateComponentId":   "component_state12345",
+			"profileStateContentDigest": migrationDigestFixture("9"),
+			"profileStateLogicalBytes":  512,
 		}},
 		"identityActions": []any{map[string]any{
 			"sourceRef": "envref_dev1234", "guestPolicy": "safe-clone",

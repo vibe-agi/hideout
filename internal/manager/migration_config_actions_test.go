@@ -64,7 +64,9 @@ func TestMigrationDestinationProfilesUseImportNamesAndFreshMetadata(t *testing.T
 	other := migrationImportOperationFixtureWithID("op_migrationimport2")
 	other.Phase = MigrationPhasePreparingSecrets
 	other.Effects[0].Status = MigrationEffectSucceeded
-	otherStage := migrationDestinationStageStateFixture()
+	otherStage := migrationDestinationStageStateFixtureForOperation(
+		other, filepath.Join("/tmp", "hideout-migration-fixture", "profiles"),
+	)
 	other.DestinationStage = &otherStage
 	otherProfiles, err := migrationDestinationProfiles(other)
 	if err != nil {
@@ -140,7 +142,9 @@ func TestMigrationDestinationEnvironmentRecordsResetConfigurationAtImport(t *tes
 	other := migrationImportOperationFixtureWithID("op_migrationimport2")
 	other.Phase = MigrationPhasePreparingSecrets
 	other.Effects[0].Status = MigrationEffectSucceeded
-	otherStage := migrationDestinationStageStateFixture()
+	otherStage := migrationDestinationStageStateFixtureForOperation(
+		other, filepath.Join("/tmp", "hideout-migration-fixture", "profiles"),
+	)
 	other.DestinationStage = &otherStage
 	otherProfiles, err := migrationDestinationProfiles(other)
 	if err != nil {

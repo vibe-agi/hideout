@@ -545,6 +545,8 @@ func resumeRecordTypeAllowed(kind string, recordType RecordType) bool {
 	case "disk":
 		return recordType == RecordDataChunk || recordType == RecordRawChunk ||
 			recordType == RecordZeroExtent || recordType == RecordHoleExtent
+	case "profile-state":
+		return recordType == RecordRawChunk
 	case "secret-value":
 		return recordType == RecordSecretValue
 	case "profile", "environment", "provider-metadata":

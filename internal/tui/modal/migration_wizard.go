@@ -1160,10 +1160,11 @@ func (wizard *MigrationWizard) reviewLines() []string {
 		}
 		for _, estimate := range plan.EnvironmentEstimates {
 			lines = append(lines, fmt.Sprintf(
-				"ENV %s · %s · %s · config %s · disks %s",
+				"ENV %s · %s · %s · config %s · profile state %s · disks %s",
 				safeInline(estimate.DisplayName), safeInline(string(estimate.EnvironmentRef)),
 				formatWizardBytes(estimate.EstimatedLogicalBytes),
 				formatWizardBytes(estimate.PortableConfigLogicalBytes),
+				formatWizardBytes(estimate.ProfileStateLogicalBytes),
 				wizardOpaqueIDList(estimate.DiskRefs),
 			))
 		}

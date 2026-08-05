@@ -67,6 +67,18 @@ func TestMigrationImportCommitPublishesProfilesAndEnvironmentsOnce(t *testing.T)
 			loaded.Metadata["lineageMode"] != "migration" {
 			t.Fatalf("published profile metadata=%+v", loaded.Metadata)
 		}
+		history, err := os.ReadFile(filepath.Join(
+			profileStore.ProfileDir(record.Profile), "home", ".claude", "history.jsonl",
+		))
+		if err != nil || string(history) != "claude-session-survives-full-migration\n" {
+			t.Fatalf("published profile state=%q error=%v", history, err)
+		}
+		gitConfig, err := os.ReadFile(filepath.Join(
+			profileStore.ProfileDir(record.Profile), "home", ".gitconfig",
+		))
+		if err != nil || strings.Contains(string(gitConfig), "SOURCE-IDENTITY-MUST-NOT-SURVIVE") {
+			t.Fatalf("source-generated identity survived=%q error=%v", gitConfig, err)
+		}
 		configuration, err := RuntimeConfigurationForProfile(
 			loaded, record.Backend, record.Mode,
 		)
