@@ -89,6 +89,8 @@ func TestOperatorSnapshotStateStartsOnNewestSessionAndPreservesReadOnlyHealth(t 
 			Warnings: []manager.MigrationNotice{},
 			Effects:  []manager.MigrationEffectProjection{},
 		}},
+		Decisions:    []manager.OperatorDecisionProjection{},
+		Notices:      []manager.OperatorNoticeProjection{},
 		Capabilities: []manager.OperatorCapabilityProjection{},
 		NextActions:  []string{"activity.inspect"},
 	}

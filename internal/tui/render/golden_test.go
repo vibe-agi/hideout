@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/vibe-agi/hideout/internal/decision"
 	"github.com/vibe-agi/hideout/internal/liveconsole"
 	"github.com/vibe-agi/hideout/internal/manager"
 	"github.com/vibe-agi/hideout/internal/profile"
@@ -126,6 +127,31 @@ func TestOverviewSeparatesMachineAndWorkspaceViews(t *testing.T) {
 	}
 	if count := strings.Count(output, "workspace-view="); count != 2 {
 		t.Fatalf("workspace rows=%d want=2:\n%s", count, output)
+	}
+}
+
+func TestOverviewActionCenterOmitsTerminalAndAcknowledgedRows(t *testing.T) {
+	state := renderFixture()
+	state.Decisions = []liveconsole.DecisionRow{
+		{ID: "decision-pending", Kind: decision.KindEvidenceShare, Status: decision.StatePending, Summary: "review pending share"},
+		{ID: "decision-applied", Kind: decision.KindHostFSWrite, Status: decision.StateApplied, Summary: "already applied"},
+	}
+	state.Notices = []liveconsole.NoticeRow{
+		{ID: "notice-current", Kind: decision.KindPrivilegeStatus, Status: "degraded", Summary: "review current notice"},
+		{ID: "notice-acknowledged", Kind: decision.KindBackgroundStatus, Status: "ready", Summary: "already acknowledged", Acknowledged: true},
+	}
+	output := Overview(OverviewInput{State: state}, Options{
+		Width: 96, Height: 26, NoColor: true,
+	})
+	for _, expected := range []string{"decision-pending", "notice-current"} {
+		if !strings.Contains(output, expected) {
+			t.Fatalf("action center omitted %q:\n%s", expected, output)
+		}
+	}
+	for _, forbidden := range []string{"decision-applied", "notice-acknowledged"} {
+		if strings.Contains(output, forbidden) {
+			t.Fatalf("action center retained inactive %q:\n%s", forbidden, output)
+		}
 	}
 }
 

@@ -667,6 +667,7 @@ func noticePayload(details map[string]any, phase string) liveconsole.EventPayloa
 		Session:      stringValue(details, "session"),
 		Backend:      stringValue(details, "backend"),
 		Acknowledged: boolValue(details, "acknowledged"),
+		Revision:     intValue(details, "revision"),
 		Preview:      details["preview"],
 	}
 	if payload.Status == "" {

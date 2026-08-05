@@ -26,6 +26,8 @@ const baseURL = arg("--base-url");
 let currentToken = arg("--token");
 const fixtureURL = arg("--fixture-url");
 const fixtureKey = arg("--fixture-key");
+const noticeID = arg("--notice-id");
+const decisionID = arg("--decision-id");
 const sessionID = arg("--session-id");
 const executionID = arg("--execution-id");
 const filePath = arg("--file-path");
@@ -49,14 +51,27 @@ const expectedPanels = Object.freeze([
   "Configuration",
   "Help"
 ]);
+const expectedRequiredAreas = Object.freeze([
+  "Action Required",
+  "Stream",
+  "Decisions",
+  "Notices",
+  "HostFS Writes",
+  "Background",
+  "Doctor",
+  "Package/Support",
+  "Audit"
+]);
 
 if (!chromePath || !uiURL || !baseURL || !currentToken ||
-    !fixtureURL || !fixtureKey || !sessionID || !executionID ||
+    !fixtureURL || !fixtureKey || !noticeID || !decisionID ||
+    !sessionID || !executionID ||
     !filePath || !domain || !ip || !riskID || !from || !to ||
     !Number.isInteger(recordCount) || recordCount <= 200 || !outDir) {
   throw new Error(
     "--chrome, --url, --base-url, --token, --fixture-url, " +
-    "--fixture-key, browser evidence identities, and --out are required"
+    "--fixture-key, --notice-id, --decision-id, browser evidence identities, " +
+    "and --out are required"
   );
 }
 
@@ -468,6 +483,7 @@ async function main() {
         window.__hideoutProof = {
           fetches: [],
           blockSnapshots: false,
+          delayDecisionInspect: false,
           returnButton: null
         };
         const originalFetch = window.fetch.bind(window);
@@ -481,7 +497,13 @@ async function main() {
               String(url).includes("/api/v1/operator/snapshot")) {
             throw new Error("injected browser snapshot transport failure");
           }
-          return originalFetch(input, init);
+          const response = await originalFetch(input, init);
+          if (window.__hideoutProof.delayDecisionInspect &&
+              method === "GET" &&
+              String(url).includes("/api/v1/decisions/")) {
+            await new Promise((resolve) => setTimeout(resolve, 250));
+          }
+          return response;
         };
       `
     });
@@ -567,6 +589,133 @@ async function main() {
     if (JSON.stringify(panelsVisible) !== JSON.stringify(expectedPanels)) {
       throw new Error(
         `console panels mismatch: ${JSON.stringify(panelsVisible)}`
+      );
+    }
+    const requiredAreasVisible = await evalValue(cdp, `Array.from(
+      document.querySelectorAll('#overviewBody [data-overview-area]')
+    ).filter((node) => {
+      const style = getComputedStyle(node);
+      const bounds = node.getBoundingClientRect();
+      return style.display !== "none" && style.visibility !== "hidden" &&
+        bounds.width > 0 && bounds.height > 0;
+    }).map((node) => node.dataset.overviewArea)`);
+    if (JSON.stringify(requiredAreasVisible) !==
+        JSON.stringify(expectedRequiredAreas)) {
+      throw new Error(
+        `required console areas mismatch: ` +
+        `${JSON.stringify(requiredAreasVisible)}`
+      );
+    }
+    await capture(cdp, "webui-overview.png");
+
+    await waitFor(
+      cdp,
+      `document.querySelector(
+        '[data-action="review-decision"][data-decision-id="' +
+        ${JSON.stringify(decisionID)} + '"]'
+      ) !== null`
+    );
+    await evalValue(cdp, `(() => {
+      const button = document.querySelector(
+        '[data-action="review-decision"][data-decision-id="' +
+        ${JSON.stringify(decisionID)} + '"]'
+      );
+      if (!button) throw new Error("visible decision review is unavailable");
+      button.click();
+      return true;
+    })()`);
+    const decisionReviewVisible = Boolean(await waitFor(
+      cdp,
+      `document.getElementById("consoleDialog").open &&
+       document.getElementById("dialogBody").innerText.includes(
+         ${JSON.stringify(decisionID)}
+       ) &&
+       document.querySelector('[data-action="claim-decision"]') !== null`
+    ));
+    await evalValue(cdp, `document.getElementById("dialogClose").click(); true`);
+    await waitFor(cdp, `!document.getElementById("consoleDialog").open`);
+
+    await evalValue(cdp, `(() => {
+      window.__hideoutProof.delayDecisionInspect = true;
+      const button = document.querySelector(
+        '[data-action="review-decision"][data-decision-id="' +
+        ${JSON.stringify(decisionID)} + '"]'
+      );
+      button.click();
+      document.getElementById("dialogClose").click();
+      return true;
+    })()`);
+    await delay(400);
+    const staleDecisionSuppressed = Boolean(await evalValue(cdp, `(() => {
+      window.__hideoutProof.delayDecisionInspect = false;
+      return !document.getElementById("consoleDialog").open;
+    })()`));
+    if (!staleDecisionSuppressed) {
+      throw new Error("closed decision review reopened from a stale response");
+    }
+
+    await waitFor(
+      cdp,
+      `document.querySelector(
+        '[data-action="ack-notice"][data-notice-id="' +
+        ${JSON.stringify(noticeID)} + '"]'
+      ) !== null`
+    );
+    const noticeBefore = await managerJSON(
+      `/api/v1/notices/${encodeURIComponent(noticeID)}`
+    );
+    await evalValue(cdp, `(() => {
+      const button = document.querySelector(
+        '[data-action="ack-notice"][data-notice-id="' +
+        ${JSON.stringify(noticeID)} + '"]'
+      );
+      if (!button || button.disabled) {
+        throw new Error("visible notice acknowledgement is unavailable");
+      }
+      button.click();
+      return true;
+    })()`);
+    const noticeVisibleStateChanged = Boolean(await waitFor(
+      cdp,
+      `!document.querySelector(
+        '[data-action="ack-notice"][data-notice-id="' +
+        ${JSON.stringify(noticeID)} + '"]'
+      ) && document.getElementById("overviewBody").innerText.includes(
+        ${JSON.stringify(`Acknowledged ${noticeID}.`)}
+      )`
+    ));
+    const noticeAfter = await managerJSON(
+      `/api/v1/notices/${encodeURIComponent(noticeID)}`
+    );
+    const noticeFetches = await evalValue(cdp, "window.__hideoutProof.fetches");
+    const noticeFetch = noticeFetches.find((entry) =>
+      String(entry.url).includes(
+        `/api/v1/notices/${encodeURIComponent(noticeID)}/ack`
+      )
+    );
+    let noticePayload = {};
+    try {
+      noticePayload = JSON.parse(noticeFetch && noticeFetch.body || "{}");
+    } catch {
+      noticePayload = {};
+    }
+    const noticeAcknowledgement = {
+      noticeId: noticeID,
+      requestObserved: Boolean(noticeFetch && noticeFetch.method === "POST"),
+      payloadValidated: noticePayload.noticeId === noticeID &&
+        noticePayload.surface === "webui",
+      responseHandled: Boolean(
+        noticeBefore.data && noticeBefore.data.acknowledged === false &&
+        noticeAfter.data && noticeAfter.data.acknowledged === true
+      ),
+      visibleStateChanged: noticeVisibleStateChanged
+    };
+    if (!Object.values(noticeAcknowledgement).every((value) =>
+      typeof value === "string" ? value.length > 0 : value === true
+    )) {
+      throw new Error(
+        `notice acknowledgement incomplete: ` +
+        `${JSON.stringify(noticeAcknowledgement)}`
       );
     }
 
@@ -1163,6 +1312,9 @@ async function main() {
 
     const result = {
       panelsVisible,
+      requiredAreasVisible,
+      decisionReviewVisible,
+      staleDecisionSuppressed,
       liveUpdateObserved,
       hiddenPollingDetected,
       activity: {
@@ -1176,6 +1328,7 @@ async function main() {
         filtersExercised
       },
       actionRoundTrip,
+      noticeAcknowledgement,
       authFailureObserved,
       credentialRefreshObserved,
       staleReadOnlyObserved,
@@ -1191,6 +1344,7 @@ async function main() {
         configurationMs: configurationMS
       },
       artifacts: {
+        "overview-screenshot": "webui-overview.png",
         screenshot: "webui-console.png",
         "stale-screenshot": "webui-stale.png",
         "mobile-screenshot": "webui-mobile.png",

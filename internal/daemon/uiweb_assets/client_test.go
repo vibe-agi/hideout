@@ -469,6 +469,197 @@ Client.migrationSecretInput({
 	}
 }
 
+func TestBrowserDecisionAndNoticeClientsUseAuthenticatedMemberRoutes(
+	t *testing.T,
+) {
+	runtime := goja.New()
+	value, err := runtime.RunString(`
+const operatorToken = "ui_" + "a".repeat(48);
+const decisionID = "decision-web-client";
+const noticeID = "notice-web-client";
+const claimToken = "claim_secret_web_client";
+const requests = [];
+let claimCalls = 0;
+var document = {title:"Hideout"};
+var window = {
+  HideoutConsole:{},
+  location:{hash:"#token=" + operatorToken,pathname:"/",search:""},
+  history:{replaceState:function() { window.location.hash = ""; }},
+  addEventListener:function() {}
+};
+class URLSearchParams {
+  constructor(raw) {
+    this.value = String(raw || "").startsWith("token=") ?
+      decodeURIComponent(String(raw).slice(6)) : "";
+  }
+  get(name) { return name === "token" ? this.value : null; }
+}
+class Headers {
+  constructor(initial) {
+    this.values = {};
+    for (const [name,value] of Object.entries(initial || {})) {
+      this.set(name,value);
+    }
+  }
+  set(name,value) { this.values[String(name).toLowerCase()] = String(value); }
+  get(name) { return this.values[String(name).toLowerCase()] || ""; }
+}
+class AbortController {
+  constructor() { this.signal = {}; }
+  abort() {}
+}
+var EventSource = function() {};
+var fetch = function(path,init) {
+  const method = init && init.method || "GET";
+  const body = init && init.body || "";
+  requests.push({
+    path,method,body,
+    tokenMatched:init.headers.get("X-Hideout-UI-Token") === operatorToken,
+    contentType:init.headers.get("Content-Type"),
+    credentials:init.credentials,
+    cache:init.cache,
+    signal:Boolean(init.signal),
+    keepalive:Boolean(init.keepalive)
+  });
+  let resource = "";
+  let data = {};
+  if (path === "/api/v1/decisions/" + decisionID) {
+    resource = "decision/inspect";
+    data = {
+      id:decisionID,revision:7,state:"pending",kind:"evidence.share",
+      preview:{summary:"review"},allowedActions:["approve","deny"],
+      defaultOutcome:"no-release"
+    };
+  } else if (path.endsWith("/claim")) {
+    resource = "decision/claim";
+    claimCalls++;
+    data = {
+      decisionId:decisionID,claimToken,
+      revision:claimCalls === 1 ? 8 : 10
+    };
+  } else if (path.endsWith("/approve")) {
+    resource = "decision/approve";
+    data = {decisionId:decisionID,status:"applied"};
+  } else if (path.endsWith("/release")) {
+    resource = "decision/release";
+    data = {decisionId:decisionID,state:"pending"};
+  } else if (path.endsWith("/ack")) {
+    resource = "notice/ack";
+    data = {noticeId:noticeID};
+  }
+  return Promise.resolve({
+    ok:true,status:200,statusText:"OK",
+    text:function() {
+      return Promise.resolve(JSON.stringify({
+        version:"hideout.manager-api/v1",resource,data,errors:[]
+      }));
+    }
+  });
+};
+` + mustAsset("client.js") + `
+const Client = window.HideoutConsole.Client;
+Client.decisionInspect(decisionID)
+  .then((record) => Client.decisionClaim(decisionID,record.revision))
+  .then((claim) => Client.decisionRelease(
+    decisionID,claim.claimToken,claim.revision,true
+  ))
+  .then(() => Client.decisionClaim(decisionID,9))
+  .then((claim) => Client.decisionResolve(
+    decisionID,"approve",claim.claimToken
+  ))
+  .then(() => Client.noticeAck(noticeID))
+  .then(() => JSON.stringify({requests,claimToken}));
+`)
+	if err != nil {
+		t.Fatalf("run browser action-center client: %v", err)
+	}
+	promise, ok := value.Export().(*goja.Promise)
+	if !ok || promise.State() != goja.PromiseStateFulfilled {
+		t.Fatalf("action-center promise=%T state=%v", value.Export(), promise)
+	}
+	var proof struct {
+		ClaimToken string `json:"claimToken"`
+		Requests   []struct {
+			Path         string `json:"path"`
+			Method       string `json:"method"`
+			Body         string `json:"body"`
+			TokenMatched bool   `json:"tokenMatched"`
+			ContentType  string `json:"contentType"`
+			Credentials  string `json:"credentials"`
+			Cache        string `json:"cache"`
+			Signal       bool   `json:"signal"`
+			Keepalive    bool   `json:"keepalive"`
+		} `json:"requests"`
+	}
+	if err := json.Unmarshal([]byte(promise.Result().String()), &proof); err != nil {
+		t.Fatal(err)
+	}
+	wantPaths := []string{
+		"/api/v1/decisions/decision-web-client",
+		"/api/v1/decisions/decision-web-client/claim",
+		"/api/v1/decisions/decision-web-client/release",
+		"/api/v1/decisions/decision-web-client/claim",
+		"/api/v1/decisions/decision-web-client/approve",
+		"/api/v1/notices/notice-web-client/ack",
+	}
+	if len(proof.Requests) != len(wantPaths) {
+		t.Fatalf("action-center requests=%+v", proof.Requests)
+	}
+	for index, request := range proof.Requests {
+		if request.Path != wantPaths[index] ||
+			strings.Contains(request.Path, proof.ClaimToken) ||
+			!request.TokenMatched || request.Credentials != "omit" ||
+			request.Cache != "no-store" || !request.Signal {
+			t.Fatalf("action-center request[%d]=%+v", index, request)
+		}
+		if index == 0 {
+			if request.Method != http.MethodGet || request.Body != "" {
+				t.Fatalf("decision inspect request=%+v", request)
+			}
+			continue
+		}
+		if request.Method != http.MethodPost ||
+			request.ContentType != "application/json" {
+			t.Fatalf("action-center mutation[%d]=%+v", index, request)
+		}
+		if request.Keepalive != (index == 2) {
+			t.Fatalf("action-center keepalive[%d]=%+v", index, request)
+		}
+	}
+	var claimBody, secondClaimBody, approveBody, releaseBody, noticeBody map[string]any
+	for encoded, target := range map[string]*map[string]any{
+		proof.Requests[1].Body: &claimBody,
+		proof.Requests[2].Body: &releaseBody,
+		proof.Requests[3].Body: &secondClaimBody,
+		proof.Requests[4].Body: &approveBody,
+		proof.Requests[5].Body: &noticeBody,
+	} {
+		if err := json.Unmarshal([]byte(encoded), target); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if claimBody["decisionId"] != "decision-web-client" ||
+		claimBody["expectedVersion"] != "hideout.decision/v1" ||
+		claimBody["expectedRevision"] != float64(7) ||
+		claimBody["surface"] != "webui" ||
+		claimBody["leaseSeconds"] != float64(60) ||
+		secondClaimBody["expectedRevision"] != float64(9) ||
+		approveBody["claimToken"] != proof.ClaimToken ||
+		releaseBody["claimToken"] != proof.ClaimToken ||
+		releaseBody["expectedRevision"] != float64(8) ||
+		noticeBody["noticeId"] != "notice-web-client" ||
+		noticeBody["surface"] != "webui" {
+		t.Fatalf(
+			"action-center bodies claim=%v secondClaim=%v approve=%v release=%v notice=%v",
+			claimBody,
+			secondClaimBody,
+			approveBody,
+			releaseBody,
+			noticeBody,
+		)
+	}
+}
+
 func TestBrowserClientBindsEventStreamToSnapshotSequence(t *testing.T) {
 	runtime := goja.New()
 	value, err := runtime.RunString(`
@@ -566,6 +757,16 @@ func TestBrowserClientAndAppHaveNoHealthyStreamPolling(t *testing.T) {
 		"root.State.streamConnected(state)",
 		`"&since="`,
 		`data-requires-authority="true"`,
+		"async function decisionInspect(",
+		"async function decisionClaim(",
+		"async function decisionRelease(",
+		"async function decisionResolve(",
+		"async function noticeAck(",
+		`acknowledge.dataset.action = "ack-notice"`,
+		`review.dataset.action = "review-decision"`,
+		"activeDecisionReview !== decision.id",
+		"result.claimToken,",
+		"result.revision,",
 	} {
 		if !strings.Contains(client+app+state, required) {
 			t.Fatalf("browser authority lifecycle missing %q", required)

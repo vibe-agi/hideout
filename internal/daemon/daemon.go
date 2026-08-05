@@ -632,20 +632,14 @@ func (d *Daemon) operatorSnapshot(
 	ctx context.Context,
 	query manager.OperatorSnapshotQuery,
 ) (manager.OperatorSnapshot, error) {
-	d.bus.mu.Lock()
-	defer d.bus.mu.Unlock()
-	sequence := d.bus.seq
+	// Reject malformed reads before decision maintenance. The API validates the
+	// same boundary, but this provider is also exercised directly in tests and
+	// must remain side-effect-free for invalid input.
+	if err := query.Validate(); err != nil {
+		return manager.OperatorSnapshot{}, err
+	}
 	service := manager.OperatorSnapshotService{
 		Core: d.api.Core,
-		Connection: manager.OperatorConnectionProviderFunc(
-			func(context.Context) (manager.OperatorConnectionProjection, error) {
-				return manager.OperatorConnectionProjection{
-					InstanceID: d.instanceID, CredentialGeneration: d.credentials.Generation(),
-					Sequence:     sequence,
-					StreamHealth: manager.OperatorStreamHealth{State: manager.OperatorHealthLive},
-				}, nil
-			},
-		),
 		Observation: manager.OperatorObservationProviderFunc(
 			func(
 				ctx context.Context,
@@ -668,7 +662,25 @@ func (d *Daemon) operatorSnapshot(
 		MutationCapabilities: manager.DefaultConfigurationCapabilities(true),
 		Now:                  d.api.Now,
 	}
-	return service.Build(ctx, query)
+	// Decision timeout/lease maintenance can publish an event. Complete it
+	// before taking the sequence fence so projection seeding cannot deadlock on
+	// a re-entrant event publication.
+	if err := service.Prepare(); err != nil {
+		return manager.OperatorSnapshot{}, err
+	}
+	d.bus.mu.Lock()
+	defer d.bus.mu.Unlock()
+	sequence := d.bus.seq
+	service.Connection = manager.OperatorConnectionProviderFunc(
+		func(context.Context) (manager.OperatorConnectionProjection, error) {
+			return manager.OperatorConnectionProjection{
+				InstanceID: d.instanceID, CredentialGeneration: d.credentials.Generation(),
+				Sequence:     sequence,
+				StreamHealth: manager.OperatorStreamHealth{State: manager.OperatorHealthLive},
+			}, nil
+		},
+	)
+	return service.BuildPrepared(ctx, query)
 }
 
 func lifecycleAuditDecision(kind string) string {

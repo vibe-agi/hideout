@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"sort"
 	"strings"
 	"testing"
@@ -20,21 +21,37 @@ import (
 )
 
 type BrowserResult struct {
-	PanelsVisible             []string           `json:"panelsVisible"`
-	LiveUpdateObserved        bool               `json:"liveUpdateObserved"`
-	HiddenPollingDetected     bool               `json:"hiddenPollingDetected"`
-	Activity                  BrowserActivity    `json:"activity"`
-	ActionRoundTrip           BrowserAction      `json:"actionRoundTrip"`
-	AuthFailureObserved       bool               `json:"authFailureObserved"`
-	CredentialRefreshObserved bool               `json:"credentialRefreshObserved"`
-	StaleReadOnlyObserved     bool               `json:"staleReadOnlyObserved"`
-	KeyboardNavigation        bool               `json:"keyboardNavigation"`
-	ResponsiveLayout          bool               `json:"responsiveLayout"`
-	AccessibilityViolations   []string           `json:"accessibilityViolations"`
-	DOMNodeCount              int                `json:"domNodeCount"`
-	MaxMountedRows            int                `json:"maxMountedRows"`
-	Performance               BrowserPerformance `json:"performance"`
-	Artifacts                 map[string]string  `json:"artifacts"`
+	PanelsVisible             []string            `json:"panelsVisible"`
+	RequiredAreasVisible      []string            `json:"requiredAreasVisible"`
+	DecisionReviewVisible     bool                `json:"decisionReviewVisible"`
+	StaleDecisionSuppressed   bool                `json:"staleDecisionSuppressed"`
+	LiveUpdateObserved        bool                `json:"liveUpdateObserved"`
+	HiddenPollingDetected     bool                `json:"hiddenPollingDetected"`
+	Activity                  BrowserActivity     `json:"activity"`
+	ActionRoundTrip           BrowserAction       `json:"actionRoundTrip"`
+	NoticeAcknowledgement     BrowserNoticeAction `json:"noticeAcknowledgement"`
+	AuthFailureObserved       bool                `json:"authFailureObserved"`
+	CredentialRefreshObserved bool                `json:"credentialRefreshObserved"`
+	StaleReadOnlyObserved     bool                `json:"staleReadOnlyObserved"`
+	KeyboardNavigation        bool                `json:"keyboardNavigation"`
+	ResponsiveLayout          bool                `json:"responsiveLayout"`
+	AccessibilityViolations   []string            `json:"accessibilityViolations"`
+	DOMNodeCount              int                 `json:"domNodeCount"`
+	MaxMountedRows            int                 `json:"maxMountedRows"`
+	Performance               BrowserPerformance  `json:"performance"`
+	Artifacts                 map[string]string   `json:"artifacts"`
+}
+
+var browserRequiredAreas = []string{
+	"Action Required",
+	"Stream",
+	"Decisions",
+	"Notices",
+	"HostFS Writes",
+	"Background",
+	"Doctor",
+	"Package/Support",
+	"Audit",
 }
 
 type BrowserActivity struct {
@@ -57,6 +74,14 @@ type BrowserAction struct {
 	OperationID         string `json:"operationId"`
 	RevisionAdvanced    bool   `json:"revisionAdvanced"`
 	TerminalPhase       string `json:"terminalPhase"`
+}
+
+type BrowserNoticeAction struct {
+	NoticeID            string `json:"noticeId"`
+	RequestObserved     bool   `json:"requestObserved"`
+	PayloadValidated    bool   `json:"payloadValidated"`
+	ResponseHandled     bool   `json:"responseHandled"`
+	VisibleStateChanged bool   `json:"visibleStateChanged"`
 }
 
 type BrowserPerformance struct {
@@ -83,6 +108,8 @@ func runBrowserProof(t *testing.T, prereq Prerequisites, fixture Fixture, outDir
 		"--token", fixture.Token,
 		"--fixture-url", fixture.ControlURL,
 		"--fixture-key", fixture.ControlKey,
+		"--notice-id", fixture.NoticeID,
+		"--decision-id", fixture.DecisionID,
 		"--session-id", fixture.BrowserEvidence.SessionID,
 		"--execution-id", fixture.BrowserEvidence.ExecutionID,
 		"--file-path", fixture.BrowserEvidence.FilePath,
@@ -117,6 +144,9 @@ func runBrowserProof(t *testing.T, prereq Prerequisites, fixture Fixture, outDir
 		t.Fatalf("browser proof did not observe live update: %+v", result)
 	}
 	if len(result.PanelsVisible) != 11 ||
+		!slices.Equal(result.RequiredAreasVisible, browserRequiredAreas) ||
+		!result.DecisionReviewVisible ||
+		!result.StaleDecisionSuppressed ||
 		result.Activity.SessionID != fixture.BrowserEvidence.SessionID ||
 		result.Activity.RecordCount != fixture.BrowserEvidence.RecordCount ||
 		!result.Activity.FactsMatched ||
@@ -148,6 +178,16 @@ func runBrowserProof(t *testing.T, prereq Prerequisites, fixture Fixture, outDir
 			result.ActionRoundTrip,
 		)
 	}
+	if result.NoticeAcknowledgement.NoticeID != fixture.NoticeID ||
+		!result.NoticeAcknowledgement.RequestObserved ||
+		!result.NoticeAcknowledgement.PayloadValidated ||
+		!result.NoticeAcknowledgement.ResponseHandled ||
+		!result.NoticeAcknowledgement.VisibleStateChanged {
+		t.Fatalf(
+			"browser proof did not acknowledge the visible notice: %+v",
+			result.NoticeAcknowledgement,
+		)
+	}
 	if result.DOMNodeCount <= 0 || result.DOMNodeCount > 15000 ||
 		result.MaxMountedRows <= 0 || result.MaxMountedRows > 200 ||
 		result.Performance.LoadToLiveMS <= 0 ||
@@ -163,9 +203,10 @@ func runBrowserProof(t *testing.T, prereq Prerequisites, fixture Fixture, outDir
 func writeBrowserProofs(t *testing.T, outDir, artifactPrefix string, result BrowserResult) {
 	t.Helper()
 	proofs := []productevidence.ProofEntry{
-		browserProof(productevidence.Proof021WebUIBrowserConsole, "021.FR-001", "WebUI opens in a real local browser context", resultArtifacts(t, outDir, artifactPrefix, result)),
-		browserProof(productevidence.Proof021WebUIBrowserLive, "021.FR-003", "A healthy daemon stream event changes visible browser state without hidden polling", resultArtifacts(t, outDir, artifactPrefix, result)),
-		browserProof(productevidence.Proof021WebUIBrowserAuth, "021.FR-005", "Wrong credentials produce a visible browser refusal", resultArtifacts(t, outDir, artifactPrefix, result)),
+		browserProof(productevidence.Proof021WebUIBrowserConsole, []string{"021.FR-001", "021.FR-002"}, "WebUI opens in a real local browser context and renders every required operator area", resultArtifacts(t, outDir, artifactPrefix, result)),
+		browserProof(productevidence.Proof021WebUIBrowserLive, []string{"021.FR-003"}, "A healthy daemon stream event changes visible browser state without hidden polling", resultArtifacts(t, outDir, artifactPrefix, result)),
+		browserProof(productevidence.Proof021WebUIBrowserNoticeAck, []string{"021.FR-004"}, "The visible WebUI acknowledges one notice through the authenticated Manager route", resultArtifacts(t, outDir, artifactPrefix, result)),
+		browserProof(productevidence.Proof021WebUIBrowserAuth, []string{"021.FR-005"}, "Wrong credentials produce a visible browser refusal", resultArtifacts(t, outDir, artifactPrefix, result)),
 	}
 	path := filepath.Join(outDir, "proofs.jsonl")
 	file, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
@@ -185,8 +226,19 @@ func writeBrowserProofs(t *testing.T, outDir, artifactPrefix string, result Brow
 	}
 }
 
-func browserProof(proofID, claimID, description string, artifacts []productevidence.ArtifactRef) productevidence.ProofEntry {
+func browserProof(
+	proofID string,
+	claimIDs []string,
+	description string,
+	artifacts []productevidence.ArtifactRef,
+) productevidence.ProofEntry {
 	host := productevidence.CurrentHost()
+	claims := make([]productevidence.CoveredClaim, 0, len(claimIDs))
+	for _, claimID := range claimIDs {
+		claims = append(claims, productevidence.CoveredClaim{
+			ClaimID: claimID, Source: "spec", Description: description, Scope: "browser",
+		})
+	}
 	return productevidence.ProofEntry{
 		ProofID:        proofID,
 		FeatureID:      productevidence.Feature021,
@@ -194,12 +246,7 @@ func browserProof(proofID, claimID, description string, artifacts []productevide
 		EvidenceClass:  "local-ui-e2e",
 		Status:         productevidence.StatusPassed,
 		CommandSummary: "scripts/test-ui-e2e.sh --browser --out <evidence-dir>",
-		CoveredClaims: []productevidence.CoveredClaim{{
-			ClaimID:     claimID,
-			Source:      "spec",
-			Description: description,
-			Scope:       "browser",
-		}},
+		CoveredClaims:  claims,
 		Prerequisites: []productevidence.PrerequisiteStatus{
 			{Name: "node", Status: "available"},
 			{Name: "chrome", Status: "available"},
@@ -238,7 +285,7 @@ func resultArtifacts(t *testing.T, outDir, artifactPrefix string, result Browser
 func browserArtifactKind(t *testing.T, role string) string {
 	t.Helper()
 	switch role {
-	case "screenshot", "stale-screenshot", "mobile-screenshot":
+	case "overview-screenshot", "screenshot", "stale-screenshot", "mobile-screenshot":
 		return "screenshot"
 	case "accessibility":
 		return "docs-report"

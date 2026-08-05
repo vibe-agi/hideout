@@ -18,7 +18,12 @@ import (
 	"github.com/vibe-agi/hideout/internal/workspaceattach"
 )
 
-const noticeID = "ui-e2e-notice"
+const (
+	noticeID            = "ui-e2e-notice"
+	backgroundNoticeID  = "ui-e2e-background"
+	decisionID          = "dec_ui_e2e_review"
+	hostFSWriteDecision = "dec_ui_e2e_hostfs_write"
+)
 
 const (
 	workspaceFixtureKey       = "workspace-view-e2e"
@@ -30,16 +35,19 @@ const (
 )
 
 type Fixture struct {
-	StoreRoot         string                 `json:"storeRoot"`
-	UIURL             string                 `json:"uiURL"`
-	BaseURL           string                 `json:"baseURL"`
-	Token             string                 `json:"token"`
-	NoticeID          string                 `json:"noticeId"`
-	ControlURL        string                 `json:"-"`
-	ControlKey        string                 `json:"-"`
-	EnvironmentID     string                 `json:"environmentId"`
-	MachineIdentityID string                 `json:"machineIdentityId"`
-	BrowserEvidence   BrowserConsoleEvidence `json:"browserEvidence"`
+	StoreRoot          string                 `json:"storeRoot"`
+	UIURL              string                 `json:"uiURL"`
+	BaseURL            string                 `json:"baseURL"`
+	Token              string                 `json:"token"`
+	NoticeID           string                 `json:"noticeId"`
+	BackgroundNoticeID string                 `json:"backgroundNoticeId"`
+	DecisionID         string                 `json:"decisionId"`
+	HostFSDecisionID   string                 `json:"hostfsDecisionId"`
+	ControlURL         string                 `json:"-"`
+	ControlKey         string                 `json:"-"`
+	EnvironmentID      string                 `json:"environmentId"`
+	MachineIdentityID  string                 `json:"machineIdentityId"`
+	BrowserEvidence    BrowserConsoleEvidence `json:"browserEvidence"`
 
 	daemon         *daemon.Daemon
 	controlServer  *httptest.Server
@@ -98,6 +106,41 @@ func StartFixture() (Fixture, error) {
 		return Fixture{}, err
 	}
 	core := manager.New(store)
+	decisionTimeout := time.Now().UTC().Add(time.Hour)
+	if _, err := core.CreateDecision(decision.Decision{
+		ID: decisionID, Kind: decision.KindEvidenceShare,
+		Source: decision.Source{
+			Profile: "default", Backend: "native", Surface: "ui-e2e",
+		},
+		State: decision.StatePending,
+		Preview: decision.Preview{
+			Summary: "UI E2E evidence review requires a decision",
+		},
+		AllowedActions: []string{decision.ActionApprove, decision.ActionDeny},
+		DefaultOutcome: decision.DefaultOutcomeNoRelease,
+		TimeoutAt:      decisionTimeout,
+		AuditRef:       "audit:decision:" + decisionID,
+	}); err != nil {
+		_ = os.RemoveAll(root)
+		return Fixture{}, err
+	}
+	if _, err := core.CreateDecision(decision.Decision{
+		ID: hostFSWriteDecision, Kind: decision.KindHostFSWrite,
+		Source: decision.Source{
+			Profile: "default", Backend: "native", Surface: "ui-e2e",
+		},
+		State: decision.StatePending,
+		Preview: decision.Preview{
+			Summary: "UI E2E staged HostFS write awaits review",
+		},
+		AllowedActions: []string{decision.ActionApply, decision.ActionDiscard},
+		DefaultOutcome: decision.DefaultOutcomeDiscard,
+		TimeoutAt:      decisionTimeout,
+		AuditRef:       "audit:decision:" + hostFSWriteDecision,
+	}); err != nil {
+		_ = os.RemoveAll(root)
+		return Fixture{}, err
+	}
 	if _, err := core.CreateNotice(decision.Notice{
 		ID:       noticeID,
 		Kind:     decision.KindPrivilegeStatus,
@@ -107,6 +150,22 @@ func StartFixture() (Fixture, error) {
 		Payload:  map[string]any{"reason": "ui-e2e-visible-notice"},
 		Preview:  decision.Preview{Summary: "UI E2E notice requires acknowledgement"},
 		AuditRef: "audit:notice:" + noticeID,
+	}); err != nil {
+		_ = os.RemoveAll(root)
+		return Fixture{}, err
+	}
+	if _, err := core.CreateNotice(decision.Notice{
+		ID:       backgroundNoticeID,
+		Kind:     decision.KindBackgroundStatus,
+		Severity: decision.NoticeSeverityInfo,
+		Status:   "running",
+		Source: decision.Source{
+			Profile: "default", Backend: "native", Surface: "ui-e2e",
+		},
+		Preview: decision.Preview{
+			Summary: "UI E2E background operation status is visible",
+		},
+		AuditRef: "audit:notice:" + backgroundNoticeID,
 	}); err != nil {
 		_ = os.RemoveAll(root)
 		return Fixture{}, err
@@ -132,15 +191,18 @@ func StartFixture() (Fixture, error) {
 	}
 	base = strings.TrimRight(base, "/")
 	fixture := Fixture{
-		StoreRoot:         root,
-		UIURL:             browserURL,
-		BaseURL:           base,
-		Token:             d.Token(),
-		NoticeID:          noticeID,
-		ControlKey:        workspaceFixtureKey,
-		EnvironmentID:     environmentRecord.ID,
-		MachineIdentityID: environmentRecord.MachineIdentityID,
-		daemon:            d,
+		StoreRoot:          root,
+		UIURL:              browserURL,
+		BaseURL:            base,
+		Token:              d.Token(),
+		NoticeID:           noticeID,
+		BackgroundNoticeID: backgroundNoticeID,
+		DecisionID:         decisionID,
+		HostFSDecisionID:   hostFSWriteDecision,
+		ControlKey:         workspaceFixtureKey,
+		EnvironmentID:      environmentRecord.ID,
+		MachineIdentityID:  environmentRecord.MachineIdentityID,
+		daemon:             d,
 	}
 	fixture.controlServer = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost || r.Header.Get("X-Hideout-E2E-Key") != workspaceFixtureKey {

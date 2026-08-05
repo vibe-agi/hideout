@@ -72,6 +72,10 @@ func (c Core) ListDecisions(req DecisionListRequest) ([]decision.Decision, error
 	if err := c.maintainDecisionCenter(); err != nil {
 		return nil, err
 	}
+	return c.decisionsCurrent(req)
+}
+
+func (c Core) decisionsCurrent(req DecisionListRequest) ([]decision.Decision, error) {
 	store, err := c.decisionStore()
 	if err != nil {
 		return nil, err
@@ -430,6 +434,10 @@ func (c Core) CreateNotice(n decision.Notice) (decision.Notice, error) {
 }
 
 func (c Core) ListNotices(req NoticeListRequest) ([]decision.Notice, error) {
+	return c.noticesCurrent(req)
+}
+
+func (c Core) noticesCurrent(req NoticeListRequest) ([]decision.Notice, error) {
 	store, err := c.decisionStore()
 	if err != nil {
 		return nil, err
@@ -470,6 +478,10 @@ func (c Core) DecisionStatus() (DecisionStatus, error) {
 	if err := c.maintainDecisionCenter(); err != nil {
 		return DecisionStatus{}, err
 	}
+	return c.decisionStatusCurrent()
+}
+
+func (c Core) decisionStatusCurrent() (DecisionStatus, error) {
 	store, err := c.decisionStore()
 	if err != nil {
 		return DecisionStatus{}, err
@@ -678,6 +690,7 @@ func (c Core) emitNotice(n decision.Notice, phase string) {
 		"backend":      n.Source.Backend,
 		"acknowledged": n.Acknowledged,
 		"preview":      n.Preview,
+		"revision":     n.Revision,
 	})
 }
 

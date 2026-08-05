@@ -363,10 +363,15 @@ func TestEventBusBuildsDecisionAndNoticePayloads(t *testing.T) {
 		"status":         "pending",
 		"defaultOutcome": "discard",
 		"profile":        "default",
+		"preview":        map[string]any{"summary": "Review staged write"},
+		"revision":       3,
 		"claimToken":     "claim_0123456789abcdef0123456789abcdef",
 	})
 	decisionEvent := <-sub.ch
-	if decisionEvent.Kind != liveconsole.KindDecision || decisionEvent.Payload.DecisionID != "dec-1" || decisionEvent.Payload.RecordKind != "hostfs.write" {
+	if decisionEvent.Kind != liveconsole.KindDecision ||
+		decisionEvent.Payload.DecisionID != "dec-1" ||
+		decisionEvent.Payload.RecordKind != "hostfs.write" ||
+		decisionEvent.Payload.Revision != 3 {
 		t.Fatalf("decision payload mismatch: %+v", decisionEvent)
 	}
 	assertValidDaemonEvent(t, decisionEvent)
@@ -381,9 +386,14 @@ func TestEventBusBuildsDecisionAndNoticePayloads(t *testing.T) {
 		"status":       "degraded",
 		"severity":     "warning",
 		"acknowledged": false,
+		"preview":      map[string]any{"summary": "Privilege coverage degraded"},
+		"revision":     2,
 	})
 	noticeEvent := <-sub.ch
-	if noticeEvent.Kind != liveconsole.KindNotice || noticeEvent.Payload.NoticeID != "notice-1" || noticeEvent.Payload.RecordKind != "privilege.status" {
+	if noticeEvent.Kind != liveconsole.KindNotice ||
+		noticeEvent.Payload.NoticeID != "notice-1" ||
+		noticeEvent.Payload.RecordKind != "privilege.status" ||
+		noticeEvent.Payload.Revision != 2 {
 		t.Fatalf("notice payload mismatch: %+v", noticeEvent)
 	}
 	assertValidDaemonEvent(t, noticeEvent)

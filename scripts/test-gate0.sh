@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-set -euo pipefail
+set -Eeuo pipefail
 
 # Gate 0 is a verifier, never a module-graph editor. Pin the mode so an
 # operator's ambient GOFLAGS cannot dirty or silently repair the candidate.
@@ -67,7 +67,10 @@ gate0_release_preflight() {
     printf 'gate0: Lima version=%s, want=2.2.0\n' "$lima_version" >&2
     return 1
   }
-  scripts/test-validation-ladder.sh
+  # This function is also called from a conditional failure-reporting wrapper.
+  # Guard the nested script explicitly because Bash otherwise suppresses
+  # errexit throughout a function invoked by `if ! function`.
+  scripts/test-validation-ladder.sh || return 1
   printf \
     'gate0: preflight=passed go=%s java=%s javaArch=%s hostArch=%s shellcheck=%s markdownlint=%s lima=%s vmBoots=0\n' \
     "$actual_go_version" "$HIDEOUT_JAVA_VERSION" "$HIDEOUT_JAVA_ARCH" \
@@ -145,8 +148,9 @@ gate0_stage_started_epoch="$gate0_run_started_epoch"
 gate0_run_completed=0
 if ! gate0_release_preflight; then
   printf \
-    'gate0: result=failed shard=%s currentStage=preflight elapsedSeconds=%s minimumDiagnosticScope=preflight releaseAcceptanceScope=full-gate\n' \
-    "$gate0_shard" "$(( $(date +%s) - gate0_run_started_epoch ))" >&2
+    'gate0: result=failed shard=%s currentStage=preflight currentLane=preflight failureLine=none diagnosticCommand=%q elapsedSeconds=%s minimumDiagnosticScope=preflight releaseAcceptanceScope=full-gate checkpointReused=false vmBoots=0 restartRequired=false powerCycleRequired=false\n' \
+    "$gate0_shard" 'scripts/test-gate0.sh --preflight' \
+    "$(( $(date +%s) - gate0_run_started_epoch ))" >&2
   exit 1
 fi
 
@@ -193,6 +197,35 @@ gate0_source_fingerprint() {
 }
 
 gate0_source_before="$(gate0_source_fingerprint)"
+gate0_failure_line="none"
+gate0_failure_command="none"
+gate0_failure_lane="none"
+
+gate0_record_failure() {
+  local line="$1" command="$2"
+  if [ "$gate0_failure_command" = "none" ]; then
+    gate0_failure_line="$line"
+    gate0_failure_command="$command"
+    case "$command" in
+      scripts/*)
+        gate0_failure_lane="${command%% *}"
+        ;;
+      *)
+        gate0_failure_lane="$gate0_current_stage"
+        ;;
+    esac
+    printf 'gate0: command-failed stage=%s lane=%s line=%s command=%q\n' \
+      "$gate0_current_stage" "$gate0_failure_lane" \
+      "$gate0_failure_line" "$gate0_failure_command" >&2
+  fi
+}
+
+gate0_capture_error() {
+  local gate0_error_status=$? line="$1" command="$2"
+  gate0_record_failure "$line" "$command"
+  return "$gate0_error_status"
+}
+
 gate0_verify_source_unchanged() {
   local gate0_exit_code=$?
   local source_after now_epoch result minimum_scope acceptance_scope
@@ -217,12 +250,14 @@ gate0_verify_source_unchanged() {
     acceptance_scope="full-gate"
   fi
   printf \
-    'gate0: result=%s shard=%s currentStage=%s elapsedSeconds=%s minimumDiagnosticScope=%s releaseAcceptanceScope=%s checkpointReused=false vmBoots=0\n' \
+    'gate0: result=%s shard=%s currentStage=%s currentLane=%s failureLine=%s diagnosticCommand=%q elapsedSeconds=%s minimumDiagnosticScope=%s releaseAcceptanceScope=%s checkpointReused=false vmBoots=0 restartRequired=false powerCycleRequired=false\n' \
     "$result" "$gate0_shard" "$gate0_current_stage" \
+    "$gate0_failure_lane" "$gate0_failure_line" "$gate0_failure_command" \
     "$((now_epoch - gate0_run_started_epoch))" "$minimum_scope" \
     "$acceptance_scope"
   exit "$gate0_exit_code"
 }
+trap 'gate0_capture_error "$LINENO" "$BASH_COMMAND"' ERR
 trap gate0_verify_source_unchanged EXIT
 
 gate0_begin_stage foundation
@@ -238,6 +273,7 @@ unformatted="$(gofmt -l cmd internal test)"
 if [ -n "$unformatted" ]; then
   echo "gate0: gofmt required for:" >&2
   echo "$unformatted" >&2
+  gate0_record_failure "$LINENO" "gofmt -l cmd internal test"
   exit 1
 fi
 go test -failfast -p "$go_test_parallelism" -count=1 ./...
@@ -374,6 +410,7 @@ grep -q '"--skip-init"' packaging/homebrew/hideout.rb
 grep -q '"package", "verify", prefix' packaging/homebrew/hideout.rb
 if grep -q 'depends_on "go"' packaging/homebrew/hideout.rb; then
   echo "gate0: Homebrew formula must consume the signed package, not rebuild source" >&2
+  gate0_record_failure "$LINENO" "grep -q 'depends_on \"go\"' packaging/homebrew/hideout.rb"
   exit 1
 fi
 grep -q 'Initialization Is Planned, Not Scripted' docs/architecture-principles.md
@@ -389,6 +426,7 @@ printf '%s\n' "$phase1_required_plan" | grep -q 'Gate 4 host escape boundary dry
 if printf '%s\n' "$phase1_required_plan" | grep -Eiq 'Capability probe|lab|Web UI|hideoutd|daemon'; then
   echo "gate0: required Phase 1 plan must not depend on lab commands, Web UI, or daemon" >&2
   printf '%s\n' "$phase1_required_plan" >&2
+  gate0_record_failure "$LINENO" "scripts/test-phase1.sh --required"
   exit 1
 fi
 
@@ -444,6 +482,7 @@ grep -q 'phase1-plan: Gate 2 exact runtime family developer-standard' "$release_
 grep -q 'phase1-plan: Gate 3 exact runtime family developer-standard' "$release_tmp/evidence/test-release-dogfood.log"
 if grep -R --fixed-strings "$release_secret" "$release_tmp" >/dev/null 2>&1; then
   echo "gate0: release dogfood evidence leaked operator proxy URL" >&2
+  gate0_record_failure "$LINENO" "grep -R --fixed-strings <redacted> <release-evidence>"
   exit 1
 fi
 rm -rf "$release_tmp"
@@ -454,7 +493,11 @@ gate0_begin_stage ui-acceptance
 # evidence; CI provisions Chrome, so a browser regression fails before the
 # longer product-smoke stage.
 ui_e2e_tmp="$(mktemp -d "${TMPDIR:-/tmp}/hideout-ui-e2e-gate0.XXXXXX")"
-scripts/test-ui-e2e.sh --all --out "$ui_e2e_tmp"
+if [ "$gate0_shard" = "non-formal" ]; then
+  scripts/test-ui-e2e.sh --all --require-executed --out "$ui_e2e_tmp"
+else
+  scripts/test-ui-e2e.sh --all --out "$ui_e2e_tmp"
+fi
 rm -rf "$ui_e2e_tmp"
 
 gate0_begin_stage product-smokes
@@ -594,12 +637,14 @@ public_alpha_tmp="$(mktemp -d "${TMPDIR:-/tmp}/hideout-public-alpha-gate0.XXXXXX
 if ! scripts/package-local.sh \
   --out "$public_alpha_tmp/hideout-v0.1.0-dev.0-darwin-arm64.tar.gz" >/dev/null; then
   echo "gate0: public-alpha package build failed" >&2
+  gate0_record_failure "$LINENO" "scripts/package-local.sh --out <public-alpha-package>"
   exit 1
 fi
 if ! scripts/test-public-alpha-clean-install.sh \
   --package "$public_alpha_tmp/hideout-v0.1.0-dev.0-darwin-arm64.tar.gz" \
   --out "$public_alpha_tmp/clean-install.json" >/dev/null; then
   echo "gate0: public-alpha clean install failed" >&2
+  gate0_record_failure "$LINENO" "scripts/test-public-alpha-clean-install.sh --package <public-alpha-package>"
   exit 1
 fi
 if ! jq -e '
@@ -614,6 +659,7 @@ if ! jq -e '
 ' "$public_alpha_tmp/clean-install.json" >/dev/null; then
   echo "gate0: public-alpha clean-install evidence mismatch:" >&2
   cat "$public_alpha_tmp/clean-install.json" >&2 || true
+  gate0_record_failure "$LINENO" "jq -e <public-alpha-clean-install-contract>"
   exit 1
 fi
 rm -rf "$public_alpha_tmp"

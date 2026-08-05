@@ -69,8 +69,8 @@
    *   exportOutcomes?:Array<Object>,
    *   cleanupOutcomes?:Array<Object>,
    *   hostfsWrites?:Array<Object>,
-   *   decisions?:Array<Object>,
-   *   notices?:Array<Object>,
+   *   decisions:Array<Object>,
+   *   notices:Array<Object>,
    *   lifecycle?:Array<Object>
    * }} OperatorSnapshot
    */
@@ -146,13 +146,61 @@
     }
     for (const name of [
       "profiles", "sessions", "environments", "activity", "coverage", "risks",
-      "operations", "migrations", "capabilities", "nextActions"
+      "operations", "migrations", "decisions", "notices", "capabilities",
+      "nextActions"
     ]) {
       if (!Array.isArray(snapshot[name])) {
         throw new Error(`snapshot ${name} is invalid`);
       }
     }
+    for (const projection of snapshot.decisions) {
+      validateDecisionProjection(projection);
+    }
+    for (const projection of snapshot.notices) {
+      validateNoticeProjection(projection);
+    }
     return snapshot;
+  }
+
+  /** @param {unknown} value */
+  function validateDecisionProjection(value) {
+    if (!isObject(value) ||
+        !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$/.test(value.id || "") ||
+        ![
+          "hostfs.write", "hostfs.read", "host-app.open-resource",
+          "adapter.proposal", "evidence.share"
+        ].includes(value.kind) ||
+        ![
+          "pending", "claimed", "approved", "applied", "denied",
+          "discarded", "timed-out", "failed", "stale"
+        ].includes(value.status) ||
+        !boundedText(value.summary, 2048) || value.summary.length === 0 ||
+        !boundedText(value.defaultOutcome, 64) ||
+        value.defaultOutcome.length === 0 ||
+        !Number.isInteger(value.revision) || value.revision < 1) {
+      throw new Error("decision projection is invalid");
+    }
+    const claimed = value.status === "claimed";
+    if (claimed !== Boolean(value.claimSurface) ||
+        (claimed && !validTimestamp(value.claimExpiresAt))) {
+      throw new Error("decision claim projection is invalid");
+    }
+  }
+
+  /** @param {unknown} value */
+  function validateNoticeProjection(value) {
+    if (!isObject(value) ||
+        !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$/.test(value.id || "") ||
+        ![
+          "privilege.status", "background.status", "runtime.status"
+        ].includes(value.kind) ||
+        !boundedText(value.status, 128) || value.status.length === 0 ||
+        !boundedText(value.summary, 2048) || value.summary.length === 0 ||
+        !["info", "warning", "error"].includes(value.severity) ||
+        typeof value.acknowledged !== "boolean" ||
+        !Number.isInteger(value.revision) || value.revision < 1) {
+      throw new Error("notice projection is invalid");
+    }
   }
 
   /** @param {Record<string, any>} projection */
@@ -513,8 +561,8 @@
     snapshot.exportOutcomes = [];
     snapshot.cleanupOutcomes = [];
     snapshot.hostfsWrites = [];
-    snapshot.decisions = [];
-    snapshot.notices = [];
+    snapshot.decisions = snapshot.decisions.slice();
+    snapshot.notices = snapshot.notices.slice();
     snapshot.lifecycle = [];
   }
 
@@ -1024,12 +1072,13 @@
         );
         break;
       case "decision":
-        state.snapshot.decisions = upsertTail(
+        state.snapshot.decisions = upsertProjection(
           state.snapshot.decisions || [],
           {
             id: payload.decisionId,
             kind: payload.recordKind,
             status: payload.status,
+            summary: payload.preview && payload.preview.summary || "",
             defaultOutcome: payload.defaultOutcome,
             profile: payload.profile,
             session: payload.session,
@@ -1045,17 +1094,19 @@
         );
         break;
       case "notice":
-        state.snapshot.notices = upsertTail(
+        state.snapshot.notices = upsertProjection(
           state.snapshot.notices || [],
           {
             id: payload.noticeId,
             kind: payload.recordKind,
             status: payload.status,
+            summary: payload.preview && payload.preview.summary || "",
             severity: payload.severity,
             acknowledged: Boolean(payload.acknowledged),
             profile: payload.profile,
             session: payload.session,
-            backend: payload.backend
+            backend: payload.backend,
+            revision: payload.revision
           },
           "id"
         );

@@ -540,6 +540,8 @@ func newActivityCLIFixture(t *testing.T) activityCLIFixture {
 		Activity: []manager.ActivityProjection{record},
 		Coverage: []manager.CoverageProjection{coverage},
 		Risks:    []manager.RiskFinding{}, Operations: []manager.Operation{},
+		Decisions:    []manager.OperatorDecisionProjection{},
+		Notices:      []manager.OperatorNoticeProjection{},
 		Capabilities: []manager.OperatorCapabilityProjection{},
 		NextActions:  []string{},
 	}

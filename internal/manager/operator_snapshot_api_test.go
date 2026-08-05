@@ -98,6 +98,8 @@ func TestOperatorSnapshotRouteCoversHealthyIdleConcurrentBlockedAndScopedViews(t
 							Profiles:     []ProfileProjection{}, Sessions: sessions,
 							Activity: []ActivityProjection{}, Coverage: []CoverageProjection{},
 							Risks: slices.Clone(scenario.risks), Operations: []Operation{},
+							Decisions:    []OperatorDecisionProjection{},
+							Notices:      []OperatorNoticeProjection{},
 							Capabilities: slices.Clone(scenario.capabilities), NextActions: []string{},
 						}, nil
 					},

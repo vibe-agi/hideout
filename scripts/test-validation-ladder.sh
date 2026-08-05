@@ -28,16 +28,64 @@ assert_before() {
 gate0="scripts/test-gate0.sh"
 gate0_release_contracts="$(line_of "$gate0" 'gate0_begin_stage release-contracts')"
 gate0_ui_stage="$(line_of "$gate0" 'gate0_begin_stage ui-acceptance')"
-gate0_ui_run="$(line_of "$gate0" 'scripts/test-ui-e2e.sh --all --out "$ui_e2e_tmp"')"
+gate0_ui_required="$(line_of "$gate0" '  scripts/test-ui-e2e.sh --all --require-executed --out "$ui_e2e_tmp"')"
+gate0_ui_tolerant="$(line_of "$gate0" '  scripts/test-ui-e2e.sh --all --out "$ui_e2e_tmp"')"
 gate0_product_smokes="$(line_of "$gate0" 'gate0_begin_stage product-smokes')"
 gate0_release_surface="$(line_of "$gate0" 'gate0_begin_stage release-surface')"
 assert_before 'Gate 0 release contracts before UI acceptance' \
   "$gate0_release_contracts" "$gate0_ui_stage"
-assert_before 'Gate 0 UI stage before its proof' "$gate0_ui_stage" "$gate0_ui_run"
-assert_before 'Gate 0 UI proof before product smokes' \
-  "$gate0_ui_run" "$gate0_product_smokes"
+assert_before 'Gate 0 UI stage before required CI proof' \
+  "$gate0_ui_stage" "$gate0_ui_required"
+assert_before 'Gate 0 UI stage before prerequisite-tolerant local proof' \
+  "$gate0_ui_stage" "$gate0_ui_tolerant"
+assert_before 'Gate 0 required UI proof before product smokes' \
+  "$gate0_ui_required" "$gate0_product_smokes"
+assert_before 'Gate 0 local UI proof before product smokes' \
+  "$gate0_ui_tolerant" "$gate0_product_smokes"
 assert_before 'Gate 0 product smokes before release surface' \
   "$gate0_product_smokes" "$gate0_release_surface"
+
+for gate0_diagnostic_marker in \
+  'set -Eeuo pipefail' \
+  'trap '\''gate0_capture_error "$LINENO" "$BASH_COMMAND"'\'' ERR' \
+  'gate0_record_failure "$line" "$command"' \
+  'currentLane=%s failureLine=%s diagnosticCommand=%q' \
+  'scripts/test-validation-ladder.sh || return 1'; do
+  if ! grep -Fq "$gate0_diagnostic_marker" "$gate0"; then
+    printf 'validation-ladder: Gate 0 diagnostic contract missing: %s\n' \
+      "$gate0_diagnostic_marker" >&2
+    exit 1
+  fi
+done
+
+if ! grep -Fq \
+    'go run ./internal/productevidence/cmd/validate-021 "$manifest"' \
+    scripts/test-ui-e2e.sh; then
+  echo 'validation-ladder: required UI run does not close against the proof registry' >&2
+  exit 1
+fi
+if ! grep -Fq \
+    '[ "$want_manifest$want_browser$want_tui" = "111" ]' \
+    scripts/test-ui-e2e.sh; then
+  echo 'validation-ladder: UI registry closure is not bound to the complete lane set' >&2
+  exit 1
+fi
+
+if grep -Fq 'internal/manager/server.go' scripts/test-live-console-smoke.sh; then
+  echo 'validation-ladder: live-console smoke still asserts the retired Manager WebUI owner' >&2
+  exit 1
+fi
+for live_console_binding in \
+  'internal/daemon/uiweb_assets/client.js' \
+  'internal/daemon/uiweb_assets/state.js' \
+  'internal/daemon/uiweb_assets/app.js' \
+  'TestBrowserDecisionAndNoticeClients'; do
+  if ! grep -Fq "$live_console_binding" scripts/test-live-console-smoke.sh; then
+    printf 'validation-ladder: daemon-owned live-console smoke binding missing: %s\n' \
+      "$live_console_binding" >&2
+    exit 1
+  fi
+done
 
 candidate="scripts/gates/release-candidate.sh"
 candidate_inventory="scripts/gates/release-candidate-inventory.json"
@@ -181,4 +229,4 @@ if git grep -E 'hideout ui.*--(listen|ttl)' -- internal/app docs scripts \
 fi
 
 printf '%s\n' \
-  'validation-ladder: passed contracts=7 vmBoots=0 tlcRuns=0 browserRuns=0'
+  'validation-ladder: passed contracts=13 vmBoots=0 tlcRuns=0 browserRuns=0'

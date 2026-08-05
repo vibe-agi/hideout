@@ -461,6 +461,7 @@ func upsertDecision(state *State, p EventPayload) {
 		ID:             redactText(p.DecisionID),
 		Kind:           redactText(p.RecordKind),
 		Status:         redactText(p.Status),
+		Summary:        eventPreviewSummary(p.Preview),
 		DefaultOutcome: redactText(p.DefaultOutcome),
 		Profile:        redactText(p.Profile),
 		Session:        redactText(p.Session),
@@ -489,11 +490,13 @@ func upsertNotice(state *State, p EventPayload) {
 		ID:           redactText(p.NoticeID),
 		Kind:         redactText(p.RecordKind),
 		Status:       redactText(p.Status),
+		Summary:      eventPreviewSummary(p.Preview),
 		Severity:     redactText(p.Severity),
 		Acknowledged: p.Acknowledged,
 		Profile:      redactText(p.Profile),
 		Session:      redactText(p.Session),
 		Backend:      redactText(p.Backend),
+		Revision:     p.Revision,
 	}
 	for i := range state.Notices {
 		if state.Notices[i].ID == row.ID {
@@ -505,6 +508,15 @@ func upsertNotice(state *State, p EventPayload) {
 	if len(state.Notices) > tailLimit {
 		state.Notices = state.Notices[:tailLimit]
 	}
+}
+
+func eventPreviewSummary(value any) string {
+	preview, ok := value.(map[string]any)
+	if !ok {
+		return ""
+	}
+	summary, _ := preview["summary"].(string)
+	return redactText(summary)
 }
 
 func redactText(value string) string {

@@ -428,6 +428,8 @@ func paritySnapshot(
 			parityManagerRisk(finding),
 		},
 		Operations:   []manager.Operation{operation},
+		Decisions:    []manager.OperatorDecisionProjection{},
+		Notices:      []manager.OperatorNoticeProjection{},
 		Capabilities: []manager.OperatorCapabilityProjection{capability},
 		NextActions:  []string{"activity.inspect"},
 	}

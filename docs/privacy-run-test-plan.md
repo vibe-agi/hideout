@@ -228,8 +228,9 @@ Required evidence:
 - Daemon live operations console smoke (`scripts/test-live-console-smoke.sh`,
   wired into Gate 0) validates the typed daemon event and live-console seed
   schemas, catalog/reducer drift guards, production emit-source coverage,
-  daemon multi-subscriber/backpressure behavior, WebUI deterministic JavaScript
-  reducer/action proof with no post-seed fetches, TUI terminal proof,
+  daemon multi-subscriber/backpressure behavior, the daemon-owned WebUI assets
+  and executable decision/notice routes, deterministic JavaScript reducer/action
+  proof with no post-seed fetches, TUI terminal proof,
   stream-health propagation, 019 Operator Console panel/action-route coverage,
   027 Manager route and daemon endpoint drift guards, runtime-observed WebUI
   action-route recognition, TUI route-boundary checks, and control-plane
@@ -295,11 +296,15 @@ Required evidence:
   `hideout.product-hardening-evidence/v1` manifest. On hosts with local
   Chrome/Chromium and `script(1)`, targeted runs can require executed browser
   and TUI lanes: the browser lane opens the daemon-served WebUI and performs a
-  notice acknowledgement round trip; the TUI lane launches the real `hideout tui`
-  process in a terminal harness and proves live event update, no healthy-stream
-  interval polling, and stream fallback. Missing prerequisites are recorded as
-  `not-run` evidence in non-completion modes. This local UI E2E evidence does
-  not claim release readiness; `scripts/test-release-readiness.sh
+  notice acknowledgement round trip while structurally proving every required
+  overview area; the TUI lane launches the real `hideout tui` process in a
+  terminal harness and proves the same action-center facts, live event update,
+  no healthy-stream interval polling, and stream fallback. Required execution
+  also closes every 021 claim against the Go-owned proof registry, so a missing
+  proof ID cannot pass merely because the lane ran. Missing prerequisites are
+  recorded as `not-run` evidence in non-completion modes.
+  This local UI E2E evidence does not claim release readiness;
+  `scripts/test-release-readiness.sh
   --release-candidate` still requires the real release gates.
 - HostFS/decision E2E proof (`scripts/test-hostfs-decision-e2e.sh --local-fast`,
   wired into Gate 0) writes a `hideout.product-hardening-evidence/v1` manifest

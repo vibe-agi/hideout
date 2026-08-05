@@ -79,7 +79,7 @@ const source = {
     coverage("cov_keep0001","Available","collector-active",0),
     coverage("cov_update01","Available","collector-active",0)
   ],
-  risks:[],operations:[],migrations:[],
+  risks:[],operations:[],migrations:[],decisions:[],notices:[],
   capabilities:[{
     id:"network.posture",state:"available",provider:"manager",
     mutable:true,actionRefs:[]
@@ -309,7 +309,7 @@ const state = State.seed({
   generatedAt:"2026-07-29T10:00:00Z",
   instanceId:"daemon_fixture01",credentialGeneration:3,sequence:0,
   streamHealth:{state:"live"},profiles:[],sessions:[],environments:[],
-  activity:[],coverage:[],risks:[],operations:[],migrations:[],capabilities:[],nextActions:[]
+  activity:[],coverage:[],risks:[],operations:[],migrations:[],decisions:[],notices:[],capabilities:[],nextActions:[]
 });
 const results = events.map((event) => State.applyEvent(state,event).status);
 JSON.stringify({
@@ -388,7 +388,7 @@ function snapshot(sequence) {
       effective:{status:"effective",sessions:[]},updatedAt:at
     }],
     sessions:[],environments:[],activity:[],coverage:[],risks:[],
-    operations:[],migrations:[],capabilities:[],nextActions:[]
+    operations:[],migrations:[],decisions:[],notices:[],capabilities:[],nextActions:[]
   };
 }
 function optionalEvent(seq, overrides) {
@@ -572,7 +572,7 @@ const state = State.seed({
   schema:State.SNAPSHOT_SCHEMA,generatedAt:at,
   instanceId:"daemon_fixture01",credentialGeneration:3,sequence:0,
   streamHealth:{state:"live"},profiles:[],sessions:[],environments:[],
-  activity:[],coverage:[],risks:[],operations:[],migrations:[],capabilities:[],nextActions:[]
+  activity:[],coverage:[],risks:[],operations:[],migrations:[],decisions:[],notices:[],capabilities:[],nextActions:[]
 });
 let seq = 0;
 const statuses = [];

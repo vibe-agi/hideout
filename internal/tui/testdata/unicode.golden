@@ -9,6 +9,14 @@
 │ file write · 3 events · exact attribution
 │ session ses_alpha · profile default
 │ coverage file Partial (fanotify-fallback)
+├ Action Required
+│ total=0 decisions=0 notices=0 hostfs-writes=0
+│ none
+│ HostFS Writes pending=0
+│ Background active=0 status-notices=0
+│ Doctor run explicitly: hideout doctor --level light
+│ Package/Support: hideout package verify <install-prefix> | hideout support matrix
+│ Audit retained-records=0
 ├ [1] Overview [2] Activity [3] Config [4] Operations [5] Migration [6] Help
 │ j/k select · Enter inspect · e environments · ? keys · q quit
 └

@@ -132,6 +132,26 @@ func NewStateFromOperatorSnapshot(snapshot manager.OperatorSnapshot) (State, err
 	for _, id := range snapshot.NextActions {
 		actions = append(actions, consoleNextAction(id))
 	}
+	decisions := make([]DecisionRow, 0, len(snapshot.Decisions))
+	for _, value := range snapshot.Decisions {
+		decisions = append(decisions, DecisionRow{
+			ID: value.ID, Kind: value.Kind, Status: value.Status,
+			Summary: value.Summary, DefaultOutcome: value.DefaultOutcome,
+			Profile: value.Profile, Session: value.Session, Backend: value.Backend,
+			ClaimSurface:   value.ClaimSurface,
+			ClaimExpiresAt: value.ClaimExpiresAt, Revision: value.Revision,
+		})
+	}
+	notices := make([]NoticeRow, 0, len(snapshot.Notices))
+	for _, value := range snapshot.Notices {
+		notices = append(notices, NoticeRow{
+			ID: value.ID, Kind: value.Kind, Status: value.Status,
+			Summary: value.Summary, Severity: value.Severity,
+			Acknowledged: value.Acknowledged,
+			Profile:      value.Profile, Session: value.Session, Backend: value.Backend,
+			Revision: value.Revision,
+		})
+	}
 	seed := BuildSeed(SeedInput{
 		GeneratedAt:      snapshot.GeneratedAt,
 		DaemonInstanceID: snapshot.InstanceID, CredentialGeneration: snapshot.CredentialGeneration,
@@ -150,6 +170,7 @@ func NewStateFromOperatorSnapshot(snapshot manager.OperatorSnapshot) (State, err
 			snapshot.ActivityStoreRetention,
 		),
 		Risks: risks, Capabilities: capabilities, NextActions: actions,
+		Decisions: decisions, Notices: notices,
 	})
 	state := NewState(seed)
 	state.StreamHealth = StreamHealth{

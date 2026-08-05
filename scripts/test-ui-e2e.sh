@@ -12,6 +12,8 @@ Writes hideout.product-hardening-evidence/v1 proof output. Browser proof runs
 when Node and a local Chrome/Chromium-compatible browser are available. TUI proof
 runs when Go and a local script(1)-compatible terminal harness are available.
 Missing browser/TUI prerequisites are explicit not-run evidence.
+For selected-lane diagnostics, --require-executed requires only the selected
+prerequisites. Exact 021 claim closure requires --all --require-executed.
 USAGE
 }
 
@@ -347,6 +349,12 @@ go run ./cmd/hideout-schema-validate schemas/product-hardening-evidence.schema.j
 if [ "$require_executed" -eq 1 ] && jq -e 'any(.proofs[]; .status == "not-run")' "$manifest" >/dev/null; then
   echo "test-ui-e2e: required proof lane did not execute" >&2
   exit 1
+fi
+if [ "$require_executed" -eq 1 ] && \
+  [ "$want_manifest$want_browser$want_tui" = "111" ]; then
+  go run ./internal/productevidence/cmd/validate-021 "$manifest"
+elif [ "$require_executed" -eq 1 ]; then
+  echo "ui-e2e: selected lanes executed; targeted completion requires --all --require-executed"
 fi
 
 echo "ui-e2e: evidence $manifest"

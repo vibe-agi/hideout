@@ -20,6 +20,8 @@
     "risks",
     "operations",
     "migrations",
+    "decisions",
+    "notices",
     "capabilities",
     "nextActions"
   ],
@@ -379,6 +381,166 @@
       "maxItems": 100,
       "items": {
         "$ref": "migration-operation-projection.schema.json"
+      }
+    },
+    "decisions": {
+      "type": "array",
+      "maxItems": 256,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "kind",
+          "status",
+          "summary",
+          "defaultOutcome",
+          "revision"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$"
+          },
+          "kind": {
+            "enum": [
+              "hostfs.write",
+              "hostfs.read",
+              "host-app.open-resource",
+              "adapter.proposal",
+              "evidence.share"
+            ]
+          },
+          "status": {
+            "enum": [
+              "pending",
+              "claimed",
+              "approved",
+              "applied",
+              "denied",
+              "discarded",
+              "timed-out",
+              "failed",
+              "stale"
+            ]
+          },
+          "summary": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2048
+          },
+          "defaultOutcome": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64
+          },
+          "profile": {
+            "type": "string",
+            "maxLength": 128
+          },
+          "session": {
+            "type": "string",
+            "maxLength": 128
+          },
+          "backend": {
+            "type": "string",
+            "maxLength": 128
+          },
+          "claimSurface": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "claimExpiresAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "revision": {
+            "type": "integer",
+            "minimum": 1
+          }
+        },
+        "allOf": [
+          {
+            "if": {
+              "properties": {"status": {"const": "claimed"}},
+              "required": ["status"]
+            },
+            "then": {
+              "required": ["claimSurface", "claimExpiresAt"]
+            },
+            "else": {
+              "not": {
+                "anyOf": [
+                  {"required": ["claimSurface"]},
+                  {"required": ["claimExpiresAt"]}
+                ]
+              }
+            }
+          }
+        ]
+      }
+    },
+    "notices": {
+      "type": "array",
+      "maxItems": 256,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "kind",
+          "status",
+          "summary",
+          "severity",
+          "acknowledged",
+          "revision"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$"
+          },
+          "kind": {
+            "enum": [
+              "privilege.status",
+              "background.status",
+              "runtime.status"
+            ]
+          },
+          "status": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "summary": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2048
+          },
+          "severity": {
+            "enum": ["info", "warning", "error"]
+          },
+          "acknowledged": {
+            "type": "boolean"
+          },
+          "profile": {
+            "type": "string",
+            "maxLength": 128
+          },
+          "session": {
+            "type": "string",
+            "maxLength": 128
+          },
+          "backend": {
+            "type": "string",
+            "maxLength": 128
+          },
+          "revision": {
+            "type": "integer",
+            "minimum": 1
+          }
+        }
       }
     },
     "capabilities": {

@@ -133,16 +133,21 @@ func TestReducerUpdatesDecisionAndNoticePanels(t *testing.T) {
 			DecisionID:     "dec_1",
 			RecordKind:     "hostfs.write",
 			Status:         "pending",
+			Preview:        map[string]any{"summary": "Review staged write"},
 			DefaultOutcome: "discard",
 			Profile:        "default",
 			Session:        "ses_1",
 			Backend:        "native",
+			Revision:       3,
 		},
 	}
 	if result := Apply(&state, decision); result.Status != ResultApplied {
 		t.Fatalf("decision event should apply: %+v", result)
 	}
-	if len(state.Decisions) != 1 || state.Decisions[0].ID != "dec_1" || state.Decisions[0].Status != "pending" {
+	if len(state.Decisions) != 1 || state.Decisions[0].ID != "dec_1" ||
+		state.Decisions[0].Status != "pending" ||
+		state.Decisions[0].Summary != "Review staged write" ||
+		state.Decisions[0].Revision != 3 {
 		t.Fatalf("decision row mismatch: %+v", state.Decisions)
 	}
 
@@ -165,17 +170,22 @@ func TestReducerUpdatesDecisionAndNoticePanels(t *testing.T) {
 			NoticeID:     "notice_1",
 			RecordKind:   "privilege.status",
 			Status:       "degraded",
+			Preview:      map[string]any{"summary": "Privilege coverage degraded"},
 			Severity:     "warning",
 			Acknowledged: false,
 			Profile:      "default",
 			Session:      "ses_1",
 			Backend:      "lima",
+			Revision:     2,
 		},
 	}
 	if result := Apply(&state, notice); result.Status != ResultApplied {
 		t.Fatalf("notice event should apply: %+v", result)
 	}
-	if len(state.Notices) != 1 || state.Notices[0].ID != "notice_1" || state.Notices[0].Acknowledged {
+	if len(state.Notices) != 1 || state.Notices[0].ID != "notice_1" ||
+		state.Notices[0].Acknowledged ||
+		state.Notices[0].Summary != "Privilege coverage degraded" ||
+		state.Notices[0].Revision != 2 {
 		t.Fatalf("notice row mismatch: %+v", state.Notices)
 	}
 

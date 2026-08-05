@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/vibe-agi/hideout/internal/decision"
 	"github.com/vibe-agi/hideout/internal/environment"
 	netpolicy "github.com/vibe-agi/hideout/internal/network"
 	"github.com/vibe-agi/hideout/internal/profile"
@@ -45,6 +46,144 @@ func TestOperatorSnapshotUnscopedEmptyCollectionsEncodeAsArrays(t *testing.T) {
 		if !strings.Contains(string(encoded), field) {
 			t.Fatalf("operator collection missing %s: %s", field, encoded)
 		}
+	}
+}
+
+func TestOperatorSnapshotSeedsRedactedActionCenterBeforeEventSubscription(
+	t *testing.T,
+) {
+	now := time.Date(2026, 8, 5, 12, 0, 0, 0, time.UTC)
+	store := profile.Store{Root: t.TempDir()}
+	core := New(store)
+	core.DecisionNow = func() time.Time { return now }
+	created, err := core.CreateDecision(decision.Decision{
+		ID: "decision-snapshot-alpha", Kind: decision.KindEvidenceShare,
+		Source:         decision.Source{Profile: "alpha", Session: "ses_alpha", Backend: "lima"},
+		Preview:        decision.Preview{Summary: "Review redacted evidence sharing"},
+		AllowedActions: []string{decision.ActionApprove, decision.ActionDeny},
+		DefaultOutcome: decision.DefaultOutcomeNoRelease,
+		TimeoutAt:      now.Add(time.Hour),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	claim, err := core.ClaimDecision(DecisionClaimRequest{
+		DecisionID: created.ID, ExpectedVersion: decision.DecisionVersion,
+		ExpectedRevision: created.Revision, Surface: "cli", LeaseSeconds: 60,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := core.CreateNotice(decision.Notice{
+		ID: "notice-snapshot-alpha", Kind: decision.KindPrivilegeStatus,
+		Source:   decision.Source{Profile: "alpha", Session: "ses_alpha", Backend: "lima"},
+		Severity: decision.NoticeSeverityWarning, Status: "degraded",
+		Preview: decision.Preview{Summary: "Guest privilege coverage is degraded"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	acknowledged, err := core.CreateNotice(decision.Notice{
+		ID: "notice-snapshot-acknowledged", Kind: decision.KindRuntimeStatus,
+		Source: decision.Source{Profile: "alpha"}, Severity: decision.NoticeSeverityInfo,
+		Status: "ready", Preview: decision.Preview{Summary: "Runtime is ready"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := core.AckNotice(NoticeAckRequest{
+		NoticeID: acknowledged.ID,
+		Surface:  "cli",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	service := OperatorSnapshotService{
+		Core: core,
+		Overview: OperatorOverviewProviderFunc(func(context.Context) (Overview, error) {
+			return Overview{Version: "hideout.manager/v1"}, nil
+		}),
+		Connection: OperatorConnectionProviderFunc(func(context.Context) (OperatorConnectionProjection, error) {
+			return OperatorConnectionProjection{
+				InstanceID: "daemon_action_center", CredentialGeneration: 1,
+				StreamHealth: OperatorStreamHealth{State: OperatorHealthIdleLive},
+			}, nil
+		}),
+		Now: func() time.Time { return now },
+	}
+	snapshot, err := service.Build(context.Background(), OperatorSnapshotQuery{
+		Profile: "alpha", Session: "ses_alpha",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(snapshot.Decisions) != 1 || len(snapshot.Notices) != 1 {
+		t.Fatalf(
+			"action center was not seeded: decisions=%+v notices=%+v",
+			snapshot.Decisions,
+			snapshot.Notices,
+		)
+	}
+	decisionRow := snapshot.Decisions[0]
+	if decisionRow.ID != created.ID || decisionRow.Status != decision.StateClaimed ||
+		decisionRow.Summary != "Review redacted evidence sharing" ||
+		decisionRow.ClaimSurface != "cli" ||
+		decisionRow.ClaimExpiresAt != claim.ClaimExpiresAt ||
+		decisionRow.Revision != claim.Revision {
+		t.Fatalf("decision projection=%+v", decisionRow)
+	}
+	noticeRow := snapshot.Notices[0]
+	if noticeRow.ID != "notice-snapshot-alpha" || noticeRow.Acknowledged ||
+		noticeRow.Summary != "Guest privilege coverage is degraded" {
+		t.Fatalf("notice projection=%+v", noticeRow)
+	}
+	encoded, err := json.Marshal(snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(encoded), claim.ClaimToken) ||
+		strings.Contains(string(encoded), "tokenHash") ||
+		strings.Contains(string(encoded), "providerRef") {
+		t.Fatalf("action-center authority escaped snapshot: %s", encoded)
+	}
+}
+
+func TestOperatorSnapshotRejectsInvalidQueryBeforeDecisionMaintenance(
+	t *testing.T,
+) {
+	now := time.Date(2026, 8, 5, 13, 0, 0, 0, time.UTC)
+	core := New(profile.Store{Root: t.TempDir()})
+	core.DecisionNow = func() time.Time { return now }
+	created, err := core.CreateDecision(decision.Decision{
+		ID:   "decision-invalid-snapshot-query",
+		Kind: decision.KindEvidenceShare,
+		Preview: decision.Preview{
+			Summary: "must not time out from an invalid read",
+		},
+		AllowedActions: []string{decision.ActionApprove, decision.ActionDeny},
+		DefaultOutcome: decision.DefaultOutcomeNoRelease,
+		TimeoutAt:      now.Add(time.Minute),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	now = now.Add(2 * time.Minute)
+	_, err = (OperatorSnapshotService{Core: core}).Build(
+		context.Background(),
+		OperatorSnapshotQuery{ActivityLimit: MaxOperatorActivityLimit + 1},
+	)
+	if err == nil {
+		t.Fatal("invalid snapshot query unexpectedly succeeded")
+	}
+	store, err := core.decisionStore()
+	if err != nil {
+		t.Fatal(err)
+	}
+	after, err := store.RawDecision(created.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.State != decision.StatePending || after.Revision != created.Revision {
+		t.Fatalf("invalid read mutated decision: before=%+v after=%+v", created, after)
 	}
 }
 

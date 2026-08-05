@@ -65,6 +65,9 @@
   let reconnectTimer = null;
   let reconnectAttempt = 0;
   let dialogReturnFocus = null;
+  let activeDecisionReview = "";
+  let attentionMessage = "";
+  const decisionClaims = new Map();
   let announcedHealth = "";
   const reconnectDelays = Object.freeze([500, 1000, 2000, 4000, 8000]);
 
@@ -143,6 +146,18 @@
       list.append(term, detail);
     }
     node.append(list);
+    return node;
+  }
+
+  /**
+   * @param {string} area
+   * @param {string} status
+   * @param {Array<[string,unknown]>} fields
+   * @param {string=} tone
+   */
+  function overviewCard(area, status, fields, tone) {
+    const node = card(area, status, fields, tone);
+    node.dataset.overviewArea = area;
     return node;
   }
 
@@ -334,9 +349,349 @@
     ) || null;
   }
 
+  /** @param {Object} notice */
+  async function acknowledgeNotice(notice) {
+    if (!root.State.canMutate(state) || !notice || !notice.id) return;
+    try {
+      const acknowledgement = await root.Client.noticeAck(notice.id);
+      const current = (state.snapshot.notices || []).find(
+        (value) => value.id === acknowledgement.noticeId
+      );
+      if (!current) {
+        throw new Error("acknowledged notice is absent from the current snapshot");
+      }
+      current.acknowledged = true;
+      current.status = "acknowledged";
+      attentionMessage = `Acknowledged ${notice.id}.`;
+      renderAll();
+      announce(attentionMessage);
+    } catch (error) {
+      attentionMessage = `Notice acknowledgement failed: ${String(error)}`;
+      renderAll();
+      announce(attentionMessage);
+    }
+  }
+
+  /** @param {Object} notice */
+  function noticeCard(notice) {
+    const row = card(
+      notice.summary || notice.id || "notice",
+      notice.acknowledged ? "acknowledged" : "needs acknowledgement",
+      [
+        ["kind", notice.kind || "notice"],
+        ["severity", notice.severity || "info"],
+        ["status", notice.status || "unknown"],
+        ["profile", notice.profile || "all profiles"],
+        ["session", notice.session || "not session-scoped"]
+      ],
+      notice.severity === "error" ? "severity-high" :
+        notice.severity === "warning" ? "severity-medium" : ""
+    );
+    if (!notice.acknowledged) {
+      const actions = element("div", "row-actions");
+      const acknowledge = element("button");
+      acknowledge.type = "button";
+      acknowledge.className = "primary";
+      acknowledge.dataset.action = "ack-notice";
+      acknowledge.dataset.noticeId = notice.id;
+      acknowledge.dataset.requiresAuthority = "true";
+      acknowledge.textContent = "Acknowledge";
+      acknowledge.disabled = !root.State.canMutate(state);
+      acknowledge.addEventListener("click", () => {
+        acknowledge.disabled = true;
+        acknowledgeNotice(notice);
+      });
+      actions.append(acknowledge);
+      row.append(actions);
+    }
+    return row;
+  }
+
+  /** @param {Object} decision */
+  function decisionCard(decision) {
+    const row = card(
+      decision.summary || decision.id || "decision",
+      decision.status || "pending",
+      [
+        ["kind", decision.kind || "decision"],
+        ["default", decision.defaultOutcome || "deny"],
+        ["profile", decision.profile || "all profiles"],
+        ["session", decision.session || "not session-scoped"],
+        ["claim", decision.claimSurface || "unclaimed"],
+        ["claim expires", decision.claimExpiresAt || "not claimed"]
+      ],
+      ["pending", "claimed"].includes(decision.status) ? "seeding" : ""
+    );
+    const actions = element("div", "row-actions");
+    const review = element("button");
+    review.type = "button";
+    review.dataset.action = "review-decision";
+    review.dataset.decisionId = decision.id;
+    review.textContent = "Review decision";
+    review.addEventListener("click", () => openDecisionReview(decision));
+    actions.append(review);
+    row.append(actions);
+    return row;
+  }
+
+  /** @param {Object} decision @param {string=} errorMessage */
+  function renderDecisionReview(decision, errorMessage = "") {
+    if (!decision || activeDecisionReview !== decision.id) return;
+    const owned = decisionClaims.get(decision.id);
+    const nodes = [
+      card(
+        decision.preview && decision.preview.summary || decision.id,
+        decision.state || "unknown",
+        [
+          ["decision", decision.id],
+          ["kind", decision.kind],
+          ["default outcome", decision.defaultOutcome],
+          ["allowed actions", decision.allowedActions || []],
+          ["timeout", decision.timeoutAt || "unknown"],
+          ["revision", decision.revision],
+          ["source", decision.source || {}],
+          ["risk", decision.risk || {}],
+          ["facts", decision.preview && decision.preview.facts || {}],
+          ["diff", decision.preview && decision.preview.diff || "none"]
+        ],
+        ["pending", "claimed"].includes(decision.state) ? "seeding" : ""
+      )
+    ];
+    if (errorMessage) {
+      nodes.push(card("Decision action failed", "not applied", [
+        ["reason", errorMessage],
+        ["recovery", "Refresh the decision and retry only after reviewing its current revision."]
+      ], "stale"));
+    }
+    const actions = element("div", "dialog-actions");
+    const close = element("button");
+    close.type = "button";
+    close.textContent = "Close";
+    close.addEventListener("click", closeConsoleDialog);
+    actions.append(close);
+
+    if (decision.state === "pending" && !owned) {
+      const claim = element("button");
+      claim.type = "button";
+      claim.className = "primary";
+      claim.dataset.requiresAuthority = "true";
+      claim.dataset.action = "claim-decision";
+      claim.textContent = "Claim for 60 seconds";
+      claim.disabled = !root.State.canMutate(state);
+      claim.addEventListener("click", async () => {
+        claim.disabled = true;
+        try {
+          const result = await root.Client.decisionClaim(
+            decision.id,
+            decision.revision
+          );
+          if (activeDecisionReview !== decision.id) {
+            root.Client.decisionRelease(
+              decision.id,
+              result.claimToken,
+              result.revision,
+              true
+            ).catch(() => {});
+            return;
+          }
+          decisionClaims.set(decision.id, {
+            claimToken: result.claimToken,
+            revision: result.revision
+          });
+          renderDecisionReview(await root.Client.decisionInspect(decision.id));
+        } catch (error) {
+          renderDecisionReview(decision, String(error));
+        }
+      });
+      actions.append(claim);
+    } else if (decision.state === "claimed" && owned) {
+      const release = element("button");
+      release.type = "button";
+      release.dataset.requiresAuthority = "true";
+      release.textContent = "Release claim";
+      release.disabled = !root.State.canMutate(state);
+      release.addEventListener("click", async () => {
+        release.disabled = true;
+        try {
+          await root.Client.decisionRelease(
+            decision.id,
+            owned.claimToken,
+            owned.revision
+          );
+          decisionClaims.delete(decision.id);
+          renderDecisionReview(await root.Client.decisionInspect(decision.id));
+        } catch (error) {
+          renderDecisionReview(decision, String(error));
+        }
+      });
+      actions.append(release);
+
+      const confirmLabel = element("label", "confirm-check");
+      const confirm = element("input");
+      confirm.type = "checkbox";
+      const confirmation = text(
+        "I reviewed the redacted preview, risk, default outcome, and exact revision."
+      );
+      confirmLabel.append(confirm, confirmation);
+      nodes.push(confirmLabel);
+
+      const allowed = new Set(decision.allowedActions || []);
+      const addResolution = (action, label, className) => {
+        const button = element("button");
+        button.type = "button";
+        button.className = className;
+        button.dataset.requiresAuthority = "true";
+        button.dataset.action = `${action}-decision`;
+        button.textContent = label;
+        button.disabled = true;
+        confirm.addEventListener("change", () => {
+          button.disabled = !confirm.checked || !root.State.canMutate(state);
+        });
+        button.addEventListener("click", async () => {
+          button.disabled = true;
+          try {
+            const result = await root.Client.decisionResolve(
+              decision.id,
+              action,
+              owned.claimToken
+            );
+            decisionClaims.delete(decision.id);
+            activeDecisionReview = "";
+            closeConsoleDialog();
+            attentionMessage = `${decision.id} resolved as ${result.status}.`;
+            await seedLiveConsole({reason: "decision resolved"});
+            announce(attentionMessage);
+          } catch (error) {
+            renderDecisionReview(decision, String(error));
+          }
+        });
+        actions.append(button);
+      };
+      if (allowed.has("approve") || allowed.has("apply")) {
+        addResolution(
+          "approve",
+          allowed.has("apply") ? "Apply reviewed decision" : "Approve decision",
+          "primary"
+        );
+      }
+      if (allowed.has("deny") || allowed.has("discard")) {
+        addResolution(
+          "deny",
+          allowed.has("discard") ? "Discard decision" : "Deny decision",
+          "danger-action"
+        );
+      }
+    }
+    nodes.push(actions);
+    showConsoleDialog(`Decision · ${decision.id}`, nodes);
+  }
+
+  /** @param {Object} decision */
+  async function openDecisionReview(decision) {
+    if (!decision || !decision.id) return;
+    activeDecisionReview = decision.id;
+    showConsoleDialog("Decision review", [
+      card("Loading current decision", "read-only", [["decision", decision.id]])
+    ]);
+    try {
+      const current = await root.Client.decisionInspect(decision.id);
+      renderDecisionReview(current);
+    } catch (error) {
+      if (activeDecisionReview !== decision.id) return;
+      activeDecisionReview = "";
+      showConsoleDialog("Decision review unavailable", [
+        card("Decision could not be loaded", "not changed", [
+          ["decision", decision.id],
+          ["reason", String(error)]
+        ], "stale")
+      ]);
+    }
+  }
+
   function renderOverview() {
     const snapshot = state.snapshot;
     const rows = [];
+    const actionableDecisions = (snapshot.decisions || []).filter(
+      (value) => ["pending", "claimed"].includes(value.status)
+    );
+    const unacknowledgedNotices = (snapshot.notices || []).filter(
+      (value) => !value.acknowledged
+    );
+    const hostFSWrites = actionableDecisions.filter(
+      (value) => value.kind === "hostfs.write"
+    );
+    const backgroundNotices = unacknowledgedNotices.filter(
+      (value) => value.kind === "background.status"
+    );
+    const activeOperations = (snapshot.operations || []).filter(
+      (value) => ![
+        "succeeded", "failed", "cancelled", "rolled-back",
+        "rollback-unproved", "recovery-required"
+      ].includes(value.phase)
+    );
+    const actionSummary = overviewCard(
+      "Action Required",
+      actionableDecisions.length || unacknowledgedNotices.length ?
+        String(actionableDecisions.length + unacknowledgedNotices.length) :
+        "none",
+      [
+        ["Decisions", actionableDecisions.length],
+        ["Notices", unacknowledgedNotices.length],
+        ["authority", root.State.canMutate(state) ?
+          "fresh authenticated snapshot" : "read-only until reseeded"]
+      ],
+      actionableDecisions.length || unacknowledgedNotices.length ?
+        "severity-medium" : ""
+    );
+    actionSummary.classList.add("overview-priority");
+    rows.push(actionSummary);
+    const streamSummary = overviewCard("Stream", state.health.state, [
+      ["reason", state.health.reason || "authenticated event stream is current"],
+      ["sequence", state.lastSeq]
+    ], root.State.canMutate(state) ? "live" : "stale");
+    streamSummary.classList.add("overview-signal");
+    rows.push(streamSummary);
+    rows.push(overviewCard("Decisions", String(actionableDecisions.length), [
+      ["pending or claimed", actionableDecisions.length],
+      ["review", actionableDecisions.length ?
+        "Use Review decision below" : "No pending decisions"]
+    ]));
+    rows.push(overviewCard("Notices", String(unacknowledgedNotices.length), [
+      ["unacknowledged", unacknowledgedNotices.length],
+      ["review", unacknowledgedNotices.length ?
+        "Use Acknowledge below" : "No unacknowledged notices"]
+    ]));
+    rows.push(overviewCard("HostFS Writes", String(hostFSWrites.length), [
+      ["pending decisions", hostFSWrites.length],
+      ["authority", "resolves through the decision center"]
+    ]));
+    rows.push(overviewCard(
+      "Background",
+      String(activeOperations.length + backgroundNotices.length),
+      [
+        ["active operations", activeOperations.length],
+        ["status notices", backgroundNotices.length]
+      ]
+    ));
+    rows.push(overviewCard("Doctor", "not run on load", [
+      ["check", "hideout doctor --level light"],
+      ["repair", "never automatic from this console"]
+    ]));
+    rows.push(overviewCard("Package/Support", "read-only guidance", [
+      ["package", "hideout package verify <install-prefix>"],
+      ["support", "hideout support matrix"]
+    ]));
+    rows.push(overviewCard("Audit", "visible retained state", [
+      ["retained activity", (snapshot.activity || []).length],
+      ["history", "Use Timeline and Operations for exact records"]
+    ]));
+    if (attentionMessage) {
+      rows.push(card("Latest operator action", "local result", [
+        ["message", attentionMessage]
+      ], attentionMessage.includes("failed") ? "stale" : "live"));
+    }
+    rows.push(...unacknowledgedNotices.slice(0, 4).map(noticeCard));
+    rows.push(...actionableDecisions.slice(0, 4).map(decisionCard));
     const session = selectedSessionProjection();
     if (session) {
       rows.push(card(
@@ -2997,6 +3352,18 @@
     closeConsoleDialog
   );
   consoleDialog.addEventListener("close", () => {
+    const decisionID = activeDecisionReview;
+    const owned = decisionClaims.get(decisionID);
+    activeDecisionReview = "";
+    if (owned) {
+      decisionClaims.delete(decisionID);
+      root.Client.decisionRelease(
+        decisionID,
+        owned.claimToken,
+        owned.revision,
+        true
+      ).catch(() => {});
+    }
     if (dialogReturnFocus instanceof HTMLElement &&
         dialogReturnFocus.isConnected) {
       dialogReturnFocus.focus();
@@ -3046,6 +3413,18 @@
     renderAll();
     loadDetails();
   });
+  window.addEventListener("pagehide", () => {
+    for (const [decisionID, owned] of decisionClaims.entries()) {
+      root.Client.decisionRelease(
+        decisionID,
+        owned.claimToken,
+        owned.revision,
+        true
+      ).catch(() => {});
+    }
+    decisionClaims.clear();
+    activeDecisionReview = "";
+  });
   root.Client.onAuthorityLost((authority) => {
     cancelReconnect(true);
     if (migrationPollTimer !== null) {
@@ -3058,6 +3437,8 @@
       stream.close();
       stream = null;
     }
+    decisionClaims.clear();
+    activeDecisionReview = "";
     const reason = authority.reason || "operator credential was rejected";
     if (state) root.State.expireCredential(state, reason);
     else state = root.State.unavailable("credential-expired", reason);
@@ -3065,6 +3446,8 @@
   });
   root.Client.onCredentialRefresh(() => {
     cancelReconnect(true);
+    decisionClaims.clear();
+    activeDecisionReview = "";
     seedLiveConsole({
       reason: "fresh operator credential received from URL fragment"
     }).catch(() => {});

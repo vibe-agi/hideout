@@ -236,6 +236,7 @@ type DecisionRow struct {
 	ID             string    `json:"id"`
 	Kind           string    `json:"kind"`
 	Status         string    `json:"status"`
+	Summary        string    `json:"summary,omitempty"`
 	DefaultOutcome string    `json:"defaultOutcome,omitempty"`
 	Profile        string    `json:"profile,omitempty"`
 	Session        string    `json:"session,omitempty"`
@@ -252,11 +253,13 @@ type NoticeRow struct {
 	ID           string `json:"id"`
 	Kind         string `json:"kind"`
 	Status       string `json:"status"`
+	Summary      string `json:"summary,omitempty"`
 	Severity     string `json:"severity,omitempty"`
 	Acknowledged bool   `json:"acknowledged"`
 	Profile      string `json:"profile,omitempty"`
 	Session      string `json:"session,omitempty"`
 	Backend      string `json:"backend,omitempty"`
+	Revision     int    `json:"revision,omitempty"`
 }
 
 type StatusRow struct {

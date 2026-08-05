@@ -5,6 +5,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/vibe-agi/hideout/internal/decision"
 	"github.com/vibe-agi/hideout/internal/liveconsole"
 	"github.com/vibe-agi/hideout/internal/manager"
 	"github.com/vibe-agi/hideout/internal/profile"
@@ -46,11 +47,160 @@ func Overview(input OverviewInput, options Options) string {
 	default:
 		output = plainOverview(input.State, now, options)
 	}
+	if options.Width >= 48 {
+		output = insertOverviewOperatorSummary(output, input.State, options)
+	}
 	output = fitOutput(output, options.Width)
 	if !options.NoColor {
 		output = "\x1b[36m" + output + "\x1b[0m"
 	}
 	return output
+}
+
+func insertOverviewOperatorSummary(
+	output string,
+	state liveconsole.State,
+	options Options,
+) string {
+	markers := []string{
+		components.Tabs(options.Unicode, options.Width),
+		components.Tabs(false, options.Width),
+		components.Tabs(true, options.Width),
+	}
+	position := -1
+	for _, marker := range markers {
+		if index := strings.LastIndex(output, marker); index > position {
+			position = index
+		}
+	}
+	if position < 0 {
+		return output
+	}
+	summary := overviewOperatorSummary(state)
+	lineStart := strings.LastIndex(output[:position], "\n") + 1
+	prefix := output[lineStart:position]
+	separator := "\n\n"
+	if prefix == "├ " {
+		lines := strings.Split(summary, "\n")
+		for index := range lines {
+			if index == 0 {
+				lines[index] = "├ " + lines[index]
+			} else {
+				lines[index] = "│ " + lines[index]
+			}
+		}
+		summary = strings.Join(lines, "\n")
+		separator = "\n"
+	}
+	return output[:lineStart] + summary + separator + output[lineStart:]
+}
+
+func overviewOperatorSummary(state liveconsole.State) string {
+	actionRequired := liveconsole.ActionRequired(state)
+	actionableDecisions := make([]liveconsole.DecisionRow, 0, len(state.Decisions))
+	hostFSWrites := 0
+	for _, row := range state.Decisions {
+		if !overviewActionableStatus(row.Status) {
+			continue
+		}
+		actionableDecisions = append(actionableDecisions, row)
+		if row.Kind == decision.KindHostFSWrite {
+			hostFSWrites++
+		}
+	}
+	visibleNotices := make([]liveconsole.NoticeRow, 0, len(state.Notices))
+	backgroundNotices := 0
+	for _, row := range state.Notices {
+		if row.Acknowledged {
+			continue
+		}
+		visibleNotices = append(visibleNotices, row)
+		if row.Kind == decision.KindBackgroundStatus {
+			backgroundNotices++
+		}
+	}
+	activeOperations := 0
+	for _, operation := range state.Operations {
+		switch operation.Phase {
+		case "succeeded", "failed", "cancelled", "rolled-back",
+			"rollback-unproved", "recovery-required":
+		default:
+			activeOperations++
+		}
+	}
+	lines := []string{
+		"Action Required",
+		fmt.Sprintf(
+			"total=%d decisions=%d notices=%d hostfs-writes=%d",
+			actionRequired.Total,
+			actionRequired.Decisions,
+			actionRequired.Notices,
+			hostFSWrites,
+		),
+	}
+	if actionRequired.Total == 0 {
+		lines = append(lines, "none")
+	}
+	for index, row := range actionableDecisions {
+		if index >= 3 {
+			lines = append(lines, fmt.Sprintf(
+				"… %d more decision(s)",
+				len(actionableDecisions)-index,
+			))
+			break
+		}
+		line := fmt.Sprintf(
+			"Decision %s kind=%s status=%s",
+			overviewDisplayValue(row.ID, "unknown"),
+			overviewDisplayValue(row.Kind, "unknown"),
+			overviewDisplayValue(row.Status, "unknown"),
+		)
+		if summary := sanitizeInline(row.Summary); summary != "" {
+			line += " " + summary
+		}
+		lines = append(lines, line)
+	}
+	for index, row := range visibleNotices {
+		if index >= 3 {
+			lines = append(lines, fmt.Sprintf(
+				"… %d more notice(s)",
+				len(visibleNotices)-index,
+			))
+			break
+		}
+		line := fmt.Sprintf(
+			"Notice %s kind=%s severity=%s status=%s",
+			overviewDisplayValue(row.ID, "unknown"),
+			overviewDisplayValue(row.Kind, "unknown"),
+			overviewDisplayValue(row.Severity, "info"),
+			overviewDisplayValue(row.Status, "unknown"),
+		)
+		if summary := sanitizeInline(row.Summary); summary != "" {
+			line += " " + summary
+		}
+		lines = append(lines, line)
+	}
+	lines = append(lines,
+		fmt.Sprintf("HostFS Writes pending=%d", hostFSWrites),
+		fmt.Sprintf(
+			"Background active=%d status-notices=%d",
+			activeOperations,
+			backgroundNotices,
+		),
+		"Doctor run explicitly: hideout doctor --level light",
+		"Package/Support: hideout package verify <install-prefix> | hideout support matrix",
+		fmt.Sprintf("Audit retained-records=%d", len(state.Activity.Recent)),
+	)
+	return strings.Join(lines, "\n")
+}
+
+func overviewActionableStatus(status string) bool {
+	switch status {
+	case "", "pending", "claimed", "ready", "requires-decision":
+		return true
+	default:
+		return false
+	}
 }
 
 func plainOverview(state liveconsole.State, now time.Time, options Options) string {

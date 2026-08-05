@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/vibe-agi/hideout/internal/decision"
 	"github.com/vibe-agi/hideout/internal/environment"
 	netpolicy "github.com/vibe-agi/hideout/internal/network"
 	"github.com/vibe-agi/hideout/internal/profile"
@@ -24,6 +25,8 @@ const (
 	MaxOperatorActivityLimit      = 500
 	DefaultOperatorOperationLimit = 100
 	DefaultOperatorMigrationLimit = 100
+	MaxOperatorDecisionLimit      = 256
+	MaxOperatorNoticeLimit        = 256
 
 	OperatorHealthSeeding           = "seeding"
 	OperatorHealthLive              = "live"
@@ -74,6 +77,8 @@ type OperatorSnapshot struct {
 	Risks                  []RiskFinding                             `json:"risks"`
 	Operations             []Operation                               `json:"operations"`
 	Migrations             []MigrationOperationProjection            `json:"migrations"`
+	Decisions              []OperatorDecisionProjection              `json:"decisions"`
+	Notices                []OperatorNoticeProjection                `json:"notices"`
 	Capabilities           []OperatorCapabilityProjection            `json:"capabilities"`
 	NextActions            []string                                  `json:"nextActions"`
 }
@@ -149,6 +154,38 @@ type OperatorCapabilityProjection struct {
 	Reason     string   `json:"reason,omitempty"`
 	Mutable    bool     `json:"mutable,omitempty"`
 	ActionRefs []string `json:"actionRefs,omitempty"`
+}
+
+// OperatorDecisionProjection is the bounded, redacted action-center row used
+// by every operator surface. Full review data stays behind decision/inspect;
+// claim authority and provider-private references never enter the snapshot.
+type OperatorDecisionProjection struct {
+	ID             string    `json:"id"`
+	Kind           string    `json:"kind"`
+	Status         string    `json:"status"`
+	Summary        string    `json:"summary"`
+	DefaultOutcome string    `json:"defaultOutcome"`
+	Profile        string    `json:"profile,omitempty"`
+	Session        string    `json:"session,omitempty"`
+	Backend        string    `json:"backend,omitempty"`
+	ClaimSurface   string    `json:"claimSurface,omitempty"`
+	ClaimExpiresAt time.Time `json:"claimExpiresAt,omitzero"`
+	Revision       int       `json:"revision"`
+}
+
+// OperatorNoticeProjection carries informational state only. It deliberately
+// has no claim, approval, or denial fields.
+type OperatorNoticeProjection struct {
+	ID           string `json:"id"`
+	Kind         string `json:"kind"`
+	Status       string `json:"status"`
+	Summary      string `json:"summary"`
+	Severity     string `json:"severity"`
+	Acknowledged bool   `json:"acknowledged"`
+	Profile      string `json:"profile,omitempty"`
+	Session      string `json:"session,omitempty"`
+	Backend      string `json:"backend,omitempty"`
+	Revision     int    `json:"revision"`
 }
 
 type OperatorSnapshotQuery struct {
@@ -407,6 +444,33 @@ func (service OperatorSnapshotService) Build(
 	ctx context.Context,
 	query OperatorSnapshotQuery,
 ) (OperatorSnapshot, error) {
+	// Validate before maintenance: an invalid read request must never advance
+	// decision timeouts or persist lease convergence as a side effect.
+	if err := query.Validate(); err != nil {
+		return OperatorSnapshot{}, err
+	}
+	if err := service.Prepare(); err != nil {
+		return OperatorSnapshot{}, fmt.Errorf(
+			"prepare operator action center: %w",
+			err,
+		)
+	}
+	return service.BuildPrepared(ctx, query)
+}
+
+// Prepare performs the action-center convergence that can persist state and
+// publish events. A daemon must call it before taking its event-sequence lock.
+func (service OperatorSnapshotService) Prepare() error {
+	return service.Core.maintainDecisionCenter()
+}
+
+// BuildPrepared performs projection-only reads after Prepare. Daemon callers
+// hold the event-sequence fence around this method so the returned sequence and
+// rows form one lossless snapshot-to-stream handoff.
+func (service OperatorSnapshotService) BuildPrepared(
+	ctx context.Context,
+	query OperatorSnapshotQuery,
+) (OperatorSnapshot, error) {
 	if err := query.Validate(); err != nil {
 		return OperatorSnapshot{}, err
 	}
@@ -416,7 +480,9 @@ func (service OperatorSnapshotService) Build(
 
 	overviewSource := service.Overview
 	if overviewSource == nil {
-		overviewSource = service.Core
+		overviewSource = OperatorOverviewProviderFunc(
+			service.Core.overviewCurrent,
+		)
 	}
 	overview, overviewErr := overviewSource.Overview(ctx)
 	if overview.Version == "" {
@@ -437,6 +503,10 @@ func (service OperatorSnapshotService) Build(
 	)
 	operations, operationCapability := service.operations(overview, query)
 	migrations, migrationCapability := service.migrations()
+	decisions, notices, err := service.actionCenter(query)
+	if err != nil {
+		return OperatorSnapshot{}, err
+	}
 	for index := range profiles {
 		profiles[index].Transition = profileTransitionFromOperations(
 			profiles[index].Profile,
@@ -509,6 +579,8 @@ func (service OperatorSnapshotService) Build(
 		Risks:        nonNilSlice(observation.Risks),
 		Operations:   nonNilSlice(operations),
 		Migrations:   nonNilSlice(migrations),
+		Decisions:    nonNilSlice(decisions),
+		Notices:      nonNilSlice(notices),
 		Capabilities: nonNilSlice(capabilities),
 	}
 	snapshot.Activity = scopeOperatorActivity(snapshot.Activity, overview, query)
@@ -535,6 +607,70 @@ func (service OperatorSnapshotService) Build(
 		return OperatorSnapshot{}, fmt.Errorf("build operator snapshot: %w", err)
 	}
 	return snapshot, nil
+}
+
+func (service OperatorSnapshotService) actionCenter(
+	query OperatorSnapshotQuery,
+) ([]OperatorDecisionProjection, []OperatorNoticeProjection, error) {
+	decisions, err := service.Core.decisionsCurrent(DecisionListRequest{
+		Profile: query.Profile,
+		Session: query.Session,
+	})
+	if err != nil {
+		return nil, nil, fmt.Errorf("list operator decisions: %w", err)
+	}
+	if len(decisions) > MaxOperatorDecisionLimit {
+		return nil, nil, fmt.Errorf(
+			"operator decisions exceed snapshot limit %d",
+			MaxOperatorDecisionLimit,
+		)
+	}
+	decisionRows := make(
+		[]OperatorDecisionProjection,
+		0,
+		len(decisions),
+	)
+	for _, record := range decisions {
+		row := OperatorDecisionProjection{
+			ID: record.ID, Kind: record.Kind, Status: record.State,
+			Summary: record.Preview.Summary, DefaultOutcome: record.DefaultOutcome,
+			Profile: record.Source.Profile, Session: record.Source.Session,
+			Backend: record.Source.Backend, Revision: record.Revision,
+		}
+		if record.Claim != nil {
+			row.ClaimSurface = record.Claim.Surface
+			row.ClaimExpiresAt = record.Claim.ExpiresAt
+		}
+		decisionRows = append(decisionRows, row)
+	}
+
+	notices, err := service.Core.noticesCurrent(NoticeListRequest{
+		Profile: query.Profile,
+		Session: query.Session,
+	})
+	if err != nil {
+		return nil, nil, fmt.Errorf("list operator notices: %w", err)
+	}
+	noticeRows := make([]OperatorNoticeProjection, 0, len(notices))
+	for _, record := range notices {
+		if record.Acknowledged {
+			continue
+		}
+		noticeRows = append(noticeRows, OperatorNoticeProjection{
+			ID: record.ID, Kind: record.Kind, Status: record.Status,
+			Summary: record.Preview.Summary, Severity: record.Severity,
+			Acknowledged: record.Acknowledged, Profile: record.Source.Profile,
+			Session: record.Source.Session, Backend: record.Source.Backend,
+			Revision: record.Revision,
+		})
+	}
+	if len(noticeRows) > MaxOperatorNoticeLimit {
+		return nil, nil, fmt.Errorf(
+			"unacknowledged operator notices exceed snapshot limit %d",
+			MaxOperatorNoticeLimit,
+		)
+	}
+	return decisionRows, noticeRows, nil
 }
 
 func (service OperatorSnapshotService) connection(ctx context.Context) (OperatorConnectionProjection, error) {
@@ -963,6 +1099,7 @@ func (snapshot OperatorSnapshot) Validate() error {
 	if snapshot.Schema != OperatorSnapshotSchema || snapshot.GeneratedAt.IsZero() ||
 		!operatorDaemonIDPattern.MatchString(snapshot.InstanceID) ||
 		snapshot.CredentialGeneration == 0 || snapshot.Sequence < 0 ||
+		snapshot.Decisions == nil || snapshot.Notices == nil ||
 		len(snapshot.Profiles) > 256 || len(snapshot.Sessions) > 256 ||
 		len(snapshot.Environments) > 256 ||
 		len(snapshot.Activity) > MaxOperatorActivityLimit || len(snapshot.ActivityCursor) > 4096 ||
@@ -970,6 +1107,8 @@ func (snapshot OperatorSnapshot) Validate() error {
 		len(snapshot.Risks) > 500 ||
 		len(snapshot.Operations) > 500 ||
 		len(snapshot.Migrations) > DefaultOperatorMigrationLimit ||
+		len(snapshot.Decisions) > MaxOperatorDecisionLimit ||
+		len(snapshot.Notices) > MaxOperatorNoticeLimit ||
 		len(snapshot.Capabilities) > 256 ||
 		len(snapshot.NextActions) > 64 {
 		return errors.New("operator snapshot is invalid")
@@ -1024,6 +1163,16 @@ func (snapshot OperatorSnapshot) Validate() error {
 	}
 	for _, migration := range snapshot.Migrations {
 		if err := migration.Validate(); err != nil {
+			return err
+		}
+	}
+	for _, projection := range snapshot.Decisions {
+		if err := projection.Validate(); err != nil {
+			return err
+		}
+	}
+	for _, projection := range snapshot.Notices {
+		if err := projection.Validate(); err != nil {
 			return err
 		}
 	}
@@ -1223,6 +1372,59 @@ func containsOperatorControl(values ...string) bool {
 		}
 	}
 	return false
+}
+
+func (projection OperatorDecisionProjection) Validate() error {
+	if !validRouteParameterValue(projection.ID) ||
+		!decision.KnownDecisionKind(projection.Kind) ||
+		!decision.KnownDecisionState(projection.Status) ||
+		projection.Summary == "" || len(projection.Summary) > 2048 ||
+		projection.DefaultOutcome == "" || len(projection.DefaultOutcome) > 64 ||
+		len(projection.Profile) > 128 || len(projection.Session) > 128 ||
+		len(projection.Backend) > 128 || len(projection.ClaimSurface) > 128 ||
+		projection.Revision < 1 ||
+		containsOperatorControl(
+			projection.ID,
+			projection.Summary,
+			projection.DefaultOutcome,
+			projection.Profile,
+			projection.Session,
+			projection.Backend,
+			projection.ClaimSurface,
+		) {
+		return errors.New("operator decision projection is invalid")
+	}
+	if projection.Status == decision.StateClaimed {
+		if projection.ClaimSurface == "" || projection.ClaimExpiresAt.IsZero() {
+			return errors.New("claimed operator decision projection is invalid")
+		}
+	} else if projection.ClaimSurface != "" || !projection.ClaimExpiresAt.IsZero() {
+		return errors.New("unclaimed operator decision carries claim metadata")
+	}
+	return nil
+}
+
+func (projection OperatorNoticeProjection) Validate() error {
+	if !validRouteParameterValue(projection.ID) ||
+		!decision.KnownNoticeKind(projection.Kind) ||
+		projection.Status == "" || len(projection.Status) > 128 ||
+		projection.Summary == "" || len(projection.Summary) > 2048 ||
+		projection.Severity != decision.NoticeSeverityInfo &&
+			projection.Severity != decision.NoticeSeverityWarning &&
+			projection.Severity != decision.NoticeSeverityError ||
+		len(projection.Profile) > 128 || len(projection.Session) > 128 ||
+		len(projection.Backend) > 128 || projection.Revision < 1 ||
+		containsOperatorControl(
+			projection.ID,
+			projection.Status,
+			projection.Summary,
+			projection.Profile,
+			projection.Session,
+			projection.Backend,
+		) {
+		return errors.New("operator notice projection is invalid")
+	}
+	return nil
 }
 
 func (finding RiskFinding) Validate() error {
@@ -1606,6 +1808,12 @@ func sortOperatorSnapshot(snapshot *OperatorSnapshot) {
 	sort.Slice(snapshot.Environments, func(left, right int) bool {
 		return snapshot.Environments[left].ID <
 			snapshot.Environments[right].ID
+	})
+	sort.Slice(snapshot.Decisions, func(left, right int) bool {
+		return snapshot.Decisions[left].ID < snapshot.Decisions[right].ID
+	})
+	sort.Slice(snapshot.Notices, func(left, right int) bool {
+		return snapshot.Notices[left].ID < snapshot.Notices[right].ID
 	})
 	sort.Slice(snapshot.Activity, func(left, right int) bool {
 		if snapshot.Activity[left].LastAt.Equal(snapshot.Activity[right].LastAt) {

@@ -248,6 +248,151 @@
     return post("profile/transaction/apply", applyRequest);
   }
 
+  /** @param {string} value @param {string} kind */
+  function recordIdentity(value, kind) {
+    const normalized = String(value || "").trim();
+    if (!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$/.test(normalized)) {
+      throw new Error(`${kind} identity is invalid`);
+    }
+    return normalized;
+  }
+
+  /** @param {string} decisionID */
+  async function decisionInspect(decisionID) {
+    decisionID = recordIdentity(decisionID, "decision");
+    const envelope = await request(
+      `/api/v1/decisions/${encodeURIComponent(decisionID)}`
+    );
+    if (envelope.version !== "hideout.manager-api/v1" ||
+        envelope.resource !== "decision/inspect" ||
+        !envelope.data || envelope.data.id !== decisionID) {
+      throw new Error("decision inspection response contract mismatch");
+    }
+    return envelope.data;
+  }
+
+  /** @param {string} decisionID @param {number} expectedRevision */
+  async function decisionClaim(decisionID, expectedRevision) {
+    decisionID = recordIdentity(decisionID, "decision");
+    const envelope = await request(
+      `/api/v1/decisions/${encodeURIComponent(decisionID)}/claim`,
+      {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({
+          decisionId: decisionID,
+          expectedVersion: "hideout.decision/v1",
+          expectedRevision: Number(expectedRevision || 0),
+          surface: "webui",
+          leaseSeconds: 60
+        })
+      }
+    );
+    if (envelope.version !== "hideout.manager-api/v1" ||
+        envelope.resource !== "decision/claim" ||
+        !envelope.data || envelope.data.decisionId !== decisionID ||
+        typeof envelope.data.claimToken !== "string" ||
+        !envelope.data.claimToken) {
+      throw new Error("decision claim response contract mismatch");
+    }
+    return envelope.data;
+  }
+
+  /**
+   * @param {string} decisionID
+   * @param {string} claimToken
+   * @param {number} expectedRevision
+   * @param {boolean=} keepalive
+   */
+  async function decisionRelease(
+    decisionID,
+    claimToken,
+    expectedRevision,
+    keepalive = false
+  ) {
+    decisionID = recordIdentity(decisionID, "decision");
+    if (!String(claimToken || "").trim()) {
+      throw new Error("decision claim token is missing");
+    }
+    const envelope = await request(
+      `/api/v1/decisions/${encodeURIComponent(decisionID)}/release`,
+      {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({
+          decisionId: decisionID,
+          expectedVersion: "hideout.decision/v1",
+          expectedRevision: Number(expectedRevision || 0),
+          claimToken,
+          reason: "webui review closed"
+        }),
+        keepalive
+      }
+    );
+    if (envelope.version !== "hideout.manager-api/v1" ||
+        envelope.resource !== "decision/release" ||
+        !envelope.data || envelope.data.decisionId !== decisionID) {
+      throw new Error("decision release response contract mismatch");
+    }
+    return envelope.data;
+  }
+
+  /**
+   * @param {string} decisionID
+   * @param {"approve"|"deny"} action
+   * @param {string} claimToken
+   */
+  async function decisionResolve(decisionID, action, claimToken) {
+    decisionID = recordIdentity(decisionID, "decision");
+    if (!["approve", "deny"].includes(action) ||
+        !String(claimToken || "").trim()) {
+      throw new Error("decision resolution authority is invalid");
+    }
+    const envelope = await request(
+      `/api/v1/decisions/${encodeURIComponent(decisionID)}/${action}`,
+      {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({
+          decisionId: decisionID,
+          expectedVersion: "hideout.decision/v1",
+          claimToken,
+          reason: action === "approve" ?
+            "operator-approved-in-webui" : "operator-denied-in-webui"
+        })
+      }
+    );
+    if (envelope.version !== "hideout.manager-api/v1" ||
+        envelope.resource !== `decision/${action}` ||
+        (envelope.errors || []).length ||
+        !envelope.data || envelope.data.decisionId !== decisionID) {
+      throw new Error(
+        (envelope.errors || []).join("; ") ||
+        "decision resolution response contract mismatch"
+      );
+    }
+    return envelope.data;
+  }
+
+  /** @param {string} noticeID */
+  async function noticeAck(noticeID) {
+    noticeID = recordIdentity(noticeID, "notice");
+    const envelope = await request(
+      `/api/v1/notices/${encodeURIComponent(noticeID)}/ack`,
+      {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({noticeId: noticeID, surface: "webui"})
+      }
+    );
+    if (envelope.version !== "hideout.manager-api/v1" ||
+        envelope.resource !== "notice/ack" ||
+        !envelope.data || envelope.data.noticeId !== noticeID) {
+      throw new Error("notice acknowledgement response contract mismatch");
+    }
+    return envelope.data;
+  }
+
   /** @param {string} resource @param {Object} payload */
   async function migrationPost(resource, payload) {
     const allowed = new Set([
@@ -459,6 +604,11 @@
     activity,
     configurationPlan,
     configurationApply,
+    decisionInspect,
+    decisionClaim,
+    decisionRelease,
+    decisionResolve,
+    noticeAck,
     migrationSecretInput,
     migrationExportPlan,
     migrationExportApply,

@@ -8,6 +8,15 @@ next inspect file activity
 Activity (Enter for details)
 > file write · 3 events
 
+Action Required
+total=0 decisions=0 notices=0 hostfs-writes=0
+none
+HostFS Writes pending=0
+Background active=0 status-notices=0
+Doctor run explicitly: hideout doctor --level light
+Package/Support: hideout package verify <install-prefix> | hideo
+Audit retained-records=0
+
 [1] Overview [2] Activity [3] Config
 [4] Operations [5] Migration [6] Help
 j/k select · Enter inspect · e env · ? keys · q quit

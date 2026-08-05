@@ -23,6 +23,7 @@ import (
 
 type Result struct {
 	ConsoleVisible         bool              `json:"consoleVisible"`
+	RequiredAreasVisible   []string          `json:"requiredAreasVisible"`
 	InitialRenderCount     int               `json:"initialRenderCount"`
 	RenderCountAfterEvent  int               `json:"renderCountAfterEvent"`
 	LiveUpdateObserved     bool              `json:"liveUpdateObserved"`
@@ -86,6 +87,23 @@ func runTUIProof(t *testing.T, prereq Prerequisites, fixture webui.Fixture, outD
 	initialRenders := strings.Count(idle, "\x1b[H\x1b[2J")
 	if initialRenders != 1 {
 		t.Fatalf("TUI cleared the screen %d times while healthy and idle; want exactly 1", initialRenders)
+	}
+	requiredAreas := []string{
+		"Action Required",
+		"Decision " + fixture.DecisionID,
+		"Decision " + fixture.HostFSDecisionID,
+		"Notice " + fixture.NoticeID,
+		"Notice " + fixture.BackgroundNoticeID,
+		"HostFS Writes pending=1",
+		"Background active=0 status-notices=1",
+		"Doctor run explicitly: hideout doctor --level light",
+		"Package/Support: hideout package verify <install-prefix>",
+		"Audit retained-records=",
+	}
+	for _, area := range requiredAreas {
+		if !strings.Contains(idle, area) {
+			t.Fatalf("TUI required operator area %q is not visible:\n%s", area, idle)
+		}
 	}
 	idleBytes := len(idle)
 	if err := fixture.PublishWorkspaceViews("ready"); err != nil {
@@ -152,6 +170,7 @@ func runTUIProof(t *testing.T, prereq Prerequisites, fixture webui.Fixture, outD
 	}
 	result := Result{
 		ConsoleVisible:         true,
+		RequiredAreasVisible:   requiredAreas,
 		InitialRenderCount:     initialRenders,
 		RenderCountAfterEvent:  eventRenders,
 		LiveUpdateObserved:     true,
@@ -264,10 +283,10 @@ func writeTUIProofs(t *testing.T, outDir, artifactPrefix string, result Result) 
 	t.Helper()
 	artifacts := resultArtifacts(t, outDir, artifactPrefix, result)
 	proofs := []productevidence.ProofEntry{
-		tuiProof(productevidence.Proof021TUIPTYConsole, "021.FR-006", "TUI launches as a real terminal process and renders the operator console", artifacts),
-		tuiProof(productevidence.Proof021TUIPTYLive, "021.FR-008", "TUI updates visible terminal output from a daemon event", artifacts),
-		tuiProof(productevidence.Proof021TUIPTYNoPolling, "021.FR-009", "TUI does not interval-poll while the daemon stream is healthy", artifacts),
-		tuiProof(productevidence.Proof021TUIPTYFallback, "021.FR-010", "TUI shows stream fallback when the daemon event stream closes", artifacts),
+		tuiProof(productevidence.Proof021TUIPTYConsole, []string{"021.FR-006", "021.FR-007"}, "TUI launches as a real terminal process and renders every required operator area", artifacts),
+		tuiProof(productevidence.Proof021TUIPTYLive, []string{"021.FR-008"}, "TUI updates visible terminal output from a daemon event", artifacts),
+		tuiProof(productevidence.Proof021TUIPTYNoPolling, []string{"021.FR-008"}, "TUI does not interval-poll while the daemon stream is healthy", artifacts),
+		tuiProof(productevidence.Proof021TUIPTYFallback, []string{"021.FR-009"}, "TUI shows stream fallback when the daemon event stream closes", artifacts),
 	}
 	path := filepath.Join(outDir, "proofs.jsonl")
 	file, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
@@ -287,8 +306,19 @@ func writeTUIProofs(t *testing.T, outDir, artifactPrefix string, result Result) 
 	}
 }
 
-func tuiProof(proofID, claimID, description string, artifacts []productevidence.ArtifactRef) productevidence.ProofEntry {
+func tuiProof(
+	proofID string,
+	claimIDs []string,
+	description string,
+	artifacts []productevidence.ArtifactRef,
+) productevidence.ProofEntry {
 	host := productevidence.CurrentHost()
+	claims := make([]productevidence.CoveredClaim, 0, len(claimIDs))
+	for _, claimID := range claimIDs {
+		claims = append(claims, productevidence.CoveredClaim{
+			ClaimID: claimID, Source: "spec", Description: description, Scope: "tui",
+		})
+	}
 	return productevidence.ProofEntry{
 		ProofID:        proofID,
 		FeatureID:      productevidence.Feature021,
@@ -296,12 +326,7 @@ func tuiProof(proofID, claimID, description string, artifacts []productevidence.
 		EvidenceClass:  "local-ui-e2e",
 		Status:         productevidence.StatusPassed,
 		CommandSummary: "scripts/test-ui-e2e.sh --tui --out <evidence-dir>",
-		CoveredClaims: []productevidence.CoveredClaim{{
-			ClaimID:     claimID,
-			Source:      "spec",
-			Description: description,
-			Scope:       "tui",
-		}},
+		CoveredClaims:  claims,
 		Prerequisites: []productevidence.PrerequisiteStatus{
 			{Name: "script", Status: "available"},
 			{Name: "go", Status: "available"},

@@ -439,6 +439,17 @@ func initPlanHasPendingTasks(plan inittask.Plan) bool {
 }
 
 func (c Core) Overview(ctx context.Context) (Overview, error) {
+	// Public overview reads retain the historical best-effort behavior: a
+	// decision maintenance error is represented by the decision projections,
+	// while unrelated overview facts remain available.
+	_ = c.maintainDecisionCenter()
+	return c.overviewCurrent(ctx)
+}
+
+// overviewCurrent is a pure projection read. Callers that need decision
+// timeout/lease convergence must run maintainDecisionCenter before entering
+// any event-sequence fence and then call this helper inside the fence.
+func (c Core) overviewCurrent(ctx context.Context) (Overview, error) {
 	if c.Store.Root == "" {
 		return Overview{}, errors.New("manager store root is required")
 	}
@@ -453,8 +464,8 @@ func (c Core) Overview(ctx context.Context) (Overview, error) {
 	environments = annotateEnvironmentWorkspaceViews(environments, workspaceViews)
 	registry := c.commandProxy(profiles)
 	capabilities := capabilitySummary(profiles, registry)
-	decisionStatus, _ := c.DecisionStatus()
-	notices, _ := c.ListNotices(NoticeListRequest{})
+	decisionStatus, _ := c.decisionStatusCurrent()
+	notices, _ := c.noticesCurrent(NoticeListRequest{})
 	hostAppPacks, _ := c.ListHostAppPacks()
 	return Overview{
 		Version:      "hideout.manager/v1",

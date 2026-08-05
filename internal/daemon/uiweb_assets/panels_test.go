@@ -234,6 +234,42 @@ func TestBrowserPanelAssetsUseBoundedManagerReadsAndEventRefresh(t *testing.T) {
 	}
 }
 
+func TestBrowserOverviewPutsAuthorityAndRequiredAreasInResponsiveHUD(
+	t *testing.T,
+) {
+	app := mustAsset("app.js")
+	if !strings.Contains(app, "node.dataset.overviewArea = area") {
+		t.Fatal("browser operator overview lacks machine-checkable area ownership")
+	}
+	for _, area := range []string{
+		`"Action Required"`,
+		`"Stream"`,
+		`"Decisions"`,
+		`"Notices"`,
+		`"HostFS Writes"`,
+		`"Background"`,
+		`"Doctor"`,
+		`"Package/Support"`,
+		`"Audit"`,
+	} {
+		if !strings.Contains(app, area) {
+			t.Fatalf("browser operator overview is missing required area %s", area)
+		}
+	}
+	style := mustAsset("style.css")
+	for _, marker := range []string{
+		"#overviewBody > .stack",
+		"grid-template-columns: repeat(4, minmax(0, 1fr))",
+		"#overviewBody .overview-priority",
+		"@media (max-width: 620px)",
+		"grid-template-columns: 1fr",
+	} {
+		if !strings.Contains(style, marker) {
+			t.Fatalf("browser operator HUD layout is missing %q", marker)
+		}
+	}
+}
+
 func TestCompoundFiltersCursorInheritanceRetainedGapAndCorrelation(
 	t *testing.T,
 ) {
