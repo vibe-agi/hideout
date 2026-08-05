@@ -31,6 +31,7 @@ assert_before() {
 
 gate0="scripts/test-gate0.sh"
 gate0_static_preflight="$(line_of "$gate0" '  scripts/gates/release-static.sh --preflight || return 1')"
+gate0_browser_preflight="$(line_of "$gate0" '  scripts/gates/browser-console.sh --preflight || return 1')"
 gate0_contract_ladder="$(line_of "$gate0" '  scripts/test-validation-ladder.sh || return 1')"
 gate0_full_static="$(line_of "$gate0" 'scripts/gates/release-static.sh')"
 gate0_release_contracts="$(line_of "$gate0" 'gate0_begin_stage release-contracts')"
@@ -41,6 +42,10 @@ gate0_product_smokes="$(line_of "$gate0" 'gate0_begin_stage product-smokes')"
 gate0_release_surface="$(line_of "$gate0" 'gate0_begin_stage release-surface')"
 assert_before 'Gate 0 release static preflight before validation contracts' \
   "$gate0_static_preflight" "$gate0_contract_ladder"
+assert_before 'Gate 0 release static before browser proof preflight' \
+  "$gate0_static_preflight" "$gate0_browser_preflight"
+assert_before 'Gate 0 browser proof preflight before validation contracts' \
+  "$gate0_browser_preflight" "$gate0_contract_ladder"
 assert_before 'Gate 0 release contracts before UI acceptance' \
   "$gate0_release_contracts" "$gate0_ui_stage"
 assert_before 'Gate 0 UI stage before required CI proof' \
@@ -62,11 +67,15 @@ line_of "scripts/gates/release-candidate.sh" \
 
 candidate_workflow=".github/workflows/hideout-alpha-candidate.yml"
 candidate_static_preflight="$(line_of "$candidate_workflow" '      - name: Run deterministic release preflight before credentials')"
+candidate_static_command="$(line_of "$candidate_workflow" '          scripts/gates/release-static.sh --preflight')"
+candidate_browser_preflight="$(line_of "$candidate_workflow" '          scripts/gates/browser-console.sh --preflight')"
 candidate_credentials="$(line_of "$candidate_workflow" '      - name: Import protected Developer ID and notarization credentials')"
-line_of "$candidate_workflow" \
-  '        run: scripts/gates/release-static.sh --preflight' >/dev/null
 assert_before 'candidate static preflight before protected credentials' \
   "$candidate_static_preflight" "$candidate_credentials"
+assert_before 'candidate static command before browser proof preflight' \
+  "$candidate_static_command" "$candidate_browser_preflight"
+assert_before 'candidate browser proof preflight before protected credentials' \
+  "$candidate_browser_preflight" "$candidate_credentials"
 
 for gate0_diagnostic_marker in \
   'set -Eeuo pipefail' \

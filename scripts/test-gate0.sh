@@ -70,6 +70,7 @@ gate0_release_preflight() {
   # Run the same deterministic source contract used by the later local
   # release aggregate. Cheap failures must surface before signing.
   scripts/gates/release-static.sh --preflight || return 1
+  scripts/gates/browser-console.sh --preflight || return 1
   # This function is also called from a conditional failure-reporting wrapper.
   # Guard the nested script explicitly because Bash otherwise suppresses
   # errexit throughout a function invoked by `if ! function`.

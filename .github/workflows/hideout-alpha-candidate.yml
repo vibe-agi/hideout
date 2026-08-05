@@ -116,7 +116,9 @@ jobs:
           } >>"$GITHUB_ENV"
 
       - name: Run deterministic release preflight before credentials
-        run: scripts/gates/release-static.sh --preflight
+        run: |
+          scripts/gates/release-static.sh --preflight
+          scripts/gates/browser-console.sh --preflight
 
       - name: Import protected Developer ID and notarization credentials
         env:

@@ -5,10 +5,11 @@ repo_root="$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)"
 cd "$repo_root"
 
 out="$repo_root/.artifacts/045/ui/browser"
+preflight=0
 
 usage() {
   printf '%s\n' \
-    "Usage: scripts/gates/browser-console.sh [--out DIR]" \
+    "Usage: scripts/gates/browser-console.sh [--preflight] [--out DIR]" \
     "" \
     "Runs the required real-browser operator-console journey: parity, exact-" \
     "owner history, auth refusal, credential rotation, SSE loss/read-only," \
@@ -18,6 +19,10 @@ usage() {
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
+    --preflight)
+      preflight=1
+      shift
+      ;;
     --out)
       if [ "$#" -lt 2 ] || [ -z "${2:-}" ]; then
         printf 'browser-console-gate: --out requires a directory\n' >&2
@@ -38,7 +43,7 @@ while [ "$#" -gt 0 ]; do
   esac
 done
 
-for command in go node jq git; do
+for command in go jq git; do
   if ! command -v "$command" >/dev/null 2>&1; then
     printf \
       'browser-console-gate: missing required command: %s\n' \
@@ -46,6 +51,124 @@ for command in go node jq git; do
     exit 1
   fi
 done
+
+expected_browser_proof_ids() {
+  go run ./cmd/hideout support proof-registry --json |
+    jq -ce '
+      if .schema == "hideout.proof-registry/v1" then
+        [.requirements[] |
+          select(
+            .featureId == "021-ui-e2e-proof" and
+            (.proofId | startswith("021.webui.browser."))
+          ) |
+          .proofId
+        ] |
+        sort |
+        if length > 0 and ((unique | length) == length) then .
+        else error("browser proof registry is empty or duplicated")
+        end
+      else error("proof registry schema mismatch")
+      end
+    '
+}
+
+validate_browser_proof_records() {
+  local expected="$1"
+  jq -s -e --argjson expected "$expected" '
+    (map(.proofId) | sort) == $expected and
+    (map(.proofId) | unique | length) == length and
+    all(.[];
+      .featureId == "021-ui-e2e-proof" and
+      .mode == "browser-e2e" and
+      .status == "passed" and
+      .redactionStatus == "passed" and
+      (.artifacts | length) >= 7 and
+      all(.artifacts[];
+        (.kind | IN(
+          "screenshot", "docs-report", "log", "event-summary"
+        )) and
+        (.sha256 | test("^[a-f0-9]{64}$")) and
+        .redactionStatus == "passed"
+      )
+    )
+  ' >/dev/null
+}
+
+browser_proof_ids="$(expected_browser_proof_ids)" || {
+  printf 'browser-console-gate: canonical browser proof inventory is invalid\n' >&2
+  exit 1
+}
+
+run_preflight() {
+  local fixture first missing extra duplicate
+  first="$(jq -er '.[0]' <<<"$browser_proof_ids")"
+  fixture="$(
+    jq -cn --argjson ids "$browser_proof_ids" '
+      $ids[] as $proofId |
+      {
+        proofId:$proofId,
+        featureId:"021-ui-e2e-proof",
+        mode:"browser-e2e",
+        status:"passed",
+        redactionStatus:"passed",
+        artifacts:[range(0; 7) | {
+          kind:"log", sha256:("a" * 64), redactionStatus:"passed"
+        }]
+      }
+    '
+  )"
+  validate_browser_proof_records "$browser_proof_ids" <<<"$fixture" || {
+    printf 'browser-console-gate: exact registry fixture was rejected\n' >&2
+    return 1
+  }
+
+  missing="$(jq -c --arg proofId "$first" '
+    select(.proofId != $proofId)
+  ' <<<"$fixture")"
+  if validate_browser_proof_records "$browser_proof_ids" <<<"$missing"; then
+    printf 'browser-console-gate: missing proof fixture was accepted\n' >&2
+    return 1
+  fi
+
+  extra="$fixture"$'\n'"$(jq -cn '
+    {
+      proofId:"021.webui.browser.unregistered",
+      featureId:"021-ui-e2e-proof",
+      mode:"browser-e2e",
+      status:"passed",
+      redactionStatus:"passed",
+      artifacts:[range(0; 7) | {
+        kind:"log", sha256:("b" * 64), redactionStatus:"passed"
+      }]
+    }
+  ')"
+  if validate_browser_proof_records "$browser_proof_ids" <<<"$extra"; then
+    printf 'browser-console-gate: extra proof fixture was accepted\n' >&2
+    return 1
+  fi
+
+  duplicate="$fixture"$'\n'"$(jq -c --arg proofId "$first" '
+    select(.proofId == $proofId)
+  ' <<<"$fixture")"
+  if validate_browser_proof_records "$browser_proof_ids" <<<"$duplicate"; then
+    printf 'browser-console-gate: duplicate proof fixture was accepted\n' >&2
+    return 1
+  fi
+
+  printf \
+    'browser-console-gate: preflight=passed proofs=%s vmBoots=0 browserRuns=0\n' \
+    "$(jq 'length' <<<"$browser_proof_ids")"
+}
+
+if [ "$preflight" -eq 1 ]; then
+  run_preflight
+  exit 0
+fi
+
+command -v node >/dev/null 2>&1 || {
+  printf 'browser-console-gate: missing required command: node\n' >&2
+  exit 1
+}
 
 find_chrome() {
   if [ -n "${HIDEOUT_CHROME_PATH:-}" ] &&
@@ -187,22 +310,7 @@ if ! jq -e '
   exit 1
 fi
 
-if ! jq -s -e '
-  length == 3 and
-  all(.[];
-    .mode == "browser-e2e" and
-    .status == "passed" and
-    .redactionStatus == "passed" and
-    (.artifacts | length) >= 7 and
-    all(.artifacts[];
-      (.kind | IN(
-        "screenshot", "docs-report", "log", "event-summary"
-      )) and
-      (.sha256 | test("^[a-f0-9]{64}$")) and
-      .redactionStatus == "passed"
-    )
-  )
-' "$proofs" >/dev/null; then
+if ! validate_browser_proof_records "$browser_proof_ids" <"$proofs"; then
   printf 'browser-console-gate: product proof records are invalid\n' >&2
   exit 1
 fi
