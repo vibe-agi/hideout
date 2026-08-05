@@ -14,7 +14,7 @@ mode="full"
 
 usage() {
   printf '%s\n' \
-    "Usage: scripts/gates/release-static.sh [--preflight]" \
+    "Usage: scripts/gates/release-static.sh [--preflight|--self-test]" \
     "" \
     "Runs the shared release-static contract. --preflight skips only Go" \
     "build/vet; formatting, module tidiness, shell syntax/lint, complete" \
@@ -26,6 +26,10 @@ case "${1:-}" in
   --preflight)
     [ "$#" -eq 1 ] || { usage >&2; exit 2; }
     mode="preflight"
+    ;;
+  --self-test)
+    [ "$#" -eq 1 ] || { usage >&2; exit 2; }
+    mode="self-test"
     ;;
   -h | --help)
     [ "$#" -eq 1 ] || { usage >&2; exit 2; }
@@ -39,7 +43,7 @@ case "${1:-}" in
 esac
 
 for command in \
-  awk bash cmp comm find git go gofmt jq markdownlint-cli2 sed shellcheck \
+  awk bash cmp comm find git go gofmt grep jq markdownlint-cli2 sed shellcheck \
   sort tr wc xargs; do
   command -v "$command" >/dev/null 2>&1 || {
     printf 'release-static: missing required command: %s\n' "$command" >&2
@@ -80,6 +84,88 @@ cleanup() {
 }
 trap cleanup EXIT
 
+check_module_tidy() {
+  local diff_path="$1" diagnostics_path="$2" status=0
+  if go mod tidy -diff >"$diff_path" 2>"$diagnostics_path"; then
+    status=0
+  else
+    status=$?
+  fi
+  if [ "$status" -ne 0 ]; then
+    printf 'release-static: go mod tidy -diff failed:\n' >&2
+    if [ -s "$diagnostics_path" ]; then
+      sed 's/^/  /' "$diagnostics_path" >&2
+    fi
+    if [ -s "$diff_path" ]; then
+      sed 's/^/  /' "$diff_path" >&2
+    fi
+    return 1
+  fi
+  if [ -s "$diff_path" ]; then
+    printf 'release-static: go.mod/go.sum are not tidy:\n' >&2
+    sed 's/^/  /' "$diff_path" >&2
+    return 1
+  fi
+}
+
+module_tidy_self_test() {
+  local scenario="diagnostics-only"
+  go() {
+    [ "$#" -eq 3 ] && [ "$1" = "mod" ] && [ "$2" = "tidy" ] &&
+      [ "$3" = "-diff" ] || return 97
+    case "$scenario" in
+      diagnostics-only)
+        printf 'go: downloading example.invalid/module v1.0.0\n' >&2
+        ;;
+      module-diff)
+        printf 'diff --git a/go.mod b/go.mod\n+module drift\n'
+        ;;
+      command-failure)
+        printf 'go: proxy unavailable\n' >&2
+        return 1
+        ;;
+      *)
+        return 98
+        ;;
+    esac
+  }
+
+  check_module_tidy \
+    "$scratch/self-test.diff" "$scratch/self-test.diagnostics" || {
+    printf 'release-static: tidy self-test rejected diagnostics-only success\n' >&2
+    return 1
+  }
+  scenario="module-diff"
+  if check_module_tidy \
+    "$scratch/self-test.diff" "$scratch/self-test.diagnostics" \
+    >"$scratch/self-test.stdout" 2>"$scratch/self-test.stderr"; then
+    printf 'release-static: tidy self-test accepted a module diff\n' >&2
+    return 1
+  fi
+  grep -Fq '+module drift' "$scratch/self-test.stderr" || {
+    printf 'release-static: tidy self-test lost module diff diagnostics\n' >&2
+    return 1
+  }
+  scenario="command-failure"
+  if check_module_tidy \
+    "$scratch/self-test.diff" "$scratch/self-test.diagnostics" \
+    >"$scratch/self-test.stdout" 2>"$scratch/self-test.stderr"; then
+    printf 'release-static: tidy self-test accepted a command failure\n' >&2
+    return 1
+  fi
+  grep -Fq 'go: proxy unavailable' "$scratch/self-test.stderr" || {
+    printf 'release-static: tidy self-test lost command diagnostics\n' >&2
+    return 1
+  }
+  unset -f go
+}
+
+module_tidy_self_test
+if [ "$mode" = "self-test" ]; then
+  printf 'release-static: module-tidy self-test passed vmBoots=0\n'
+  exit 0
+fi
+
 if [ "$mode" = "full" ]; then
   go build ./...
   go vet ./...
@@ -94,16 +180,7 @@ if [ -s "$scratch/unformatted-go" ]; then
   exit 1
 fi
 
-if ! go mod tidy -diff >"$scratch/tidy.diff" 2>&1; then
-  printf 'release-static: go.mod/go.sum are not tidy:\n' >&2
-  sed 's/^/  /' "$scratch/tidy.diff" >&2
-  exit 1
-fi
-if [ -s "$scratch/tidy.diff" ]; then
-  printf 'release-static: go mod tidy unexpectedly emitted a diff:\n' >&2
-  sed 's/^/  /' "$scratch/tidy.diff" >&2
-  exit 1
-fi
+check_module_tidy "$scratch/tidy.diff" "$scratch/tidy.diagnostics"
 
 while IFS= read -r script; do
   bash -n "$script"
