@@ -1,4 +1,8 @@
 #!/usr/bin/env bash
+# This structural contract intentionally matches literal shell source that
+# contains "$..." expressions. Expanding those expressions here would change
+# the contract instead of inspecting it.
+# shellcheck disable=SC2016
 set -euo pipefail
 
 root="$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd -P)"
@@ -26,12 +30,16 @@ assert_before() {
 }
 
 gate0="scripts/test-gate0.sh"
+gate0_inventory_lint="$(line_of "$gate0" '  gate0_release_inventory_shellcheck || return 1')"
+gate0_contract_ladder="$(line_of "$gate0" '  scripts/test-validation-ladder.sh || return 1')"
 gate0_release_contracts="$(line_of "$gate0" 'gate0_begin_stage release-contracts')"
 gate0_ui_stage="$(line_of "$gate0" 'gate0_begin_stage ui-acceptance')"
 gate0_ui_required="$(line_of "$gate0" '  scripts/test-ui-e2e.sh --all --require-executed --out "$ui_e2e_tmp"')"
 gate0_ui_tolerant="$(line_of "$gate0" '  scripts/test-ui-e2e.sh --all --out "$ui_e2e_tmp"')"
 gate0_product_smokes="$(line_of "$gate0" 'gate0_begin_stage product-smokes')"
 gate0_release_surface="$(line_of "$gate0" 'gate0_begin_stage release-surface')"
+assert_before 'Gate 0 release inventory lint before validation contracts' \
+  "$gate0_inventory_lint" "$gate0_contract_ladder"
 assert_before 'Gate 0 release contracts before UI acceptance' \
   "$gate0_release_contracts" "$gate0_ui_stage"
 assert_before 'Gate 0 UI stage before required CI proof' \
@@ -150,7 +158,7 @@ line_of "$runtime_quickstart" \
 line_of "$runtime_quickstart" \
   'gate3_runtime="$(runtime_evidence_unique_binding "$gate3_manifest")"' >/dev/null
 line_of "$runtime_lima" 'baseline_id="baseline.git"' >/dev/null
-if ! grep -Fq 'runtime_evidence_unique_binding \' "$public_candidate"; then
+if ! grep -Fq "runtime_evidence_unique_binding \\" "$public_candidate"; then
   printf 'validation-ladder: signed candidate lacks unique runtime selection\n' >&2
   exit 1
 fi

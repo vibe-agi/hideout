@@ -36,6 +36,31 @@ gate0_require_command() {
   }
 }
 
+gate0_release_inventory_shellcheck() {
+  local inventory="scripts/gates/release-candidate-inventory.json"
+  local script lint_inventory
+  local -a lint_scripts=()
+  [ -f "$inventory" ] && [ ! -L "$inventory" ] || {
+    printf 'gate0: release lint inventory is missing or unsafe: %s\n' \
+      "$inventory" >&2
+    return 1
+  }
+  lint_inventory="$(jq -er '.shellLint[]' "$inventory")" || return 1
+  while IFS= read -r script; do
+    [ -f "$script" ] && [ ! -L "$script" ] || {
+      printf 'gate0: shell lint path is missing or unsafe: %s\n' \
+        "$script" >&2
+      return 1
+    }
+    lint_scripts+=("$script")
+  done <<<"$lint_inventory"
+  [ "${#lint_scripts[@]}" -gt 0 ] || {
+    printf 'gate0: release shell lint inventory is empty\n' >&2
+    return 1
+  }
+  shellcheck -x "${lint_scripts[@]}"
+}
+
 gate0_release_preflight() {
   local command shellcheck_version markdownlint_version lima_version
   local expected_go_version actual_go_version
@@ -67,6 +92,9 @@ gate0_release_preflight() {
     printf 'gate0: Lima version=%s, want=2.2.0\n' "$lima_version" >&2
     return 1
   }
+  # Read the same inventory used by the later release-candidate static lane.
+  # Cheap deterministic lint belongs before any signing or expensive lane.
+  gate0_release_inventory_shellcheck || return 1
   # This function is also called from a conditional failure-reporting wrapper.
   # Guard the nested script explicitly because Bash otherwise suppresses
   # errexit throughout a function invoked by `if ! function`.
