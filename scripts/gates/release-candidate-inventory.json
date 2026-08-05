@@ -33,6 +33,7 @@
     "scripts/gates/release-candidate-privacy.sh",
     "scripts/gates/release-candidate-ui.sh",
     "scripts/gates/release-candidate.sh",
+    "scripts/gates/release-static.sh",
     "scripts/gates/workload-observation-lima.sh",
     "scripts/gates/workload-privacy-lima.sh",
     "scripts/generate-workload-observer-bpf.sh",

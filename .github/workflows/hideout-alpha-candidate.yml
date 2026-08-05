@@ -115,6 +115,9 @@ jobs:
             echo "HIDEOUT_ALPHA_REPLACE_DRAFT_ID=$replace_draft_id"
           } >>"$GITHUB_ENV"
 
+      - name: Run deterministic release preflight before credentials
+        run: scripts/gates/release-static.sh --preflight
+
       - name: Import protected Developer ID and notarization credentials
         env:
           DEVELOPER_ID_P12_BASE64: ${{ secrets.APPLE_DEVELOPER_ID_P12_BASE64 }}

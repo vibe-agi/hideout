@@ -36,31 +36,6 @@ gate0_require_command() {
   }
 }
 
-gate0_release_inventory_shellcheck() {
-  local inventory="scripts/gates/release-candidate-inventory.json"
-  local script lint_inventory
-  local -a lint_scripts=()
-  [ -f "$inventory" ] && [ ! -L "$inventory" ] || {
-    printf 'gate0: release lint inventory is missing or unsafe: %s\n' \
-      "$inventory" >&2
-    return 1
-  }
-  lint_inventory="$(jq -er '.shellLint[]' "$inventory")" || return 1
-  while IFS= read -r script; do
-    [ -f "$script" ] && [ ! -L "$script" ] || {
-      printf 'gate0: shell lint path is missing or unsafe: %s\n' \
-        "$script" >&2
-      return 1
-    }
-    lint_scripts+=("$script")
-  done <<<"$lint_inventory"
-  [ "${#lint_scripts[@]}" -gt 0 ] || {
-    printf 'gate0: release shell lint inventory is empty\n' >&2
-    return 1
-  }
-  shellcheck -x "${lint_scripts[@]}"
-}
-
 gate0_release_preflight() {
   local command shellcheck_version markdownlint_version lima_version
   local expected_go_version actual_go_version
@@ -92,9 +67,9 @@ gate0_release_preflight() {
     printf 'gate0: Lima version=%s, want=2.2.0\n' "$lima_version" >&2
     return 1
   }
-  # Read the same inventory used by the later release-candidate static lane.
-  # Cheap deterministic lint belongs before any signing or expensive lane.
-  gate0_release_inventory_shellcheck || return 1
+  # Run the same deterministic source contract used by the later local
+  # release aggregate. Cheap failures must surface before signing.
+  scripts/gates/release-static.sh --preflight || return 1
   # This function is also called from a conditional failure-reporting wrapper.
   # Guard the nested script explicitly because Bash otherwise suppresses
   # errexit throughout a function invoked by `if ! function`.
@@ -124,15 +99,9 @@ fi
 # remains required before any commit or claim.
 if [ "${1:-}" = "--quick" ]; then
   [ "$#" -eq 1 ] || { usage >&2; exit 2; }
+  scripts/gates/release-static.sh --preflight
   go vet ./...
-  unformatted="$(gofmt -l cmd internal test)"
-  if [ -n "$unformatted" ]; then
-    echo "gate0 --quick: gofmt required for:" >&2
-    echo "$unformatted" >&2
-    exit 1
-  fi
   go test -failfast -p "$go_test_parallelism" ./...
-  markdownlint-cli2 'docs/*.md'
   jq empty schemas/*.json
   echo "gate0 --quick passed; run the full gate before commit"
   exit 0
@@ -289,21 +258,13 @@ trap 'gate0_capture_error "$LINENO" "$BASH_COMMAND"' ERR
 trap gate0_verify_source_unchanged EXIT
 
 gate0_begin_stage foundation
-go build ./...
-go vet ./...
+scripts/gates/release-static.sh
 # The Linux guest helpers and the Linux test binaries the real backend lanes
 # compile (`go test -c` in the workload-observation gate) come out of this same
 # module. A darwin-only symbol reached from portable code type-checks on the
 # host and only fails much later inside a real lane, so prove the guest target
 # here. vet is used rather than build because it also type-checks test files.
 GOOS=linux GOARCH=arm64 go vet ./...
-unformatted="$(gofmt -l cmd internal test)"
-if [ -n "$unformatted" ]; then
-  echo "gate0: gofmt required for:" >&2
-  echo "$unformatted" >&2
-  gate0_record_failure "$LINENO" "gofmt -l cmd internal test"
-  exit 1
-fi
 go test -failfast -p "$go_test_parallelism" -count=1 ./...
 scripts/test-vulnerability-gate.sh --self-test --source
 # Portable migration foundation: strict schemas and parsers, bounded fuzz
@@ -319,7 +280,6 @@ scripts/gates/recovery.sh
 scripts/test-install-smoke.sh
 scripts/test-package-smoke.sh
 scripts/test-standalone-install.sh
-markdownlint-cli2 'docs/*.md'
 jq empty schemas/*.json
 test -f schemas/init-plan.schema.json
 test -f schemas/init-audit-event.schema.json

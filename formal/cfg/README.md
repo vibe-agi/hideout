@@ -12,7 +12,8 @@ have matching modules and property declarations. The operator, request, and
 workload models deliberately separate their full concurrent safety spaces from
 weak-fair progress spaces. Workload liveness retains both owner kinds and
 process identities but uses the separately declared `livenessMaxSequence`; the
-full workload safety boundary retains `maxSequence`. Configuration drift is checked by
+full workload safety boundary retains `maxSequence`. Configuration drift is
+checked by
 `internal/manager/formal_refinement_test.go` and
 `internal/manager/profile_transaction_refinement_test.go`. The complete
 configuration, secret, route, and observation production traces are part of
