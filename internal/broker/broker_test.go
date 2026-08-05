@@ -141,6 +141,8 @@ func (r *browserRecordingOpener) BrowserProfile() string {
 	return r.browserProfile
 }
 
+// publicHostEvaluator keeps broker tests independent of workstation DNS.
+// Resolver failure and address-boundary behavior are covered in policy tests.
 func publicHostEvaluator(p profile.Profile) policy.Evaluator {
 	evaluator := policy.NewEvaluator(p)
 	evaluator.ResolveHost = func(string) ([]netip.Addr, error) {
@@ -213,7 +215,7 @@ func TestHandleRejectsBadToken(t *testing.T) {
 		Token:     "cap_good",
 		Profile:   "test",
 		Backend:   "native",
-		Evaluator: policy.NewEvaluator(profile.Default("test")),
+		Evaluator: publicHostEvaluator(profile.Default("test")),
 		Opener:    opener,
 		Audit:     writer,
 	}
@@ -872,7 +874,7 @@ func TestHandleRejectsLocalBrowserURLBeforeHostOpen(t *testing.T) {
 		Profile:   "test",
 		Backend:   "native",
 		Commands:  []string{"open"},
-		Evaluator: policy.NewEvaluator(profile.Default("test")),
+		Evaluator: publicHostEvaluator(profile.Default("test")),
 		Opener:    opener,
 		Audit:     writer,
 	}
@@ -974,7 +976,7 @@ func TestHandleRedactsHostOpenerFailureDetails(t *testing.T) {
 		HostRoot:  hostRoot,
 		GuestRoot: "/workspace",
 		Commands:  []string{"open"},
-		Evaluator: policy.NewEvaluator(profile.Default("test")),
+		Evaluator: publicHostEvaluator(profile.Default("test")),
 		Opener: failingOpener{
 			fileErr: errors.New("open " + target + ": permission denied"),
 		},
@@ -1319,7 +1321,7 @@ func TestHandleRejectsCommandProxyWithoutHostBrokerRoute(t *testing.T) {
 	server := Server{
 		SessionID: "ses_1",
 		Token:     "cap_good",
-		Evaluator: policy.NewEvaluator(profile.Default("test")),
+		Evaluator: publicHostEvaluator(profile.Default("test")),
 		Opener:    opener,
 	}
 	for _, req := range []Request{
@@ -1368,7 +1370,7 @@ func TestHandleRejectsUnsupportedCommandProxyPayload(t *testing.T) {
 		Profile:   "test",
 		Backend:   "native",
 		Commands:  []string{"open"},
-		Evaluator: policy.NewEvaluator(profile.Default("test")),
+		Evaluator: publicHostEvaluator(profile.Default("test")),
 		Opener:    opener,
 		Audit:     writer,
 	}
@@ -1417,7 +1419,7 @@ func TestHandleRejectsMalformedHTTPURL(t *testing.T) {
 	server := Server{
 		SessionID: "ses_1",
 		Token:     "cap_good",
-		Evaluator: policy.NewEvaluator(profile.Default("test")),
+		Evaluator: publicHostEvaluator(profile.Default("test")),
 		Opener:    opener,
 	}
 	resp := server.Handle(context.Background(), Request{
@@ -1441,7 +1443,7 @@ func TestHandleRejectsMalformedBrokerEnvelope(t *testing.T) {
 	server := Server{
 		SessionID: "ses_1",
 		Token:     "cap_good",
-		Evaluator: policy.NewEvaluator(profile.Default("test")),
+		Evaluator: publicHostEvaluator(profile.Default("test")),
 		Opener:    opener,
 	}
 	for name, req := range map[string]Request{
@@ -1526,7 +1528,7 @@ func TestHandleRejectsInvalidCWDBeforeScripts(t *testing.T) {
 				HostRoot:   t.TempDir(),
 				GuestRoot:  "/workspace",
 				Commands:   []string{"open"},
-				Evaluator:  policy.NewEvaluator(profile.Default("test")),
+				Evaluator:  publicHostEvaluator(profile.Default("test")),
 				Opener:     opener,
 				ScriptRefs: []profile.ScriptRef{{
 					ID:          "must-not-run",
@@ -1674,7 +1676,7 @@ func TestHandleRejectsInvalidCWDWithoutAuditingRawPath(t *testing.T) {
 		HostRoot:  t.TempDir(),
 		GuestRoot: "/workspace",
 		Commands:  []string{"open"},
-		Evaluator: policy.NewEvaluator(profile.Default("test")),
+		Evaluator: publicHostEvaluator(profile.Default("test")),
 		Opener:    &recordingOpener{},
 		Audit:     writer,
 	}
@@ -1719,7 +1721,7 @@ func TestHandleUnsupportedActionAuditUsesBrokerRequest(t *testing.T) {
 		Token:     "cap_good",
 		Profile:   "test",
 		Backend:   "native",
-		Evaluator: policy.NewEvaluator(profile.Default("test")),
+		Evaluator: publicHostEvaluator(profile.Default("test")),
 		Opener:    opener,
 		Audit:     writer,
 	}
@@ -1760,7 +1762,7 @@ func TestHandleRejectsCommandProxyWithoutRegisteredCommands(t *testing.T) {
 	server := Server{
 		SessionID: "ses_1",
 		Token:     "cap_good",
-		Evaluator: policy.NewEvaluator(profile.Default("test")),
+		Evaluator: publicHostEvaluator(profile.Default("test")),
 		Opener:    opener,
 	}
 	resp := server.Handle(context.Background(), Request{
@@ -1886,7 +1888,7 @@ func TestHandleRejectsMissingCommandMetadataWhenRegistryConfigured(t *testing.T)
 				SessionID: "ses_1",
 				Token:     "cap_good",
 				Commands:  []string{"open", "xdg-open"},
-				Evaluator: policy.NewEvaluator(profile.Default("test")),
+				Evaluator: publicHostEvaluator(profile.Default("test")),
 				Opener:    opener,
 			}
 			resp := server.Handle(context.Background(), tc.req)
@@ -1906,7 +1908,7 @@ func TestHandleRejectsCommandDisabledByProfile(t *testing.T) {
 		SessionID: "ses_1",
 		Token:     "cap_good",
 		Commands:  []string{"open"},
-		Evaluator: policy.NewEvaluator(profile.Default("test")),
+		Evaluator: publicHostEvaluator(profile.Default("test")),
 		Opener:    opener,
 	}
 	resp := server.Handle(context.Background(), Request{
@@ -1934,7 +1936,7 @@ func TestHandleRejectsCommandSubjectMismatch(t *testing.T) {
 		SessionID: "ses_1",
 		Token:     "cap_good",
 		Commands:  []string{"open", "xdg-open"},
-		Evaluator: policy.NewEvaluator(profile.Default("test")),
+		Evaluator: publicHostEvaluator(profile.Default("test")),
 		Opener:    opener,
 	}
 	resp := server.Handle(context.Background(), Request{
@@ -1963,7 +1965,7 @@ func TestHandleRejectsCustomAndOutsideFileURLSchemes(t *testing.T) {
 		Token:     "cap_good",
 		HostRoot:  t.TempDir(),
 		GuestRoot: "/workspace",
-		Evaluator: policy.NewEvaluator(profile.Default("test")),
+		Evaluator: publicHostEvaluator(profile.Default("test")),
 		Opener:    opener,
 	}
 	for _, target := range []string{
@@ -2004,7 +2006,7 @@ func TestHandleRejectsEncodedFileURLPathSeparators(t *testing.T) {
 		Token:     "cap_good",
 		HostRoot:  hostRoot,
 		GuestRoot: "/workspace",
-		Evaluator: policy.NewEvaluator(profile.Default("test")),
+		Evaluator: publicHostEvaluator(profile.Default("test")),
 		Opener:    opener,
 	}
 	for _, target := range []string{
@@ -2051,7 +2053,7 @@ func TestHandleMapsWorkspaceFileURL(t *testing.T) {
 			Token:     "cap_good",
 			HostRoot:  hostRoot,
 			GuestRoot: "/workspace",
-			Evaluator: policy.NewEvaluator(profile.Default("test")),
+			Evaluator: publicHostEvaluator(profile.Default("test")),
 			Opener:    opener,
 		}
 		resp := server.Handle(context.Background(), Request{
@@ -2088,7 +2090,7 @@ func TestHandleMapsWorkspaceFile(t *testing.T) {
 		HostRoot:  hostRoot,
 		GuestRoot: guestRoot,
 		Commands:  []string{"open"},
-		Evaluator: policy.NewEvaluator(profile.Default("test")),
+		Evaluator: publicHostEvaluator(profile.Default("test")),
 		Opener:    opener,
 	}
 	resp := server.Handle(context.Background(), Request{
@@ -2129,7 +2131,7 @@ func TestHandleRejectsMissingMappedWorkspaceFile(t *testing.T) {
 		HostRoot:  hostRoot,
 		GuestRoot: "/workspace",
 		Commands:  []string{"open"},
-		Evaluator: policy.NewEvaluator(profile.Default("test")),
+		Evaluator: publicHostEvaluator(profile.Default("test")),
 		Opener:    opener,
 		Audit:     writer,
 	}
@@ -2176,7 +2178,7 @@ func TestHandleRejectsOpenArgvThatDoesNotMatchPayload(t *testing.T) {
 		HostRoot:  t.TempDir(),
 		GuestRoot: "/workspace",
 		Commands:  []string{"open"},
-		Evaluator: policy.NewEvaluator(profile.Default("test")),
+		Evaluator: publicHostEvaluator(profile.Default("test")),
 		Opener:    opener,
 		Audit:     writer,
 	}
@@ -2274,7 +2276,7 @@ func TestHandleMapsWorkspaceFileWhenWorkspaceRootIsSymlink(t *testing.T) {
 		HostRoot:  linkRoot,
 		GuestRoot: linkRoot,
 		Commands:  []string{"open"},
-		Evaluator: policy.NewEvaluator(profile.Default("test")),
+		Evaluator: publicHostEvaluator(profile.Default("test")),
 		Opener:    opener,
 	}
 	resp := server.Handle(context.Background(), Request{
@@ -2316,7 +2318,7 @@ func TestHandleRejectsCommandProxyWorkspaceSymlinkEscape(t *testing.T) {
 		HostRoot:  hostRoot,
 		GuestRoot: "/workspace",
 		Commands:  []string{"open"},
-		Evaluator: policy.NewEvaluator(profile.Default("test")),
+		Evaluator: publicHostEvaluator(profile.Default("test")),
 		Opener:    opener,
 	}
 	resp := server.Handle(context.Background(), Request{
@@ -2360,7 +2362,7 @@ func TestHandleRejectsWorkspaceSpecialFile(t *testing.T) {
 		HostRoot:  hostRoot,
 		GuestRoot: "/workspace",
 		Commands:  []string{"open"},
-		Evaluator: policy.NewEvaluator(profile.Default("test")),
+		Evaluator: publicHostEvaluator(profile.Default("test")),
 		Opener:    opener,
 	}
 	resp := server.Handle(context.Background(), Request{
@@ -2420,7 +2422,7 @@ func TestHandleNormalizesAndMapsWorkspacePathBeforeCommandPolicyScript(t *testin
 		HostRoot:   hostRoot,
 		GuestRoot:  "/workspace",
 		Commands:   []string{"open"},
-		Evaluator:  policy.NewEvaluator(profile.Default("test")),
+		Evaluator:  publicHostEvaluator(profile.Default("test")),
 		Opener:     opener,
 		ScriptRefs: []profile.ScriptRef{{
 			ID:          "path-policy",
@@ -2462,7 +2464,7 @@ func TestHandleAllowsWorkspaceFileBeginningWithDots(t *testing.T) {
 		Token:     "cap_good",
 		HostRoot:  hostRoot,
 		GuestRoot: "/workspace",
-		Evaluator: policy.NewEvaluator(profile.Default("test")),
+		Evaluator: publicHostEvaluator(profile.Default("test")),
 		Opener:    opener,
 	}
 	resp := server.Handle(context.Background(), Request{
@@ -2492,7 +2494,7 @@ func TestHandleRejectsWorkspaceParentTraversal(t *testing.T) {
 		Token:     "cap_good",
 		HostRoot:  t.TempDir(),
 		GuestRoot: "/workspace",
-		Evaluator: policy.NewEvaluator(profile.Default("test")),
+		Evaluator: publicHostEvaluator(profile.Default("test")),
 		Opener:    opener,
 	}
 	resp := server.Handle(context.Background(), Request{
@@ -2526,7 +2528,7 @@ func TestHandleRejectsWorkspaceSymlinkEscape(t *testing.T) {
 		Token:     "cap_good",
 		HostRoot:  hostRoot,
 		GuestRoot: "/workspace",
-		Evaluator: policy.NewEvaluator(profile.Default("test")),
+		Evaluator: publicHostEvaluator(profile.Default("test")),
 		Opener:    opener,
 	}
 	resp := server.Handle(context.Background(), Request{
@@ -2567,7 +2569,7 @@ func TestHandleAuditsResourceTypeAndMappedHostPath(t *testing.T) {
 		HostRoot:  hostRoot,
 		GuestRoot: "/workspace",
 		Commands:  []string{"open"},
-		Evaluator: policy.NewEvaluator(profile.Default("test")),
+		Evaluator: publicHostEvaluator(profile.Default("test")),
 		Opener:    opener,
 		Audit:     writer,
 	}
@@ -2640,7 +2642,7 @@ func TestHandleRunsCommandPolicyScriptAndAuditsHash(t *testing.T) {
 		Profile:    "test",
 		ProfileDir: profileDir,
 		Commands:   []string{"open"},
-		Evaluator:  policy.NewEvaluator(profile.Default("test")),
+		Evaluator:  publicHostEvaluator(profile.Default("test")),
 		Opener:     opener,
 		Audit:      writer,
 		ScriptRefs: []profile.ScriptRef{{
@@ -2862,7 +2864,7 @@ func TestHandleDeniesCommandPolicyScriptOnRawCredentialURL(t *testing.T) {
 		Profile:    "test",
 		ProfileDir: profileDir,
 		Commands:   []string{"open"},
-		Evaluator:  policy.NewEvaluator(profile.Default("test")),
+		Evaluator:  publicHostEvaluator(profile.Default("test")),
 		Opener:     opener,
 		Audit:      audit.NewDiscard(),
 		ScriptRefs: []profile.ScriptRef{{
@@ -2916,7 +2918,7 @@ func TestHandleRejectsCommandPolicyScriptActionMismatch(t *testing.T) {
 		Profile:    "test",
 		ProfileDir: profileDir,
 		Commands:   []string{"open"},
-		Evaluator:  policy.NewEvaluator(profile.Default("test")),
+		Evaluator:  publicHostEvaluator(profile.Default("test")),
 		Opener:     opener,
 		Audit:      writer,
 		ScriptRefs: []profile.ScriptRef{{
@@ -2976,7 +2978,7 @@ func TestHandleRejectsCommandPolicyScriptRouteMismatch(t *testing.T) {
 		Profile:    "test",
 		ProfileDir: profileDir,
 		Commands:   []string{"open"},
-		Evaluator:  policy.NewEvaluator(profile.Default("test")),
+		Evaluator:  publicHostEvaluator(profile.Default("test")),
 		Opener:     opener,
 		Audit:      writer,
 		ScriptRefs: []profile.ScriptRef{{
@@ -3036,7 +3038,7 @@ func TestHandleRejectsCommandPolicyScriptLabProbeAuthority(t *testing.T) {
 		Profile:    "test",
 		ProfileDir: profileDir,
 		Commands:   []string{"open"},
-		Evaluator:  policy.NewEvaluator(profile.Default("test")),
+		Evaluator:  publicHostEvaluator(profile.Default("test")),
 		Opener:     opener,
 		Audit:      writer,
 		ScriptRefs: []profile.ScriptRef{{
@@ -3105,7 +3107,7 @@ func TestHandleRejectsInvalidCommandPolicyScriptOutputShape(t *testing.T) {
 		Profile:    "test",
 		ProfileDir: profileDir,
 		Commands:   []string{"open"},
-		Evaluator:  policy.NewEvaluator(profile.Default("test")),
+		Evaluator:  publicHostEvaluator(profile.Default("test")),
 		Opener:     opener,
 		Audit:      writer,
 		ScriptRefs: []profile.ScriptRef{{
@@ -3172,7 +3174,7 @@ func TestHandleCommandPolicyScriptAskFailsClosedWithoutPrompt(t *testing.T) {
 		Profile:    "test",
 		ProfileDir: profileDir,
 		Commands:   []string{"open"},
-		Evaluator:  policy.NewEvaluator(profile.Default("test")),
+		Evaluator:  publicHostEvaluator(profile.Default("test")),
 		Opener:     opener,
 		Audit:      writer,
 		ScriptRefs: []profile.ScriptRef{{
@@ -3546,7 +3548,7 @@ function redactAudit(ctx) {
 		Backend:    "native",
 		ProfileDir: profileDir,
 		Commands:   []string{"open"},
-		Evaluator:  policy.NewEvaluator(profile.Default("test")),
+		Evaluator:  publicHostEvaluator(profile.Default("test")),
 		Opener:     &recordingOpener{},
 		Audit:      writer,
 		ScriptRefs: []profile.ScriptRef{{
@@ -3668,7 +3670,7 @@ func TestHandleRecordsUserURLVerbatimInLocalAudit(t *testing.T) {
 	server := Server{
 		SessionID: "ses_1",
 		Token:     "cap_good",
-		Evaluator: policy.NewEvaluator(profile.Default("test")),
+		Evaluator: publicHostEvaluator(profile.Default("test")),
 		Opener:    &recordingOpener{},
 		Audit:     writer,
 	}
@@ -3721,7 +3723,7 @@ func TestHandleGivesAuditRedactionScriptRawDetails(t *testing.T) {
 		Token:      "cap_good",
 		Profile:    "test",
 		ProfileDir: profileDir,
-		Evaluator:  policy.NewEvaluator(profile.Default("test")),
+		Evaluator:  publicHostEvaluator(profile.Default("test")),
 		Opener:     &recordingOpener{},
 		Audit:      writer,
 		ScriptRefs: []profile.ScriptRef{{
@@ -3786,7 +3788,7 @@ func TestTCPClientOpenEndpoint(t *testing.T) {
 	server := &Server{
 		SessionID: "ses_tcp",
 		Token:     "cap_good",
-		Evaluator: policy.NewEvaluator(profile.Default("test")),
+		Evaluator: publicHostEvaluator(profile.Default("test")),
 		Opener:    opener,
 	}
 	if err := server.StartEndpoint(ctx, TCPEndpoint("127.0.0.1:0")); err != nil {
@@ -3830,7 +3832,7 @@ func TestServerCloseWaitsForInFlightHandlers(t *testing.T) {
 		Token:     "cap_good",
 		Profile:   "test",
 		Backend:   "native",
-		Evaluator: policy.NewEvaluator(profile.Default("test")),
+		Evaluator: publicHostEvaluator(profile.Default("test")),
 		Opener:    opener,
 		Audit:     audit.NewDiscard(),
 	}
@@ -3898,7 +3900,7 @@ func TestTCPClientBadTokenFailsClosedAndDoesNotLeakToken(t *testing.T) {
 		Profile:   "test",
 		Backend:   "native",
 		Commands:  []string{"open"},
-		Evaluator: policy.NewEvaluator(profile.Default("test")),
+		Evaluator: publicHostEvaluator(profile.Default("test")),
 		Opener:    opener,
 		Audit:     writer,
 	}
@@ -4001,7 +4003,7 @@ func TestEndpointFailsClosedWhenHostOpenerIsMissing(t *testing.T) {
 		Profile:   "test",
 		Backend:   "native",
 		Commands:  []string{"open"},
-		Evaluator: policy.NewEvaluator(profile.Default("test")),
+		Evaluator: publicHostEvaluator(profile.Default("test")),
 		Audit:     writer,
 	}
 	if err := server.StartEndpoint(ctx, TCPEndpoint("127.0.0.1:0")); err != nil {
@@ -4046,7 +4048,7 @@ func TestEndpointRejectsUnknownTopLevelBrokerRequestField(t *testing.T) {
 	server := &Server{
 		SessionID: "ses_tcp",
 		Token:     "cap_good",
-		Evaluator: policy.NewEvaluator(profile.Default("test")),
+		Evaluator: publicHostEvaluator(profile.Default("test")),
 		Opener:    opener,
 	}
 	if err := server.StartEndpoint(ctx, TCPEndpoint("127.0.0.1:0")); err != nil {
