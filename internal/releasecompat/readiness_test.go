@@ -1779,7 +1779,7 @@ func releaseClosureSemanticFixture(commit string, packageIdentity productevidenc
 		"package": releaseClosurePackageSemanticFixture(),
 		"formal": map[string]any{
 			"inventory": ref("formal/inventory.json"), "sourceInventory": ref("formal/source-inventory.json"),
-			"configurationCount": 17, "moduleCount": 12, "invariantCount": 138,
+			"configurationCount": 17, "moduleCount": 12, "invariantCount": 140,
 			"propertyCount": 28, "goTestCount": 27,
 		},
 		"gates": gates,
@@ -1865,7 +1865,8 @@ func migrationLimaSemanticFixture(commit string, packageIdentity productevidence
 	checks := map[string]bool{}
 	for _, name := range []string{
 		"packageCandidateInstalled", "encryptedBundleSealed", "rootDiskFidelity",
-		"attachedDiskFidelity", "hostWorkspaceExcluded", "sourceImmutable",
+		"attachedDiskFidelity", "profileApplicationStateFidelity",
+		"generatedProfileStateExcluded", "hostWorkspaceExcluded", "sourceImmutable",
 		"wrongPassphraseNoDestinationEnvironment", "incompatibleAdoptionExecutorRejectedBeforeEffects",
 		"terminalReceipts", "limaInventoryStopped", "networkAuthorityReapproved",
 		"sameBundleThreeSafeClones", "freshControlIdentity", "freshBackendIdentity",
@@ -1898,7 +1899,8 @@ func migrationLimaSemanticFixture(commit string, packageIdentity productevidence
 		"sourceImmutability": map[string]any{
 			"rootDisk":          map[string]any{"beforeSHA256": digest("1"), "afterSHA256": digest("1")},
 			"attachedDisk":      map[string]any{"beforeSHA256": digest("2"), "afterSHA256": digest("2")},
-			"environmentRecord": map[string]any{"beforeSHA256": digest("3"), "afterSHA256": digest("3")},
+			"profileState":      map[string]any{"beforeSHA256": digest("3"), "afterSHA256": digest("3")},
+			"environmentRecord": map[string]any{"beforeSHA256": digest("4"), "afterSHA256": digest("4")},
 		},
 		"identityEvidence": map[string]any{
 			"control": map[string]any{"sourceDigest": digest("1"), "destinationDigests": []string{digest("2"), digest("3"), digest("4"), digest("5")}},

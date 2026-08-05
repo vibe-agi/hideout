@@ -186,7 +186,7 @@ func releaseClosureFixture() releaseClosureEvidence {
 		SourceInventory:    ref("formal/source-inventory.json"),
 		ConfigurationCount: 17,
 		ModuleCount:        12,
-		InvariantCount:     138,
+		InvariantCount:     140,
 		PropertyCount:      28,
 		GoTestCount:        27,
 	}
