@@ -5,6 +5,8 @@ import (
 	"os"
 	"reflect"
 	"testing"
+
+	"github.com/vibe-agi/hideout/internal/migration"
 )
 
 func TestMigrationAutomationSchemaAcceptsSharedGoldenExportPlan(t *testing.T) {
@@ -26,6 +28,18 @@ func TestMigrationSchemasAcceptRepresentativeDocuments(t *testing.T) {
 	if err := manifestSchema.Validate(migrationManifestFixture()); err != nil {
 		t.Fatalf("valid migration manifest: %v", err)
 	}
+	attachedManifest := migrationManifestFixture()
+	attachedManifest["diskEdges"] = append(
+		attachedManifest["diskEdges"].([]any),
+		migrationSchemaDocument(t, migration.DiskEdge{
+			EnvironmentRef: "envref_dev1234", DiskID: "disk_attached1234",
+			Attachment: migration.DiskRoleAttached, GuestPath: "/mnt/lima-source-data",
+			FSType: "ext4", ReadOnly: false,
+		}),
+	)
+	if err := manifestSchema.Validate(attachedManifest); err != nil {
+		t.Fatalf("valid attached-disk manifest edge: %v", err)
+	}
 
 	planSchema := compileFeatureSchema(t, "migration-plan.schema.json")
 	for name, fixture := range map[string]any{
@@ -40,15 +54,23 @@ func TestMigrationSchemasAcceptRepresentativeDocuments(t *testing.T) {
 			}
 		})
 	}
-
 	receiptSchema := compileFeatureSchema(t, "migration-receipt.schema.json")
 	for name, fixture := range map[string]any{
 		"safe clone request": migrationAdoptionRequestFixture(),
 		"completed receipt":  migrationAdoptionReceiptFixture(),
+		"mounted request":    migrationMountedAdoptionRequestFixture(),
+		"mounted receipt":    migrationMountedAdoptionReceiptFixture(),
 	} {
 		t.Run(name, func(t *testing.T) {
 			if err := receiptSchema.Validate(fixture); err != nil {
 				t.Fatalf("valid %s: %v", name, err)
+			}
+		})
+	}
+	for name, document := range migrationProductionAdoptionDocuments(t) {
+		t.Run("production "+name, func(t *testing.T) {
+			if err := receiptSchema.Validate(document); err != nil {
+				t.Fatalf("production %s drifted from its JSON schema: %v", name, err)
 			}
 		})
 	}
@@ -102,6 +124,16 @@ func TestMigrationSchemasRejectUnknownFieldsSecretsAndBounds(t *testing.T) {
 		t.Fatal("config manifest accepted a profile application state component")
 	}
 
+	manifest = migrationManifestFixture()
+	manifest["diskEdges"] = []any{map[string]any{
+		"environmentRef": "envref_dev1234", "diskId": "disk_attached1234",
+		"attachment": "attached", "guestPath": "/mnt/lima-source-data",
+		"readOnly": false,
+	}}
+	if err := manifestSchema.Validate(manifest); err == nil {
+		t.Fatal("attached-disk manifest edge omitted its filesystem type")
+	}
+
 	planSchema := compileFeatureSchema(t, "migration-plan.schema.json")
 	exportPlan := migrationExportPlanFixture()
 	delete(
@@ -153,6 +185,24 @@ func TestMigrationSchemasRejectUnknownFieldsSecretsAndBounds(t *testing.T) {
 	request["permittedActions"] = []any{"preserve-guest-identity"}
 	if err := receiptSchema.Validate(request); err == nil {
 		t.Fatal("Safe Clone request accepted Exact Restore actions")
+	}
+
+	request = migrationMountedAdoptionRequestFixture()
+	request["mountBindings"].([]any)[0].(map[string]any)["fsType"] = "swap"
+	if err := receiptSchema.Validate(request); err == nil {
+		t.Fatal("adoption request accepted a swap mount binding")
+	}
+
+	receipt := migrationMountedAdoptionReceiptFixture()
+	receipt["actionResults"] = receipt["actionResults"].([]any)[:3]
+	if err := receiptSchema.Validate(receipt); err == nil {
+		t.Fatal("completed mounted receipt omitted destination key installation")
+	}
+	receipt = migrationMountedAdoptionReceiptFixture()
+	receipt["actionResults"].([]any)[2].(map[string]any)["action"] =
+		"preserve-guest-identity"
+	if err := receiptSchema.Validate(receipt); err == nil {
+		t.Fatal("completed mounted receipt omitted mount rebinding")
 	}
 
 	projectionSchema := compileFeatureSchema(
@@ -487,10 +537,24 @@ func migrationAdoptionRequestFixture() map[string]any {
 			"machineIdDigest":   migrationDigestFixture("1"),
 			"sshHostKeyDigests": []any{migrationDigestFixture("2")},
 		},
+		"destinationSSHUser": "hideout",
 		"destinationSSHKeys": []any{"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFixture"},
-		"permittedActions":   []any{"reset-machine-id", "reset-ssh-host-keys"},
-		"helper":             migrationHelperBindingFixture(),
+		"permittedActions": []any{
+			"reset-machine-id", "reset-ssh-host-keys",
+			"install-destination-ssh-keys",
+		},
+		"helper": migrationHelperBindingFixture(),
 	}
+}
+
+func migrationMountedAdoptionRequestFixture() map[string]any {
+	request := migrationAdoptionRequestFixture()
+	request["mountBindings"] = migrationMountBindingsFixture()
+	request["permittedActions"] = []any{
+		"reset-machine-id", "reset-ssh-host-keys",
+		"rebind-attached-disk-mounts", "install-destination-ssh-keys",
+	}
+	return request
 }
 
 func migrationAdoptionReceiptFixture() map[string]any {
@@ -502,6 +566,7 @@ func migrationAdoptionReceiptFixture() map[string]any {
 		"actionResults": []any{
 			map[string]any{"action": "reset-machine-id", "status": "completed"},
 			map[string]any{"action": "reset-ssh-host-keys", "status": "completed"},
+			map[string]any{"action": "install-destination-ssh-keys", "status": "completed"},
 		},
 		"postIdentity": map[string]any{
 			"machineIdDigest":   migrationDigestFixture("b"),
@@ -509,6 +574,122 @@ func migrationAdoptionReceiptFixture() map[string]any {
 		},
 		"status": "completed", "completionMarker": true,
 	}
+}
+
+func migrationMountedAdoptionReceiptFixture() map[string]any {
+	receipt := migrationAdoptionReceiptFixture()
+	receipt["mountBindings"] = migrationMountBindingsFixture()
+	receipt["actionResults"] = []any{
+		map[string]any{"action": "reset-machine-id", "status": "completed"},
+		map[string]any{"action": "reset-ssh-host-keys", "status": "completed"},
+		map[string]any{"action": "rebind-attached-disk-mounts", "status": "completed"},
+		map[string]any{"action": "install-destination-ssh-keys", "status": "completed"},
+	}
+	return receipt
+}
+
+func migrationMountBindingsFixture() []any {
+	return []any{map[string]any{
+		"diskId":               "disk_attached1234",
+		"sourceGuestPath":      "/mnt/lima-source-data",
+		"destinationGuestPath": "/mnt/lima-disk_destination1234",
+		"fsType":               "ext4",
+	}}
+}
+
+func migrationProductionAdoptionDocuments(t *testing.T) map[string]any {
+	t.Helper()
+	source := migration.GuestIdentityEvidence{
+		MachineIDDigest: migration.Digest(migrationDigestFixture("1")),
+		SSHHostKeyDigests: []migration.Digest{
+			migration.Digest(migrationDigestFixture("2")),
+		},
+	}
+	post := migration.GuestIdentityEvidence{
+		MachineIDDigest: migration.Digest(migrationDigestFixture("b")),
+		SSHHostKeyDigests: []migration.Digest{
+			migration.Digest(migrationDigestFixture("c")),
+		},
+	}
+	helper := migration.HelperBinding{
+		PackageID: migration.AdoptionHelperPackage, Version: "0.1.0-alpha.4",
+		SHA256: migration.Digest(migrationDigestFixture("a")),
+	}
+	bindings := []migration.DiskMountBinding{{
+		DiskID: "disk_attached1234", SourceGuestPath: "/mnt/lima-source-data",
+		DestinationGuestPath: "/mnt/lima-disk_destination1234", FSType: "ext4",
+	}}
+	request := migration.AdoptionRequest{
+		Schema: migration.AdoptionRequestSchema, OperationID: "op_import1234",
+		EnvironmentRef: "envref_dev1234", RequestNonce: "nonce_request1234",
+		ReceiptNonce: "nonce_receipt1234", Policy: migration.GuestIdentitySafeClone,
+		SourceIdentity: source, DestinationSSHUser: "hideout",
+		DestinationSSHKeys: []string{
+			"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFixture",
+		},
+		MountBindings: bindings,
+		PermittedActions: []string{
+			migration.AdoptionActionResetMachineID,
+			migration.AdoptionActionResetSSHHostKeys,
+			migration.AdoptionActionRebindDiskMounts,
+			migration.AdoptionActionInstallSSHKeys,
+		},
+		Helper: helper,
+	}
+	receipt := migration.AdoptionReceipt{
+		Schema: migration.AdoptionReceiptSchema, OperationID: request.OperationID,
+		EnvironmentRef: request.EnvironmentRef, RequestNonce: request.RequestNonce,
+		ReceiptNonce: request.ReceiptNonce, Policy: request.Policy, Helper: helper,
+		MountBindings: bindings,
+		ActionResults: []migration.AdoptionActionResult{
+			{Action: migration.AdoptionActionResetMachineID, Status: migration.AdoptionActionStatusCompleted},
+			{Action: migration.AdoptionActionResetSSHHostKeys, Status: migration.AdoptionActionStatusCompleted},
+			{Action: migration.AdoptionActionRebindDiskMounts, Status: migration.AdoptionActionStatusCompleted},
+			{Action: migration.AdoptionActionInstallSSHKeys, Status: migration.AdoptionActionStatusCompleted},
+		},
+		PostIdentity: &post, Status: migration.AdoptionReceiptStatusCompleted,
+		CompletionMarker: true,
+	}
+	failedReceipt := migration.AdoptionReceipt{
+		Schema: migration.AdoptionReceiptSchema, OperationID: request.OperationID,
+		EnvironmentRef: request.EnvironmentRef, RequestNonce: request.RequestNonce,
+		ReceiptNonce: request.ReceiptNonce, Policy: request.Policy, Helper: helper,
+		MountBindings: bindings,
+		ActionResults: []migration.AdoptionActionResult{{
+			Action: migration.AdoptionActionResetMachineID,
+			Status: migration.AdoptionActionStatusFailed,
+			Code:   "migration.adoption.machine_id_reset_failed",
+		}},
+		Status:      migration.AdoptionReceiptStatusFailed,
+		FailureCode: "migration.adoption.machine_id_reset_failed",
+	}
+	if err := request.Validate(); err != nil {
+		t.Fatalf("production adoption request fixture: %v", err)
+	}
+	if err := receipt.MatchesRequest(request); err != nil {
+		t.Fatalf("production adoption receipt fixture: %v", err)
+	}
+	if err := failedReceipt.MatchesRequest(request); err != nil {
+		t.Fatalf("production failed adoption receipt fixture: %v", err)
+	}
+	return map[string]any{
+		"request":        migrationSchemaDocument(t, request),
+		"receipt":        migrationSchemaDocument(t, receipt),
+		"failed receipt": migrationSchemaDocument(t, failedReceipt),
+	}
+}
+
+func migrationSchemaDocument(t *testing.T, value any) any {
+	t.Helper()
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var document any
+	if err := json.Unmarshal(encoded, &document); err != nil {
+		t.Fatal(err)
+	}
+	return document
 }
 
 func migrationBundleBindingFixture() map[string]any {

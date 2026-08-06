@@ -576,6 +576,7 @@ type MigrationOperation struct {
 	ConflictActions           []migration.ConflictAction         `json:"conflictActions,omitempty"`
 	EnvironmentActions        []migration.EnvironmentAction      `json:"environmentActions,omitempty"`
 	ExpectedDisks             []migration.DiskObject             `json:"expectedDisks,omitempty"`
+	ExpectedDiskEdges         []migration.DiskEdge               `json:"expectedDiskEdges,omitempty"`
 	IdentityActions           []migration.IdentityAction         `json:"identityActions,omitempty"`
 	WorkspaceActions          []migration.WorkspaceAction        `json:"workspaceActions,omitempty"`
 	SecretActions             []migration.SecretAction           `json:"secretActions,omitempty"`
@@ -955,6 +956,9 @@ func (operation MigrationOperation) Clone() MigrationOperation {
 	)
 	cloned.ImportObjects = cloneMigrationImportObjects(operation.ImportObjects)
 	cloned.ExpectedDisks = cloneMigrationDiskObjects(operation.ExpectedDisks)
+	cloned.ExpectedDiskEdges = append(
+		[]migration.DiskEdge(nil), operation.ExpectedDiskEdges...,
+	)
 	cloned.SourceGuestIdentities = cloneMigrationSourceGuestIdentities(
 		operation.SourceGuestIdentities,
 	)
@@ -1003,6 +1007,7 @@ func (operation MigrationOperation) MatchesImmutable(other MigrationOperation) b
 		!migrationConflictActionsEqual(operation.ConflictActions, other.ConflictActions) ||
 		!slices.Equal(operation.EnvironmentActions, other.EnvironmentActions) ||
 		!migrationDiskObjectSlicesEqual(operation.ExpectedDisks, other.ExpectedDisks) ||
+		!slices.Equal(operation.ExpectedDiskEdges, other.ExpectedDiskEdges) ||
 		!slices.Equal(operation.IdentityActions, other.IdentityActions) ||
 		!slices.Equal(operation.WorkspaceActions, other.WorkspaceActions) ||
 		!migrationSecretActionsEqual(operation.SecretActions, other.SecretActions) ||
@@ -1459,13 +1464,14 @@ func (operation MigrationOperation) validateSourceGuestIdentities() error {
 
 func (operation MigrationOperation) validateExpectedDisks() error {
 	if operation.Kind == MigrationOperationExport {
-		if len(operation.ExpectedDisks) != 0 {
+		if len(operation.ExpectedDisks) != 0 || len(operation.ExpectedDiskEdges) != 0 {
 			return fmt.Errorf("%w: export has destination disk expectations", ErrMigrationOperationInvalid)
 		}
 		return nil
 	}
 	if migrationImportObjectsConfigOnly(operation.ImportObjects) {
-		if len(operation.ExpectedDisks) != 0 || len(operation.DestinationDiskIdentities) != 0 {
+		if len(operation.ExpectedDisks) != 0 || len(operation.ExpectedDiskEdges) != 0 ||
+			len(operation.DestinationDiskIdentities) != 0 {
 			return fmt.Errorf("%w: config import has destination disk state", ErrMigrationOperationInvalid)
 		}
 		return nil
@@ -1490,6 +1496,71 @@ func (operation MigrationOperation) validateExpectedDisks() error {
 	}
 	if len(selected) != 0 {
 		return fmt.Errorf("%w: destination disk expectation closure", ErrMigrationOperationInvalid)
+	}
+	return operation.validateExpectedDiskEdges()
+}
+
+func (operation MigrationOperation) validateExpectedDiskEdges() error {
+	objects := make(map[migration.OpaqueID]map[migration.OpaqueID]struct{}, len(operation.ImportObjects))
+	for _, object := range operation.ImportObjects {
+		refs := make(map[migration.OpaqueID]struct{}, len(object.DiskRefs))
+		for _, diskID := range object.DiskRefs {
+			refs[diskID] = struct{}{}
+		}
+		objects[object.SourceRef] = refs
+	}
+	disks := make(map[migration.OpaqueID]migration.DiskObject, len(operation.ExpectedDisks))
+	for _, disk := range operation.ExpectedDisks {
+		disks[disk.DiskID] = disk
+	}
+	seen := make(map[string]struct{}, len(operation.ExpectedDiskEdges))
+	consumers := make(map[migration.OpaqueID]int, len(disks))
+	rootCounts := make(map[migration.OpaqueID]int, len(objects))
+	previous := ""
+	for _, edge := range operation.ExpectedDiskEdges {
+		refs, environmentExists := objects[edge.EnvironmentRef]
+		disk, diskExists := disks[edge.DiskID]
+		_, selected := refs[edge.DiskID]
+		key := string(edge.EnvironmentRef) + "\x00" + string(edge.DiskID)
+		if !environmentExists || !diskExists || !selected || key <= previous ||
+			edge.Attachment != disk.Role {
+			return fmt.Errorf("%w: destination disk edge", ErrMigrationOperationInvalid)
+		}
+		if disk.Role == migration.DiskRoleRoot {
+			if edge.GuestPath != "/" || edge.FSType != "" || edge.ReadOnly {
+				return fmt.Errorf("%w: destination root disk edge", ErrMigrationOperationInvalid)
+			}
+			rootCounts[edge.EnvironmentRef]++
+		} else {
+			binding := migration.DiskMountBinding{
+				DiskID: edge.DiskID, SourceGuestPath: edge.GuestPath,
+				DestinationGuestPath: "/mnt/lima-destination1", FSType: edge.FSType,
+			}
+			if edge.ReadOnly || binding.Validate() != nil {
+				return fmt.Errorf("%w: destination attached disk edge", ErrMigrationOperationInvalid)
+			}
+		}
+		if _, duplicate := seen[key]; duplicate {
+			return fmt.Errorf("%w: duplicate destination disk edge", ErrMigrationOperationInvalid)
+		}
+		seen[key] = struct{}{}
+		consumers[edge.DiskID]++
+		previous = key
+	}
+	for environmentRef, refs := range objects {
+		if rootCounts[environmentRef] != 1 {
+			return fmt.Errorf("%w: destination root disk edge closure", ErrMigrationOperationInvalid)
+		}
+		for diskID := range refs {
+			if _, exists := seen[string(environmentRef)+"\x00"+string(diskID)]; !exists {
+				return fmt.Errorf("%w: destination environment disk edge closure", ErrMigrationOperationInvalid)
+			}
+		}
+	}
+	for diskID := range disks {
+		if consumers[diskID] == 0 {
+			return fmt.Errorf("%w: destination disk consumer closure", ErrMigrationOperationInvalid)
+		}
 	}
 	return nil
 }
@@ -1939,6 +2010,12 @@ func cloneMigrationDestinationAdoption(
 		)
 		cloned.Records[index].Request.PermittedActions = append(
 			[]string(nil), record.Request.PermittedActions...,
+		)
+		cloned.Records[index].Request.MountBindings = append(
+			[]migration.DiskMountBinding(nil), record.Request.MountBindings...,
+		)
+		cloned.Records[index].Receipt.MountBindings = append(
+			[]migration.DiskMountBinding(nil), record.Receipt.MountBindings...,
 		)
 		cloned.Records[index].Receipt.ActionResults = append(
 			[]migration.AdoptionActionResult(nil), record.Receipt.ActionResults...,

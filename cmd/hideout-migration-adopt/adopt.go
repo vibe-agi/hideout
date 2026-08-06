@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"crypto/sha256"
 	"encoding/json"
@@ -12,6 +13,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/vibe-agi/hideout/internal/migration"
@@ -20,6 +22,7 @@ import (
 const (
 	maximumAdoptionDocumentBytes = 64 << 10
 	maximumMachineIDBytes        = 128
+	maximumMountInfoBytes        = 1 << 20
 	maximumSSHHostPublicKeyBytes = 16 << 10
 )
 
@@ -120,6 +123,19 @@ func (runner adoptionRunner) run() error {
 		return runner.fail(
 			request, results, "migration.adoption.policy_invalid", nil,
 		)
+	}
+	if len(request.MountBindings) != 0 {
+		if err := rebindAttachedDiskMounts(
+			runner.rootPath, request.MountBindings,
+		); err != nil {
+			return runner.fail(
+				request, results, "migration.adoption.disk_mount_rebind_failed", err,
+			)
+		}
+		results = append(results, migration.AdoptionActionResult{
+			Action: migration.AdoptionActionRebindDiskMounts,
+			Status: migration.AdoptionActionStatusCompleted,
+		})
 	}
 	if err := installDestinationSSHKeys(
 		runner.rootPath,
@@ -250,7 +266,150 @@ func baseAdoptionReceipt(request migration.AdoptionRequest) migration.AdoptionRe
 		OperationID: request.OperationID, EnvironmentRef: request.EnvironmentRef,
 		RequestNonce: request.RequestNonce, ReceiptNonce: request.ReceiptNonce,
 		Policy: request.Policy, Helper: request.Helper,
+		MountBindings: append(
+			[]migration.DiskMountBinding(nil), request.MountBindings...,
+		),
 	}
+}
+
+func rebindAttachedDiskMounts(
+	root string,
+	bindings []migration.DiskMountBinding,
+) error {
+	if err := verifyAttachedDiskMounts(root, bindings); err != nil {
+		return err
+	}
+	for _, binding := range bindings {
+		if binding.Validate() != nil {
+			return errors.New("attached disk mount binding is invalid")
+		}
+		if binding.SourceGuestPath == binding.DestinationGuestPath {
+			continue
+		}
+		relative := strings.TrimPrefix(binding.SourceGuestPath, "/")
+		parentRelative := filepath.Dir(relative)
+		parent, err := guestPath(root, parentRelative, true)
+		if err != nil {
+			return err
+		}
+		parentInfo, err := os.Lstat(parent)
+		if err != nil || !parentInfo.IsDir() || parentInfo.Mode()&os.ModeSymlink != 0 {
+			return errors.New("attached disk mount parent is unsafe")
+		}
+		source := filepath.Join(parent, filepath.Base(relative))
+		info, err := os.Lstat(source)
+		switch {
+		case err == nil && info.Mode()&os.ModeSymlink != 0:
+			target, readErr := os.Readlink(source)
+			if readErr != nil || target != binding.DestinationGuestPath {
+				return errors.New("attached disk mount alias changed")
+			}
+			continue
+		case err == nil && info.IsDir():
+			entries, readErr := os.ReadDir(source)
+			if readErr != nil || len(entries) != 0 {
+				return errors.New("attached disk source mount is not an empty directory")
+			}
+			if err := os.Remove(source); err != nil {
+				return err
+			}
+		case err == nil:
+			return errors.New("attached disk source mount is not a directory")
+		case !errors.Is(err, os.ErrNotExist):
+			return err
+		}
+		if err := os.Symlink(binding.DestinationGuestPath, source); err != nil {
+			return err
+		}
+		if err := syncGuestDirectory(parent); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func verifyAttachedDiskMounts(
+	root string,
+	bindings []migration.DiskMountBinding,
+) error {
+	expected := make(map[string]string, len(bindings))
+	for _, binding := range bindings {
+		if binding.Validate() != nil {
+			return errors.New("attached disk mount binding is invalid")
+		}
+		if _, duplicate := expected[binding.DestinationGuestPath]; duplicate {
+			return errors.New("attached disk mount target is duplicated")
+		}
+		target, err := guestPath(
+			root, strings.TrimPrefix(binding.DestinationGuestPath, "/"), true,
+		)
+		if err != nil {
+			return errors.New("attached disk mount target is unavailable")
+		}
+		info, err := os.Lstat(target)
+		if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+			return errors.New("attached disk mount target is unsafe")
+		}
+		expected[binding.DestinationGuestPath] = binding.FSType
+	}
+	mountInfoPath, err := guestPath(
+		root, filepath.Join("proc", strconv.Itoa(os.Getpid()), "mountinfo"), true,
+	)
+	if err != nil {
+		return errors.New("guest mount inventory is unavailable")
+	}
+	data, err := readBoundedRegularFile(
+		mountInfoPath, maximumMountInfoBytes, true,
+	)
+	if err != nil {
+		return errors.New("guest mount inventory is unsafe")
+	}
+	defer clear(data)
+
+	observed := make(map[string]struct{}, len(expected))
+	scanner := bufio.NewScanner(bytes.NewReader(data))
+	scanner.Buffer(make([]byte, 4096), 64<<10)
+	for scanner.Scan() {
+		fields := strings.Fields(scanner.Text())
+		separator := -1
+		for index := 6; index < len(fields); index++ {
+			if fields[index] == "-" {
+				separator = index
+				break
+			}
+		}
+		if len(fields) < 10 || separator < 6 || separator+2 >= len(fields) {
+			return errors.New("guest mount inventory is malformed")
+		}
+		mountPoint := fields[4]
+		fsType, wanted := expected[mountPoint]
+		if !wanted {
+			continue
+		}
+		if _, duplicate := observed[mountPoint]; duplicate || fields[separator+1] != fsType {
+			return errors.New("attached disk mount filesystem does not match its binding")
+		}
+		observed[mountPoint] = struct{}{}
+	}
+	if err := scanner.Err(); err != nil {
+		return errors.New("guest mount inventory could not be read")
+	}
+	if len(observed) != len(expected) {
+		return errors.New("attached disk mount target is not mounted")
+	}
+	return nil
+}
+
+func syncGuestDirectory(path string) error {
+	directory, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	if err := directory.Sync(); err != nil {
+		_ = directory.Close()
+		return err
+	}
+	return directory.Close()
 }
 
 func completedAdoptionReceipt(

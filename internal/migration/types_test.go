@@ -157,6 +157,77 @@ func TestIdentityObservationRequestReceiptBindingFailsClosed(t *testing.T) {
 	}
 }
 
+func TestAdoptionReceiptBindsAttachedDiskMountRebinding(t *testing.T) {
+	binding := DiskMountBinding{
+		DiskID: "disk_attached1", SourceGuestPath: "/mnt/lima-source-data",
+		DestinationGuestPath: "/mnt/lima-disk_destination1", FSType: "ext4",
+	}
+	request := AdoptionRequest{
+		Schema: AdoptionRequestSchema, OperationID: "op_import1234",
+		EnvironmentRef: "environment_alpha1",
+		RequestNonce:   "nonce_request1234", ReceiptNonce: "nonce_receipt1234",
+		Policy: GuestIdentitySafeClone,
+		SourceIdentity: GuestIdentityEvidence{
+			MachineIDDigest:   digestForTest("1"),
+			SSHHostKeyDigests: []Digest{digestForTest("2")},
+		},
+		DestinationSSHUser: "developer",
+		DestinationSSHKeys: []string{
+			"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFixture1",
+		},
+		MountBindings: []DiskMountBinding{binding},
+		PermittedActions: []string{
+			AdoptionActionResetMachineID,
+			AdoptionActionResetSSHHostKeys,
+			AdoptionActionRebindDiskMounts,
+			AdoptionActionInstallSSHKeys,
+		},
+		Helper: HelperBinding{
+			PackageID: AdoptionHelperPackage, Version: "1.0.0",
+			SHA256: digestForTest("3"),
+		},
+	}
+	if err := request.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	post := GuestIdentityEvidence{
+		MachineIDDigest:   digestForTest("4"),
+		SSHHostKeyDigests: []Digest{digestForTest("5")},
+	}
+	receipt := AdoptionReceipt{
+		Schema: AdoptionReceiptSchema, OperationID: request.OperationID,
+		EnvironmentRef: request.EnvironmentRef,
+		RequestNonce:   request.RequestNonce, ReceiptNonce: request.ReceiptNonce,
+		Policy: request.Policy, Helper: request.Helper,
+		MountBindings: append([]DiskMountBinding(nil), request.MountBindings...),
+		ActionResults: []AdoptionActionResult{
+			{Action: AdoptionActionResetMachineID, Status: AdoptionActionStatusCompleted},
+			{Action: AdoptionActionResetSSHHostKeys, Status: AdoptionActionStatusCompleted},
+			{Action: AdoptionActionRebindDiskMounts, Status: AdoptionActionStatusCompleted},
+			{Action: AdoptionActionInstallSSHKeys, Status: AdoptionActionStatusCompleted},
+		},
+		PostIdentity: &post, Status: AdoptionReceiptStatusCompleted,
+		CompletionMarker: true,
+	}
+	if err := receipt.MatchesRequest(request); err != nil {
+		t.Fatal(err)
+	}
+	substituted := request
+	substituted.MountBindings = append([]DiskMountBinding(nil), request.MountBindings...)
+	substituted.MountBindings[0].DestinationGuestPath = "/mnt/lima-disk_attacker1"
+	if err := receipt.MatchesRequest(substituted); err == nil {
+		t.Fatal("accepted an attached-disk mount substitution")
+	}
+	unsafe := request
+	unsafe.MountBindings = []DiskMountBinding{{
+		DiskID: "disk_attached1", SourceGuestPath: "/mnt/lima-source-data",
+		DestinationGuestPath: "/mnt/lima-disk_destination1", FSType: "swap",
+	}}
+	if err := unsafe.Validate(); err == nil {
+		t.Fatal("accepted a destructive or unmountable attached-disk filesystem")
+	}
+}
+
 func digestForTest(character string) Digest {
 	value := ""
 	for len(value) < 64 {

@@ -161,6 +161,9 @@ func TestAdoptionTraceRefinesIndependentMultiDestinationImports(t *testing.T) {
 		state = applyAdoptionStep(t, state, AdoptionTransition{
 			Action: AdoptionFinish, Destination: destination, GuestID: guestID,
 		})
+		if !state.Destinations[destination].DiskFidelityProved {
+			t.Fatalf("adoption receipt did not prove disk fidelity for %s", destination)
+		}
 		state = applyAdoptionStep(t, state, AdoptionTransition{
 			Action: AdoptionVerifyDestination, Destination: destination,
 		})
@@ -195,6 +198,7 @@ func TestAdoptionTraceRefinesIndependentMultiDestinationImports(t *testing.T) {
 	}
 	for destination, record := range state.Destinations {
 		if record.Phase != AdoptionPhaseActive || !record.Runnable ||
+			!record.DiskFidelityProved ||
 			record.StageEffects != 1 || record.AdoptionEffects != 1 ||
 			record.CommitEffects != 1 {
 			t.Fatalf("destination %s activation trace drifted: %+v", destination, record)
@@ -257,6 +261,7 @@ func TestAdoptionConflictRollbackAndInvalidBundleStayNonRunnable(t *testing.T) {
 	})
 	first := state.Destinations["first"]
 	if first.Phase != AdoptionPhaseRolledBack || first.Staged || first.Runnable ||
+		first.DiskFidelityProved ||
 		first.ControlID != "" || first.BackendID != "" ||
 		state.NameOwners["dev"] != "" {
 		t.Fatalf("rollback retained visible or claimed state: state=%+v", state)
@@ -440,6 +445,26 @@ func TestStateInvariantNegativeFixtures(t *testing.T) {
 	mutatedAdoption.Destinations["destination"] = record
 	if !errors.Is(mutatedAdoption.Validate(), ErrStateInvariant) {
 		t.Fatal("unapproved authority escaped the adoption invariant judge")
+	}
+
+	proved := adoption
+	for _, transition := range []AdoptionTransition{
+		{Action: AdoptionAcquireNameClaim, Destination: "destination"},
+		{Action: AdoptionStageDestination, Destination: "destination"},
+		{Action: AdoptionBegin, Destination: "destination"},
+		{Action: AdoptionFinish, Destination: "destination", GuestID: "destination-guest"},
+		{Action: AdoptionVerifyDestination, Destination: "destination"},
+		{Action: AdoptionDecideCommit, Destination: "destination"},
+		{Action: AdoptionActivate, Destination: "destination"},
+	} {
+		proved = applyAdoptionStep(t, proved, transition)
+	}
+	mutatedAdoption = proved.Clone()
+	record = mutatedAdoption.Destinations["destination"]
+	record.DiskFidelityProved = false
+	mutatedAdoption.Destinations["destination"] = record
+	if !errors.Is(mutatedAdoption.Validate(), ErrStateInvariant) {
+		t.Fatal("runnable destination without disk fidelity escaped the invariant judge")
 	}
 }
 

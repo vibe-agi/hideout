@@ -1534,7 +1534,8 @@ func (service MigrationService) buildMigrationExportManifest(
 	for index, edge := range prepared.inventory.Attachments {
 		edges[index] = migration.DiskEdge{
 			EnvironmentRef: edge.EnvironmentRef, DiskID: edge.DiskRef,
-			Attachment: edge.Attachment, GuestPath: edge.GuestPath, ReadOnly: edge.ReadOnly,
+			Attachment: edge.Attachment, GuestPath: edge.GuestPath,
+			FSType: edge.FSType, ReadOnly: edge.ReadOnly,
 		}
 	}
 	manifest := migration.Manifest{

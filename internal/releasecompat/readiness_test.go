@@ -1779,7 +1779,7 @@ func releaseClosureSemanticFixture(commit string, packageIdentity productevidenc
 		"package": releaseClosurePackageSemanticFixture(),
 		"formal": map[string]any{
 			"inventory": ref("formal/inventory.json"), "sourceInventory": ref("formal/source-inventory.json"),
-			"configurationCount": 17, "moduleCount": 12, "invariantCount": 140,
+			"configurationCount": 17, "moduleCount": 12, "invariantCount": 142,
 			"propertyCount": 28, "goTestCount": 27,
 		},
 		"gates": gates,

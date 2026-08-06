@@ -178,7 +178,11 @@ identity. The provider MUST NOT replace either with an inferred local name. It:
 4. Syncs every complete component and returns a durable checkpoint.
 5. Builds destination configuration without source host/runtime identifiers,
    mounts, endpoint grants, proxy values, or executable imported provisioning.
-6. Leaves every object stopped and unavailable to normal Hideout operations.
+6. For every attached disk, preserves the authenticated filesystem type,
+   emits the fresh Lima disk identity as an object with explicit
+   `format: false`, and records the exact original-to-destination guest mount
+   mapping. Omitted formatting authority is not accepted as equivalent.
+7. Leaves every object stopped and unavailable to normal Hideout operations.
 
 It may not choose a user-facing name, generate a control-plane ID, read a secret
 value, or activate the object.
@@ -214,9 +218,16 @@ The provider constructs an ephemeral boot configuration with:
   needed to prove completion and shutdown.
 
 The fixed helper entry point applies exactly the requested `SafeClone` or
-`ExactGuestRestore` actions, then atomically and idempotently adds the bound
-destination control key to both the target user's and root's protected
-`authorized_keys`. Existing guest keys remain guest data. A distinct
+`ExactGuestRestore` actions, rebinds each authenticated original attached-disk
+guest path to its fresh Lima mount, then atomically and idempotently adds the
+bound destination control key to both the target user's and root's protected
+`authorized_keys`. A rebind may replace only an absent or empty source mount
+directory with the exact symlink, and only after the guest kernel mount
+inventory proves the destination path and authenticated filesystem type.
+Conflicting links, files, nonempty directories, unsupported filesystems,
+missing mounts, or missing mappings fail without a completion receipt. Existing
+guest keys remain guest data. A distinct
+`rebind-attached-disk-mounts` result proves the complete mapping, and a distinct
 `install-destination-ssh-keys` result makes failure observable before activation.
 The same action installs an exact product-owned cloud-init override with
 `ssh_deletekeys: false` and `disable_root: false`: Lima changes its cloud-init

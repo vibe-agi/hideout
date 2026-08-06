@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 
 	"github.com/vibe-agi/hideout/internal/backend"
@@ -135,13 +136,22 @@ func loadImportedLimaRuntimeState(
 	if err := validateImportedLimaRuntimeMarker(normalized, session); err != nil {
 		return nil, err
 	}
+	configPath := filepath.Join(instanceDir, "lima.yaml")
+	config, err := readImportedLimaRuntimeConfig(configPath)
+	if err != nil {
+		return nil, fmt.Errorf("read imported Lima disk bindings: %w", err)
+	}
+	if err := validateMigrationStageDiskBindings(
+		config.AdditionalDisks, normalized.AttachedDiskMounts,
+	); err != nil {
+		return nil, err
+	}
 	rootPath := filepath.Join(instanceDir, "disk")
 	if _, err := protectedMigrationRegularFile(
 		home, rootPath, normalized.RootDiskLogicalBytes,
 	); err != nil {
 		return nil, fmt.Errorf("protect imported Lima root disk: %w", err)
 	}
-	configPath := filepath.Join(instanceDir, "lima.yaml")
 	return &importedLimaRuntimeState{
 		configPath: configPath, normalized: normalized,
 	}, nil
@@ -171,6 +181,22 @@ func validateImportedLimaRuntimeMarker(
 			return errors.New("imported Lima runtime marker attached-disk bindings are invalid")
 		}
 		previous = handle
+	}
+	if len(value.AttachedDiskMounts) != len(value.AttachedDiskHandles) {
+		return errors.New("imported Lima runtime marker attached-disk mount closure is invalid")
+	}
+	mountHandles := make([]migration.OpaqueID, len(value.AttachedDiskMounts))
+	for index, binding := range value.AttachedDiskMounts {
+		if binding.Validate() != nil {
+			return errors.New("imported Lima runtime marker attached-disk mount is invalid")
+		}
+		mountHandles[index] = migration.OpaqueID(strings.TrimPrefix(
+			binding.DestinationGuestPath, "/mnt/lima-",
+		))
+	}
+	slices.Sort(mountHandles)
+	if !slices.Equal(mountHandles, value.AttachedDiskHandles) {
+		return errors.New("imported Lima runtime marker attached-disk handles changed")
 	}
 	if (value.RuntimeImageLocation == "") != (value.RuntimeImageDigest == "") {
 		return errors.New("imported Lima runtime marker image provenance is incomplete")

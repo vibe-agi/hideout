@@ -23,7 +23,7 @@ all(.package.files[];
 (.package.browserConsole.inventory.assets | length) == 9 and
 .formal.configurationCount == 17 and
 .formal.moduleCount == 12 and
-.formal.invariantCount == 140 and
+.formal.invariantCount == 142 and
 .formal.propertyCount == 28 and
 .formal.goTestCount == 27 and
 (.gates | length) == 12 and

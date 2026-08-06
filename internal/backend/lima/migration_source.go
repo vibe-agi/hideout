@@ -32,6 +32,7 @@ const (
 var (
 	migrationLimaInstanceVersion = regexp.MustCompile(`^2\.(?:1|2)\.[0-9]+$`)
 	migrationLimaObjectName      = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*$`)
+	migrationLimaFSType          = regexp.MustCompile(`^[a-z][a-z0-9.-]{1,63}$`)
 )
 
 type migrationLimaDiskConfig struct {
@@ -232,11 +233,35 @@ func (b Backend) InspectMigrationSource(
 		)
 	}
 	selectedDiskNames := make(map[string][]migration.OpaqueID)
+	attachedFSTypes := make(map[string]string)
+	filesystemByDisk := make(map[string]string)
 	for _, item := range inspected {
 		for _, attached := range item.disks {
+			fsType := "ext4"
+			if attached.FSType != nil {
+				fsType = *attached.FSType
+			}
+			if !migrationLimaFSType.MatchString(fsType) || fsType == "swap" {
+				return backend.SourceInventory{}, migrationSourceError(
+					"migration.provider.attached_disk_filesystem_unsupported",
+					request.Binding,
+					migrationOpaqueRef("attached", attached.Name),
+					errors.New("attached disk filesystem cannot be preserved safely"),
+				)
+			}
+			if existing, exists := filesystemByDisk[attached.Name]; exists && existing != fsType {
+				return backend.SourceInventory{}, migrationSourceError(
+					"migration.provider.attached_disk_filesystem_mismatch",
+					request.Binding,
+					migrationOpaqueRef("attached", attached.Name),
+					errors.New("shared attached disk consumers declare different filesystems"),
+				)
+			}
+			filesystemByDisk[attached.Name] = fsType
 			selectedDiskNames[attached.Name] = append(
 				selectedDiskNames[attached.Name], item.selection.EnvironmentRef,
 			)
+			attachedFSTypes[string(item.selection.EnvironmentRef)+"\x00"+attached.Name] = fsType
 			for _, consumerName := range consumers[attached.Name] {
 				if _, selected := selectedNames[consumerName]; !selected {
 					inventory.SelectionClosed = false
@@ -310,6 +335,7 @@ func (b Backend) InspectMigrationSource(
 				DiskRef:        diskRef,
 				Attachment:     migration.DiskRoleAttached,
 				GuestPath:      "/mnt/lima-" + name,
+				FSType:         attachedFSTypes[string(environmentRef)+"\x00"+name],
 			})
 		}
 	}
@@ -702,8 +728,7 @@ func migrationDiskConfigFromYAML(node *yaml.Node) (migrationLimaDiskConfig, erro
 			disk.Format = &flag
 		case "fsType":
 			if value.Kind != yaml.ScalarNode || value.Tag != "!!str" ||
-				strings.TrimSpace(value.Value) == "" || len(value.Value) > 64 ||
-				strings.ContainsAny(value.Value, "\x00\r\n") {
+				!migrationLimaFSType.MatchString(value.Value) {
 				return migrationLimaDiskConfig{}, errors.New("Lima disk fsType is invalid")
 			}
 			fsType := value.Value

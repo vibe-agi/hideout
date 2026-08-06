@@ -35,8 +35,48 @@
       "enum": [
         "reset-machine-id",
         "reset-ssh-host-keys",
-        "preserve-guest-identity"
+        "preserve-guest-identity",
+        "rebind-attached-disk-mounts",
+        "install-destination-ssh-keys"
       ]
+    },
+    "diskMountBinding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "diskId",
+        "sourceGuestPath",
+        "destinationGuestPath",
+        "fsType"
+      ],
+      "properties": {
+        "diskId": {
+          "$ref": "#/$defs/opaqueId"
+        },
+        "sourceGuestPath": {
+          "type": "string",
+          "pattern": "^/mnt/lima-[A-Za-z0-9.-][A-Za-z0-9._-]{0,127}$"
+        },
+        "destinationGuestPath": {
+          "type": "string",
+          "pattern": "^/mnt/lima-[A-Za-z0-9.-][A-Za-z0-9._-]{0,127}$"
+        },
+        "fsType": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9._+-]{0,63}$",
+          "not": {
+            "const": "swap"
+          }
+        }
+      }
+    },
+    "mountBindings": {
+      "type": "array",
+      "maxItems": 256,
+      "uniqueItems": true,
+      "items": {
+        "$ref": "#/$defs/diskMountBinding"
+      }
     },
     "identityEvidence": {
       "type": "object",
@@ -114,6 +154,7 @@
         "receiptNonce",
         "policy",
         "sourceIdentity",
+        "destinationSSHUser",
         "destinationSSHKeys",
         "permittedActions",
         "helper"
@@ -140,6 +181,13 @@
         "sourceIdentity": {
           "$ref": "#/$defs/identityEvidence"
         },
+        "destinationSSHUser": {
+          "type": "string",
+          "pattern": "^[a-z_][a-z0-9_-]{0,31}$",
+          "not": {
+            "const": "root"
+          }
+        },
         "destinationSSHKeys": {
           "type": "array",
           "minItems": 1,
@@ -154,12 +202,15 @@
         },
         "permittedActions": {
           "type": "array",
-          "minItems": 1,
-          "maxItems": 2,
+          "minItems": 2,
+          "maxItems": 4,
           "uniqueItems": true,
           "items": {
             "$ref": "#/$defs/action"
           }
+        },
+        "mountBindings": {
+          "$ref": "#/$defs/mountBindings"
         },
         "helper": {
           "$ref": "#/$defs/commonProperties/helper"
@@ -177,8 +228,8 @@
           "then": {
             "properties": {
               "permittedActions": {
-                "minItems": 2,
-                "maxItems": 2,
+                "minItems": 3,
+                "maxItems": 4,
                 "allOf": [
                   {
                     "contains": {
@@ -193,21 +244,178 @@
                     },
                     "minContains": 1,
                     "maxContains": 1
+                  },
+                  {
+                    "contains": {
+                      "const": "install-destination-ssh-keys"
+                    },
+                    "minContains": 1,
+                    "maxContains": 1
                   }
                 ]
+              }
+            },
+            "allOf": [
+              {
+                "if": {
+                  "properties": {
+                    "mountBindings": {
+                      "minItems": 1
+                    }
+                  },
+                  "required": [
+                    "mountBindings"
+                  ]
+                },
+                "then": {
+                  "properties": {
+                    "permittedActions": {
+                      "prefixItems": [
+                        {
+                          "const": "reset-machine-id"
+                        },
+                        {
+                          "const": "reset-ssh-host-keys"
+                        },
+                        {
+                          "const": "rebind-attached-disk-mounts"
+                        },
+                        {
+                          "const": "install-destination-ssh-keys"
+                        }
+                      ],
+                      "minItems": 4,
+                      "maxItems": 4
+                    }
+                  }
+                },
+                "else": {
+                  "properties": {
+                    "permittedActions": {
+                      "prefixItems": [
+                        {
+                          "const": "reset-machine-id"
+                        },
+                        {
+                          "const": "reset-ssh-host-keys"
+                        },
+                        {
+                          "const": "install-destination-ssh-keys"
+                        }
+                      ],
+                      "minItems": 3,
+                      "maxItems": 3
+                    }
+                  }
+                }
+              }
+            ]
+          },
+          "else": {
+            "properties": {
+              "permittedActions": {
+                "minItems": 2,
+                "maxItems": 3,
+                "allOf": [
+                  {
+                    "contains": {
+                      "const": "preserve-guest-identity"
+                    },
+                    "minContains": 1,
+                    "maxContains": 1
+                  },
+                  {
+                    "contains": {
+                      "const": "install-destination-ssh-keys"
+                    },
+                    "minContains": 1,
+                    "maxContains": 1
+                  }
+                ],
+                "uniqueItems": true
+              }
+            },
+            "allOf": [
+              {
+                "if": {
+                  "properties": {
+                    "mountBindings": {
+                      "minItems": 1
+                    }
+                  },
+                  "required": [
+                    "mountBindings"
+                  ]
+                },
+                "then": {
+                  "properties": {
+                    "permittedActions": {
+                      "prefixItems": [
+                        {
+                          "const": "preserve-guest-identity"
+                        },
+                        {
+                          "const": "rebind-attached-disk-mounts"
+                        },
+                        {
+                          "const": "install-destination-ssh-keys"
+                        }
+                      ],
+                      "minItems": 3,
+                      "maxItems": 3
+                    }
+                  }
+                },
+                "else": {
+                  "properties": {
+                    "permittedActions": {
+                      "prefixItems": [
+                        {
+                          "const": "preserve-guest-identity"
+                        },
+                        {
+                          "const": "install-destination-ssh-keys"
+                        }
+                      ],
+                      "minItems": 2,
+                      "maxItems": 2
+                    }
+                  }
+                }
+              }
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "mountBindings": {
+                "minItems": 1
+              }
+            },
+            "required": [
+              "mountBindings"
+            ]
+          },
+          "then": {
+            "properties": {
+              "permittedActions": {
+                "contains": {
+                  "const": "rebind-attached-disk-mounts"
+                },
+                "minContains": 1,
+                "maxContains": 1
               }
             }
           },
           "else": {
             "properties": {
               "permittedActions": {
-                "prefixItems": [
-                  {
-                    "const": "preserve-guest-identity"
+                "not": {
+                  "contains": {
+                    "const": "rebind-attached-disk-mounts"
                   }
-                ],
-                "minItems": 1,
-                "maxItems": 1
+                }
               }
             }
           }
@@ -274,10 +482,13 @@
         "helper": {
           "$ref": "#/$defs/commonProperties/helper"
         },
+        "mountBindings": {
+          "$ref": "#/$defs/mountBindings"
+        },
         "actionResults": {
           "type": "array",
           "minItems": 1,
-          "maxItems": 2,
+          "maxItems": 4,
           "uniqueItems": true,
           "items": {
             "$ref": "#/$defs/actionResult"
@@ -362,8 +573,8 @@
           "then": {
             "properties": {
               "actionResults": {
-                "minItems": 2,
-                "maxItems": 2,
+                "minItems": 3,
+                "maxItems": 4,
                 "allOf": [
                   {
                     "contains": {
@@ -392,10 +603,107 @@
                     },
                     "minContains": 1,
                     "maxContains": 1
+                  },
+                  {
+                    "contains": {
+                      "properties": {
+                        "action": {
+                          "const": "install-destination-ssh-keys"
+                        }
+                      },
+                      "required": [
+                        "action"
+                      ]
+                    },
+                    "minContains": 1,
+                    "maxContains": 1
                   }
                 ]
               }
-            }
+            },
+            "allOf": [
+              {
+                "if": {
+                  "properties": {
+                    "mountBindings": {
+                      "minItems": 1
+                    }
+                  },
+                  "required": [
+                    "mountBindings"
+                  ]
+                },
+                "then": {
+                  "properties": {
+                    "actionResults": {
+                      "prefixItems": [
+                        {
+                          "properties": {
+                            "action": {
+                              "const": "reset-machine-id"
+                            }
+                          }
+                        },
+                        {
+                          "properties": {
+                            "action": {
+                              "const": "reset-ssh-host-keys"
+                            }
+                          }
+                        },
+                        {
+                          "properties": {
+                            "action": {
+                              "const": "rebind-attached-disk-mounts"
+                            }
+                          }
+                        },
+                        {
+                          "properties": {
+                            "action": {
+                              "const": "install-destination-ssh-keys"
+                            }
+                          }
+                        }
+                      ],
+                      "minItems": 4,
+                      "maxItems": 4
+                    }
+                  }
+                },
+                "else": {
+                  "properties": {
+                    "actionResults": {
+                      "prefixItems": [
+                        {
+                          "properties": {
+                            "action": {
+                              "const": "reset-machine-id"
+                            }
+                          }
+                        },
+                        {
+                          "properties": {
+                            "action": {
+                              "const": "reset-ssh-host-keys"
+                            }
+                          }
+                        },
+                        {
+                          "properties": {
+                            "action": {
+                              "const": "install-destination-ssh-keys"
+                            }
+                          }
+                        }
+                      ],
+                      "minItems": 3,
+                      "maxItems": 3
+                    }
+                  }
+                }
+              }
+            ]
           }
         },
         {
@@ -416,20 +724,167 @@
           "then": {
             "properties": {
               "actionResults": {
-                "minItems": 1,
-                "maxItems": 1,
-                "contains": {
+                "minItems": 2,
+                "maxItems": 3,
+                "allOf": [
+                  {
+                    "contains": {
+                      "properties": {
+                        "action": {
+                          "const": "preserve-guest-identity"
+                        }
+                      },
+                      "required": [
+                        "action"
+                      ]
+                    },
+                    "minContains": 1,
+                    "maxContains": 1
+                  },
+                  {
+                    "contains": {
+                      "properties": {
+                        "action": {
+                          "const": "install-destination-ssh-keys"
+                        }
+                      },
+                      "required": [
+                        "action"
+                      ]
+                    },
+                    "minContains": 1,
+                    "maxContains": 1
+                  }
+                ]
+              }
+            },
+            "allOf": [
+              {
+                "if": {
                   "properties": {
-                    "action": {
-                      "const": "preserve-guest-identity"
+                    "mountBindings": {
+                      "minItems": 1
                     }
                   },
                   "required": [
-                    "action"
+                    "mountBindings"
                   ]
                 },
-                "minContains": 1,
-                "maxContains": 1
+                "then": {
+                  "properties": {
+                    "actionResults": {
+                      "prefixItems": [
+                        {
+                          "properties": {
+                            "action": {
+                              "const": "preserve-guest-identity"
+                            }
+                          }
+                        },
+                        {
+                          "properties": {
+                            "action": {
+                              "const": "rebind-attached-disk-mounts"
+                            }
+                          }
+                        },
+                        {
+                          "properties": {
+                            "action": {
+                              "const": "install-destination-ssh-keys"
+                            }
+                          }
+                        }
+                      ],
+                      "minItems": 3,
+                      "maxItems": 3
+                    }
+                  }
+                },
+                "else": {
+                  "properties": {
+                    "actionResults": {
+                      "prefixItems": [
+                        {
+                          "properties": {
+                            "action": {
+                              "const": "preserve-guest-identity"
+                            }
+                          }
+                        },
+                        {
+                          "properties": {
+                            "action": {
+                              "const": "install-destination-ssh-keys"
+                            }
+                          }
+                        }
+                      ],
+                      "minItems": 2,
+                      "maxItems": 2
+                    }
+                  }
+                }
+              }
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "mountBindings": {
+                "minItems": 1
+              }
+            },
+            "required": [
+              "mountBindings"
+            ]
+          },
+          "then": {
+            "if": {
+              "properties": {
+                "status": {
+                  "const": "completed"
+                }
+              },
+              "required": [
+                "status"
+              ]
+            },
+            "then": {
+              "properties": {
+                "actionResults": {
+                  "contains": {
+                    "properties": {
+                      "action": {
+                        "const": "rebind-attached-disk-mounts"
+                      }
+                    },
+                    "required": [
+                      "action"
+                    ]
+                  },
+                  "minContains": 1,
+                  "maxContains": 1
+                }
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "actionResults": {
+                "not": {
+                  "contains": {
+                    "properties": {
+                      "action": {
+                        "const": "rebind-attached-disk-mounts"
+                      }
+                    },
+                    "required": [
+                      "action"
+                    ]
+                  }
+                }
               }
             }
           }

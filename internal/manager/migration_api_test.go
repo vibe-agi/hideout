@@ -1429,7 +1429,8 @@ func (provider *managerMigrationProviderFixture) InspectMigrationSource(
 		})
 		edges = append(edges, backend.MigrationSourceAttachment{
 			EnvironmentRef: selection.EnvironmentRef, DiskRef: "disk_attached0001",
-			Attachment: migration.DiskRoleAttached, GuestPath: "/mnt/data",
+			Attachment: migration.DiskRoleAttached,
+			GuestPath:  "/mnt/lima-source-attached", FSType: "ext4",
 		})
 	}
 	slices.SortFunc(disks, func(left, right backend.MigrationSourceDisk) int {
@@ -1777,7 +1778,8 @@ func managerMigrationManifestFixture(bundleID migration.BundleID) migration.Mani
 		DiskEdges: []migration.DiskEdge{
 			{
 				EnvironmentRef: "environment_source1", DiskID: "disk_attached1",
-				Attachment: migration.DiskRoleAttached, GuestPath: "/mnt/data",
+				Attachment: migration.DiskRoleAttached,
+				GuestPath:  "/mnt/lima-source-attached", FSType: "ext4",
 			},
 			{
 				EnvironmentRef: "environment_source1", DiskID: "disk_root0001",

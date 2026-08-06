@@ -49,7 +49,9 @@ func TestMigrationImportedRuntimeReconcilesOnlyDestinationMountsBeforeFirstStart
 		t.Fatal(err)
 	}
 	if len(updated.Images) != 1 || updated.Images[0].Location != migrationImportedRootImageSentinel ||
-		!reflect.DeepEqual(updated.AdditionalDisks, []string{"disk_imported_data1"}) ||
+		!reflect.DeepEqual(updated.AdditionalDisks, []migrationStagedLimaAdditionalDisk{
+			importedRuntimeAdditionalDisk("disk_imported_data1", "ext4"),
+		}) ||
 		len(updated.Mounts) != 7 {
 		t.Fatalf("reconciled imported config=%+v", updated)
 	}
@@ -71,6 +73,18 @@ func TestMigrationImportedRuntimeMarkerAndRootFailClosedBeforeStart(t *testing.T
 		mutate func(*testing.T, importedRuntimeFixture)
 		want   string
 	}{
+		{
+			name: "attached disk format authority restored",
+			mutate: func(t *testing.T, fixture importedRuntimeFixture) {
+				config, err := readImportedLimaRuntimeConfig(fixture.instanceConfig)
+				if err != nil {
+					t.Fatal(err)
+				}
+				config.AdditionalDisks[0].Format = nil
+				writeImportedRuntimeYAML(t, fixture.instanceConfig, config)
+			},
+			want: "could be reformatted",
+		},
 		{
 			name: "runnable marker",
 			mutate: func(t *testing.T, fixture importedRuntimeFixture) {
@@ -191,7 +205,9 @@ func TestMigrationImportedRuntimeMountEditUsesInstalledLimaWithoutStartingVM(t *
 	}
 	if !reflect.DeepEqual(updated.Mounts, expected) ||
 		len(updated.Images) != 1 || updated.Images[0].Location != migrationImportedRootImageSentinel ||
-		!reflect.DeepEqual(updated.AdditionalDisks, []string{"disk_imported_data1"}) {
+		!reflect.DeepEqual(updated.AdditionalDisks, []migrationStagedLimaAdditionalDisk{
+			importedRuntimeAdditionalDisk("disk_imported_data1", "ext4"),
+		}) {
 		t.Fatalf("installed Lima changed unrelated imported config: %+v", updated)
 	}
 }
@@ -226,7 +242,9 @@ func newImportedRuntimeFixture(t *testing.T) importedRuntimeFixture {
 		VMType: "vz", Arch: "aarch64",
 		Images:    []limaImage{{Location: migrationImportedRootImageSentinel, Arch: "aarch64"}},
 		MountType: "virtiofs", Mounts: []mount{},
-		AdditionalDisks: []string{"disk_imported_data1"},
+		AdditionalDisks: []migrationStagedLimaAdditionalDisk{
+			importedRuntimeAdditionalDisk("disk_imported_data1", "ext4"),
+		},
 	})
 	marker := migrationNormalizedStageConfig{
 		Schema:         migrationStageConfigSchema,
@@ -238,6 +256,10 @@ func newImportedRuntimeFixture(t *testing.T) importedRuntimeFixture {
 		RootDiskID:           "disk_rootimport1",
 		RootDiskLogicalBytes: uint64(len("imported-root")),
 		AttachedDiskHandles:  []migration.OpaqueID{"disk_imported_data1"},
+		AttachedDiskMounts: []migration.DiskMountBinding{{
+			DiskID: "disk_imported_data1", SourceGuestPath: "/mnt/lima-source-data",
+			DestinationGuestPath: "/mnt/lima-disk_imported_data1", FSType: "ext4",
+		}},
 	}
 	normalizedPath := filepath.Join(instanceDir, "normalized.json")
 	writeImportedRuntimeJSON(t, normalizedPath, marker)
@@ -266,6 +288,15 @@ func newImportedRuntimeFixture(t *testing.T) importedRuntimeFixture {
 	return importedRuntimeFixture{
 		session: session, marker: marker, instanceConfig: instanceConfig,
 		normalizedPath: normalizedPath, rootDisk: rootDisk,
+	}
+}
+
+func importedRuntimeAdditionalDisk(
+	name, fsType string,
+) migrationStagedLimaAdditionalDisk {
+	format := false
+	return migrationStagedLimaAdditionalDisk{
+		Name: name, Format: &format, FSType: fsType,
 	}
 }
 

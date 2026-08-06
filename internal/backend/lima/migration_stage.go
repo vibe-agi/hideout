@@ -56,19 +56,26 @@ type migrationStageEntry struct {
 }
 
 type migrationStageConfiguration struct {
-	EnvironmentRef         migration.OpaqueID   `json:"environmentRef"`
-	BackendIdentity        migration.OpaqueID   `json:"backendIdentity"`
-	Runtime                string               `json:"runtime"`
-	GuestArchitecture      string               `json:"guestArchitecture"`
-	GuestUser              string               `json:"guestUser"`
-	ProfileComponent       migration.OpaqueID   `json:"profileComponent"`
-	RuntimeImageLocation   string               `json:"runtimeImageLocation,omitempty"`
-	RuntimeImageDigest     migration.Digest     `json:"runtimeImageDigest,omitempty"`
-	RootDiskID             migration.OpaqueID   `json:"rootDiskId"`
-	RootDiskLogicalBytes   uint64               `json:"rootDiskLogicalBytes"`
-	AttachedDiskHandles    []migration.OpaqueID `json:"attachedDiskHandles"`
-	YAMLRelativePath       string               `json:"yamlRelativePath"`
-	NormalizedRelativePath string               `json:"normalizedRelativePath"`
+	EnvironmentRef         migration.OpaqueID           `json:"environmentRef"`
+	BackendIdentity        migration.OpaqueID           `json:"backendIdentity"`
+	Runtime                string                       `json:"runtime"`
+	GuestArchitecture      string                       `json:"guestArchitecture"`
+	GuestUser              string                       `json:"guestUser"`
+	ProfileComponent       migration.OpaqueID           `json:"profileComponent"`
+	RuntimeImageLocation   string                       `json:"runtimeImageLocation,omitempty"`
+	RuntimeImageDigest     migration.Digest             `json:"runtimeImageDigest,omitempty"`
+	RootDiskID             migration.OpaqueID           `json:"rootDiskId"`
+	RootDiskLogicalBytes   uint64                       `json:"rootDiskLogicalBytes"`
+	AttachedDisks          []migrationStageAttachedDisk `json:"attachedDisks"`
+	YAMLRelativePath       string                       `json:"yamlRelativePath"`
+	NormalizedRelativePath string                       `json:"normalizedRelativePath"`
+}
+
+type migrationStageAttachedDisk struct {
+	DiskID          migration.OpaqueID `json:"diskId"`
+	ObjectHandle    migration.OpaqueID `json:"objectHandle"`
+	SourceGuestPath string             `json:"sourceGuestPath"`
+	FSType          string             `json:"fsType"`
 }
 
 type migrationStageCheckpoint struct {
@@ -107,35 +114,42 @@ type migrationStageComplete struct {
 }
 
 type migrationStagedLimaConfig struct {
-	VMType          string        `yaml:"vmType"`
-	Arch            string        `yaml:"arch"`
-	Images          []limaImage   `yaml:"images"`
-	MountType       string        `yaml:"mountType"`
-	MountInotify    bool          `yaml:"mountInotify"`
-	User            user          `yaml:"user"`
-	Containerd      containerd    `yaml:"containerd"`
-	Mounts          []mount       `yaml:"mounts"`
-	PortForwards    []portForward `yaml:"portForwards"`
-	AdditionalDisks []string      `yaml:"additionalDisks"`
+	VMType          string                              `yaml:"vmType"`
+	Arch            string                              `yaml:"arch"`
+	Images          []limaImage                         `yaml:"images"`
+	MountType       string                              `yaml:"mountType"`
+	MountInotify    bool                                `yaml:"mountInotify"`
+	User            user                                `yaml:"user"`
+	Containerd      containerd                          `yaml:"containerd"`
+	Mounts          []mount                             `yaml:"mounts"`
+	PortForwards    []portForward                       `yaml:"portForwards"`
+	AdditionalDisks []migrationStagedLimaAdditionalDisk `yaml:"additionalDisks"`
+}
+
+type migrationStagedLimaAdditionalDisk struct {
+	Name   string `yaml:"name"`
+	Format *bool  `yaml:"format"`
+	FSType string `yaml:"fsType"`
 }
 
 type migrationNormalizedStageConfig struct {
-	Schema               string               `json:"schema"`
-	EnvironmentRef       migration.OpaqueID   `json:"environmentRef"`
-	BackendIdentity      migration.OpaqueID   `json:"backendIdentity"`
-	Runtime              string               `json:"runtime"`
-	GuestArchitecture    string               `json:"guestArchitecture"`
-	GuestUser            string               `json:"guestUser"`
-	ProfileComponent     migration.OpaqueID   `json:"profileComponent"`
-	RuntimeImageLocation string               `json:"runtimeImageLocation,omitempty"`
-	RuntimeImageDigest   migration.Digest     `json:"runtimeImageDigest,omitempty"`
-	RootDiskID           migration.OpaqueID   `json:"rootDiskId"`
-	RootDiskLogicalBytes uint64               `json:"rootDiskLogicalBytes"`
-	AttachedDiskHandles  []migration.OpaqueID `json:"attachedDiskHandles"`
-	HostMountsEnabled    bool                 `json:"hostMountsEnabled"`
-	ImportedNetwork      bool                 `json:"importedNetwork"`
-	ImportedProvisioning bool                 `json:"importedProvisioning"`
-	Runnable             bool                 `json:"runnable"`
+	Schema               string                       `json:"schema"`
+	EnvironmentRef       migration.OpaqueID           `json:"environmentRef"`
+	BackendIdentity      migration.OpaqueID           `json:"backendIdentity"`
+	Runtime              string                       `json:"runtime"`
+	GuestArchitecture    string                       `json:"guestArchitecture"`
+	GuestUser            string                       `json:"guestUser"`
+	ProfileComponent     migration.OpaqueID           `json:"profileComponent"`
+	RuntimeImageLocation string                       `json:"runtimeImageLocation,omitempty"`
+	RuntimeImageDigest   migration.Digest             `json:"runtimeImageDigest,omitempty"`
+	RootDiskID           migration.OpaqueID           `json:"rootDiskId"`
+	RootDiskLogicalBytes uint64                       `json:"rootDiskLogicalBytes"`
+	AttachedDiskHandles  []migration.OpaqueID         `json:"attachedDiskHandles"`
+	AttachedDiskMounts   []migration.DiskMountBinding `json:"attachedDiskMounts"`
+	HostMountsEnabled    bool                         `json:"hostMountsEnabled"`
+	ImportedNetwork      bool                         `json:"importedNetwork"`
+	ImportedProvisioning bool                         `json:"importedProvisioning"`
+	Runnable             bool                         `json:"runnable"`
 }
 
 func (b Backend) StageMigrationDestination(
@@ -264,6 +278,21 @@ func validateLimaDestinationStageRequest(request backend.DestinationStageRequest
 			return errors.New("destination disk kind is outside the proved Lima contract")
 		}
 	}
+	for _, edge := range request.Edges {
+		if edge.Attachment != migration.DiskRoleAttached {
+			continue
+		}
+		binding := migration.DiskMountBinding{
+			DiskID: edge.DiskID, SourceGuestPath: edge.GuestPath,
+			DestinationGuestPath: "/mnt/lima-" + string(
+				migrationDestinationDiskHandle(request, edge.DiskID),
+			),
+			FSType: edge.FSType,
+		}
+		if edge.ReadOnly || binding.Validate() != nil {
+			return errors.New("destination attached-disk mount is outside the proved Lima contract")
+		}
+	}
 	return nil
 }
 
@@ -285,14 +314,17 @@ func buildMigrationStageOwner(
 		objectByEnvironment[object.EnvironmentRef] = object
 	}
 	rootEnvironmentByDisk := make(map[migration.OpaqueID]migration.OpaqueID)
-	attachedByEnvironment := make(map[migration.OpaqueID][]migration.OpaqueID)
+	attachedByEnvironment := make(map[migration.OpaqueID][]migrationStageAttachedDisk)
 	for _, edge := range request.Edges {
 		if edge.Attachment == migration.DiskRoleRoot {
 			rootEnvironmentByDisk[edge.DiskID] = edge.EnvironmentRef
 		} else {
 			handle := migrationDestinationDiskHandle(request, edge.DiskID)
 			attachedByEnvironment[edge.EnvironmentRef] = append(
-				attachedByEnvironment[edge.EnvironmentRef], handle,
+				attachedByEnvironment[edge.EnvironmentRef], migrationStageAttachedDisk{
+					DiskID: edge.DiskID, ObjectHandle: handle,
+					SourceGuestPath: edge.GuestPath, FSType: edge.FSType,
+				},
 			)
 		}
 	}
@@ -351,15 +383,20 @@ func buildMigrationStageOwner(
 	}
 	configurations := make([]migrationStageConfiguration, 0, len(request.Objects))
 	for _, object := range request.Objects {
-		attached := append([]migration.OpaqueID(nil), attachedByEnvironment[object.EnvironmentRef]...)
-		sort.Slice(attached, func(left, right int) bool { return attached[left] < attached[right] })
+		attached := append(
+			[]migrationStageAttachedDisk(nil),
+			attachedByEnvironment[object.EnvironmentRef]...,
+		)
+		sort.Slice(attached, func(left, right int) bool {
+			return attached[left].DiskID < attached[right].DiskID
+		})
 		configuration := migrationStageConfiguration{
 			EnvironmentRef: object.EnvironmentRef, BackendIdentity: object.BackendIdentity,
 			Runtime: object.Runtime, GuestArchitecture: object.GuestArchitecture,
 			GuestUser: object.GuestUser, ProfileComponent: object.ProfileComponent,
 			RootDiskID:           rootDiskByEnvironment[object.EnvironmentRef],
 			RootDiskLogicalBytes: rootBytesByEnvironment[object.EnvironmentRef],
-			AttachedDiskHandles:  attached,
+			AttachedDisks:        attached,
 			YAMLRelativePath: filepath.Join(
 				"instances", string(object.BackendIdentity), "lima.yaml",
 			),
@@ -746,10 +783,27 @@ func materializeMigrationStageConfigurations(
 func migrationStageConfigurationBytes(
 	configuration migrationStageConfiguration,
 ) ([]byte, []byte, error) {
-	additional := make([]string, len(configuration.AttachedDiskHandles))
-	for index, handle := range configuration.AttachedDiskHandles {
-		additional[index] = string(handle)
+	additional := make(
+		[]migrationStagedLimaAdditionalDisk, len(configuration.AttachedDisks),
+	)
+	handles := make([]migration.OpaqueID, len(configuration.AttachedDisks))
+	mounts := make([]migration.DiskMountBinding, len(configuration.AttachedDisks))
+	for index, disk := range configuration.AttachedDisks {
+		format := false
+		additional[index] = migrationStagedLimaAdditionalDisk{
+			Name: string(disk.ObjectHandle), Format: &format, FSType: disk.FSType,
+		}
+		handles[index] = disk.ObjectHandle
+		mounts[index] = migration.DiskMountBinding{
+			DiskID: disk.DiskID, SourceGuestPath: disk.SourceGuestPath,
+			DestinationGuestPath: "/mnt/lima-" + string(disk.ObjectHandle),
+			FSType:               disk.FSType,
+		}
 	}
+	if err := validateMigrationStageDiskBindings(additional, mounts); err != nil {
+		return nil, nil, err
+	}
+	sort.Slice(handles, func(left, right int) bool { return handles[left] < handles[right] })
 	denyForwards := []portForward{
 		{
 			GuestIP: "0.0.0.0", GuestIPMustBeZero: boolPtr(false), Proto: "any",
@@ -789,10 +843,9 @@ func migrationStageConfigurationBytes(
 		RuntimeImageDigest:   configuration.RuntimeImageDigest,
 		RootDiskID:           configuration.RootDiskID,
 		RootDiskLogicalBytes: configuration.RootDiskLogicalBytes,
-		AttachedDiskHandles: append(
-			[]migration.OpaqueID(nil), configuration.AttachedDiskHandles...,
-		),
-		HostMountsEnabled: false, ImportedNetwork: false,
+		AttachedDiskHandles:  handles,
+		AttachedDiskMounts:   mounts,
+		HostMountsEnabled:    false, ImportedNetwork: false,
 		ImportedProvisioning: false, Runnable: false,
 	}
 	normalizedData, err := json.Marshal(normalized)
@@ -801,6 +854,25 @@ func migrationStageConfigurationBytes(
 	}
 	normalizedData = append(normalizedData, '\n')
 	return yamlData, normalizedData, nil
+}
+
+func validateMigrationStageDiskBindings(
+	additional []migrationStagedLimaAdditionalDisk,
+	mounts []migration.DiskMountBinding,
+) error {
+	if len(additional) != len(mounts) {
+		return errors.New("imported Lima attached-disk bindings are incomplete")
+	}
+	for index := range additional {
+		disk := additional[index]
+		binding := mounts[index]
+		if disk.Name != strings.TrimPrefix(binding.DestinationGuestPath, "/mnt/lima-") ||
+			disk.Format == nil || *disk.Format || disk.FSType != binding.FSType ||
+			binding.Validate() != nil {
+			return errors.New("imported Lima attached disk could be reformatted or mis-mounted")
+		}
+	}
+	return nil
 }
 
 func loadCompletedMigrationStage(

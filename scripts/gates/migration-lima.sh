@@ -67,14 +67,10 @@ migration_guest_verify_script='
   set -- /etc/ssh/ssh_host_*_key.pub
   [ -e "$1" ]
   cat "$@" | sha256sum | sed "s/ .*//"
-  found=0
-  for path in /mnt/lima-*/migration-attached-proof; do
-    [ -f "$path" ] || continue
-    printf "attached="
-    cat "$path"
-    found=1
-  done
-  [ "$found" -eq 1 ]
+  [ -L /mnt/lima-migration-attached ]
+  [ -f /mnt/lima-migration-attached/migration-attached-proof ]
+  printf "attached="
+  cat /mnt/lima-migration-attached/migration-attached-proof
   [ ! -e /workspace/host-only.txt ]
 '
 
@@ -461,6 +457,23 @@ migration_lima_stopped_inventory() {
   ' "$inventory_path" >/dev/null
 }
 
+migration_lima_safe_attached_disk_config() {
+  local inventory_path="$1" instance="$2"
+  jq -s -e --arg instance "$instance" '
+    [.[] | select(.name == $instance)] as $matches |
+    ($matches | length) == 1 and
+    ($matches[0].config.additionalDisks | type) == "array" and
+    ($matches[0].config.additionalDisks | length) == 1 and
+    ($matches[0].config.additionalDisks[0] // null) as $disk |
+    if ($disk | type) != "object" then false
+    else
+      ($disk.name | test("^disk_[a-z0-9_-]+$")) and
+      $disk.format == false and
+      $disk.fsType == "ext4"
+    end
+  ' "$inventory_path" >/dev/null
+}
+
 validate_migration_lima_summary() {
   jq -e '
     .schema == "hideout.migration-lima-evidence/v1" and
@@ -766,9 +779,64 @@ file_bytes() {
   stat -f '%z' "$1" 2>/dev/null || stat -c '%s' "$1" 2>/dev/null
 }
 
+migration_security_without_controlling_tty() {
+  # The security CLI opens /dev/tty for a bare -w even when its stdin is a
+  # pipe. A gate launched from a PTY would therefore wait for an operator and
+  # ignore the bounded secret stream below. Start it in a fresh session so the
+  # CLI consumes stdin without placing the secret in argv or the environment.
+  python3 -c '
+import os
+import sys
+
+os.setsid()
+os.execv("/usr/bin/security", ["security", *sys.argv[1:]])
+' "$@"
+}
+
+migration_checkpoint_keychain_preflight() {
+  local fixture account secret_file resolved_file item_created status
+  fixture="$(mktemp -d "${TMPDIR:-/tmp}/ho-mig-keychain.XXXXXX")" || return 1
+  account="migration-lima-preflight-${fixture##*.}-$$"
+  secret_file="$fixture/secret"
+  resolved_file="$fixture/resolved"
+  item_created=0
+  status=0
+  printf '%s\n' 'checkpoint-keychain-preflight-secret' >"$secret_file" || status=1
+  chmod 0600 "$secret_file" || status=1
+  if [ "$status" -eq 0 ]; then
+    if {
+      cat "$secret_file"
+      cat "$secret_file"
+    } | migration_security_without_controlling_tty add-generic-password \
+      -a "$account" -s "$checkpoint_keychain_service" \
+      -l "Hideout migration gate checkpoint preflight" -w \
+      >/dev/null 2>&1; then
+      item_created=1
+    else
+      status=1
+    fi
+  fi
+  if [ "$status" -eq 0 ]; then
+    migration_security_without_controlling_tty find-generic-password \
+      -a "$account" -s "$checkpoint_keychain_service" -w \
+      >"$resolved_file" 2>/dev/null || status=1
+  fi
+  if [ "$status" -eq 0 ]; then
+    chmod 0600 "$resolved_file" || status=1
+    cmp -s "$secret_file" "$resolved_file" || status=1
+  fi
+  if [ "$item_created" -eq 1 ]; then
+    security delete-generic-password \
+      -a "$account" -s "$checkpoint_keychain_service" \
+      >/dev/null 2>&1 || status=1
+  fi
+  find "$fixture" -depth -delete || status=1
+  return "$status"
+}
+
 migration_checkpoint_secret() {
   local account="$1"
-  security find-generic-password \
+  migration_security_without_controlling_tty find-generic-password \
     -a "$account" -s "$checkpoint_keychain_service" -w
 }
 
@@ -866,6 +934,14 @@ if [ "$preflight_only" -eq 1 ]; then
   bash -n scripts/gates/migration-lima.sh scripts/gates/migration.sh
   shellcheck scripts/gates/migration-lima.sh scripts/gates/migration.sh
   sh -n -c "$migration_guest_verify_script"
+  case "$migration_guest_verify_script" in
+    *'/mnt/lima-*/'*)
+      fail "guest fidelity judge still accepts an arbitrary attached-disk path"
+      ;;
+  esac
+  [[ "$migration_guest_verify_script" == *'[ -L /mnt/lima-migration-attached ]'* ]] &&
+    [[ "$migration_guest_verify_script" == *'/mnt/lima-migration-attached/migration-attached-proof'* ]] ||
+    fail "guest fidelity judge does not prove the authenticated source mount path"
   summary_fixture="$(migration_lima_summary_fixture)"
   printf '%s\n' "$summary_fixture" | validate_migration_lima_summary ||
     fail "summary validator rejected its valid preflight fixture"
@@ -899,6 +975,32 @@ if [ "$preflight_only" -eq 1 ]; then
   run_dir="$diagnostic_fixture/evidence"
   source_store="$scratch/source-store"
   mkdir -p "$scratch" "$run_dir" "$source_store/daemon"
+
+  attached_config_fixture="$diagnostic_fixture/attached-config.jsonl"
+  jq -n '{
+    name:"backend_destination1234",
+    config:{additionalDisks:[{
+      name:"disk_destination1234",format:false,fsType:"ext4"
+    }]}
+  }' >"$attached_config_fixture"
+  migration_lima_safe_attached_disk_config \
+    "$attached_config_fixture" "backend_destination1234" || {
+    find "$diagnostic_fixture" -depth -delete
+    fail "valid non-formatting attached-disk configuration was rejected"
+  }
+  for attached_config_mutation in \
+    '.config.additionalDisks[0].format = true' \
+    '.config.additionalDisks[0].fsType = "xfs"' \
+    '.config.additionalDisks[0] = "disk_destination1234"'; do
+    jq "$attached_config_mutation" \
+      "$attached_config_fixture" >"$attached_config_fixture.mutated"
+    if migration_lima_safe_attached_disk_config \
+      "$attached_config_fixture.mutated" "backend_destination1234" \
+      >/dev/null 2>&1; then
+      find "$diagnostic_fixture" -depth -delete
+      fail "attached-disk configuration judge accepted: $attached_config_mutation"
+    fi
+  done
 
   fidelity_fixture="$diagnostic_fixture/guest-fidelity.txt"
   fidelity_root="root-proof"
@@ -1048,7 +1150,7 @@ if [ "$preflight_only" -eq 1 ]; then
   # shellcheck disable=SC2329 # restores the real indirect keychain resolver.
   migration_checkpoint_secret() {
     local account="$1"
-    security find-generic-password \
+    migration_security_without_controlling_tty find-generic-password \
       -a "$account" -s "$checkpoint_keychain_service" -w
   }
 
@@ -1325,12 +1427,12 @@ if [ "$preflight_only" -eq 1 ]; then
   scratch=""
   run_dir=""
   source_store=""
-  printf 'migration-lima: preflight=passed semantic-fixtures=47\n'
+  printf 'migration-lima: preflight=passed semantic-fixtures=52\n'
   exit 0
 fi
 
 for command in awk cat cp cut date find go grep jq limactl lsof mktemp mv openssl ps \
-  security sed shasum sort ssh stat tail tar tr uname; do
+  python3 security sed shasum sort ssh stat tail tar tr uname; do
   require_command "$command"
 done
 
@@ -1368,7 +1470,7 @@ publish_migration_post_export_checkpoint() {
   if ! {
     cat "$passphrase_file"
     cat "$passphrase_file"
-  } | security add-generic-password \
+  } | migration_security_without_controlling_tty add-generic-password \
     -a "$checkpoint_account" -s "$checkpoint_keychain_service" \
     -l "Hideout migration gate checkpoint" -w \
     >/dev/null 2>&1; then
@@ -1715,6 +1817,9 @@ candidate_tree="$(jq -er '.source.tree' "$candidate_result")"
 gate_review_started_at="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
 gate_review_started_epoch="$(date +%s)"
 gate_review_started=1
+mark_gate_stage checkpoint-keychain-preflight
+migration_checkpoint_keychain_preflight ||
+  fail "checkpoint Keychain noninteractive round trip failed"
 mark_gate_stage scratch-preflight
 
 tmp_base="${HIDEOUT_MIGRATION_LIMA_TMPDIR:-/tmp}"
@@ -2337,6 +2442,7 @@ verify_import() {
   lima list --format json --all-fields \
     >"$inventory_path" 2>"$inventory_error_path" || return 1
   migration_lima_stopped_inventory "$inventory_path" "$instance" || return 1
+  migration_lima_safe_attached_disk_config "$inventory_path" "$instance" || return 1
   destination_profile="$(migration_destination_profile \
     "$store" "$environment_id" "$source_name")" || return 1
   [ "$destination_profile" = "$inspected_profile" ] || return 1

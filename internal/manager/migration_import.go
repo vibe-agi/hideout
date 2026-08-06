@@ -639,6 +639,7 @@ func (service MigrationImportService) buildImportOperation(
 		ConflictActions:           cloneMigrationConflictActions(plan.ConflictActions),
 		EnvironmentActions:        append([]migration.EnvironmentAction(nil), plan.EnvironmentActions...),
 		ExpectedDisks:             cloneMigrationDiskObjects(disks),
+		ExpectedDiskEdges:         append([]migration.DiskEdge(nil), edges...),
 		IdentityActions:           append([]migration.IdentityAction(nil), plan.IdentityActions...),
 		WorkspaceActions:          append([]migration.WorkspaceAction(nil), plan.WorkspaceActions...),
 		SecretActions:             cloneMigrationSecretActions(plan.SecretActions),

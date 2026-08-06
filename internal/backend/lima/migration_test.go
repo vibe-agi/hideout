@@ -378,6 +378,76 @@ func TestInspectMigrationSourceRequiresSharedDiskSelectionClosure(t *testing.T) 
 	if attached != 1 {
 		t.Fatalf("attached disk objects=%d want=1", attached)
 	}
+	for _, edge := range closed.Attachments {
+		if edge.Attachment == migration.DiskRoleAttached && edge.FSType != "ext4" {
+			t.Fatalf("default attached disk filesystem=%q want ext4", edge.FSType)
+		}
+	}
+}
+
+func TestInspectMigrationSourcePreservesAttachedFilesystemAndRejectsSwap(t *testing.T) {
+	requestFor := func(t *testing.T, fsType string) (*migrationSourceFixture, backend.SourceInspectionRequest) {
+		t.Helper()
+		fixture := newMigrationSourceFixture(t, []migrationSourceInstanceFixture{{
+			name: "hideout-alpha", environmentRef: "environment_alpha1", status: "Stopped",
+			additionalDisks:       []string{"data-alpha"},
+			additionalDiskFSTypes: map[string]string{"data-alpha": fsType},
+		}})
+		request := fixture.request(t, []backend.MigrationSourceSelection{{
+			EnvironmentRef: "environment_alpha1", ProviderInstance: "hideout-alpha",
+		}})
+		return fixture, request
+	}
+
+	fixture, request := requestFor(t, "xfs")
+	inventory, err := fixture.provider.InspectMigrationSource(context.Background(), request)
+	if err != nil || !inventory.Capturable {
+		t.Fatalf("xfs inventory=%+v err=%v", inventory, err)
+	}
+	found := false
+	for _, edge := range inventory.Attachments {
+		if edge.Attachment == migration.DiskRoleAttached {
+			found = true
+			if edge.FSType != "xfs" {
+				t.Fatalf("attached filesystem=%q want xfs", edge.FSType)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("xfs attached disk edge is absent")
+	}
+
+	fixture, request = requestFor(t, "swap")
+	_, err = fixture.provider.InspectMigrationSource(context.Background(), request)
+	var providerErr *backend.MigrationProviderError
+	if !errors.As(err, &providerErr) ||
+		providerErr.Code != "migration.provider.attached_disk_filesystem_unsupported" {
+		t.Fatalf("swap inspection error=%v", err)
+	}
+
+	shared := newMigrationSourceFixture(t, []migrationSourceInstanceFixture{
+		{
+			name: "hideout-alpha", environmentRef: "environment_alpha1", status: "Stopped",
+			additionalDisks:       []string{"shared-data"},
+			additionalDiskFSTypes: map[string]string{"shared-data": "ext4"},
+		},
+		{
+			name: "hideout-bravo", environmentRef: "environment_bravo1", status: "Stopped",
+			additionalDisks:       []string{"shared-data"},
+			additionalDiskFSTypes: map[string]string{"shared-data": "xfs"},
+		},
+	})
+	_, err = shared.provider.InspectMigrationSource(
+		context.Background(),
+		shared.request(t, []backend.MigrationSourceSelection{
+			{EnvironmentRef: "environment_alpha1", ProviderInstance: "hideout-alpha"},
+			{EnvironmentRef: "environment_bravo1", ProviderInstance: "hideout-bravo"},
+		}),
+	)
+	if !errors.As(err, &providerErr) ||
+		providerErr.Code != "migration.provider.attached_disk_filesystem_mismatch" {
+		t.Fatalf("shared filesystem mismatch error=%v", err)
+	}
 }
 
 func TestInspectMigrationSourceRequiresExactStoppedState(t *testing.T) {
@@ -945,10 +1015,11 @@ type migrationCapabilityRunner struct {
 }
 
 type migrationSourceInstanceFixture struct {
-	name            string
-	environmentRef  migration.OpaqueID
-	status          string
-	additionalDisks []string
+	name                  string
+	environmentRef        migration.OpaqueID
+	status                string
+	additionalDisks       []string
+	additionalDiskFSTypes map[string]string
 }
 
 type migrationSourceFixture struct {
@@ -1161,7 +1232,11 @@ func newMigrationSourceFixture(
 		if len(source.additionalDisks) != 0 {
 			config.WriteString("additionalDisks:\n")
 			for _, diskName := range source.additionalDisks {
-				fmt.Fprintf(&config, "- %s\n", diskName)
+				if fsType := source.additionalDiskFSTypes[diskName]; fsType != "" {
+					fmt.Fprintf(&config, "- name: %s\n  fsType: %s\n", diskName, fsType)
+				} else {
+					fmt.Fprintf(&config, "- %s\n", diskName)
+				}
 				diskNames[diskName] = struct{}{}
 			}
 		}
@@ -1180,9 +1255,14 @@ func newMigrationSourceFixture(
 		info.Config.VMType = "vz"
 		info.Config.Arch = "aarch64"
 		for _, diskName := range source.additionalDisks {
+			var fsType *string
+			if value := source.additionalDiskFSTypes[diskName]; value != "" {
+				valueCopy := value
+				fsType = &valueCopy
+			}
 			info.Config.AdditionalDisks = append(
 				info.Config.AdditionalDisks,
-				migrationLimaDiskConfig{Name: diskName},
+				migrationLimaDiskConfig{Name: diskName, FSType: fsType},
 			)
 		}
 		runner.instances = append(runner.instances, info)

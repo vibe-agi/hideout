@@ -225,6 +225,13 @@ func loadMigrationAdoptionOwner(
 		return migrationStageOwner{}, "", migrationStageConfiguration{}, migrationStageEntry{},
 			errors.New("adoption environment is absent from the stage")
 	}
+	expectedMounts, err := migrationStageAdoptionMountBindings(configuration)
+	if err != nil || !reflect.DeepEqual(expectedMounts, request.MountBindings) {
+		if err == nil {
+			err = errors.New("adoption mount bindings do not match the authenticated stage")
+		}
+		return migrationStageOwner{}, "", migrationStageConfiguration{}, migrationStageEntry{}, err
+	}
 	var entry migrationStageEntry
 	for _, candidate := range owner.Entries {
 		if candidate.DiskID == configuration.RootDiskID {
@@ -266,15 +273,17 @@ func prepareMigrationAdoptionControl(
 	}
 	actions := []string{
 		migration.AdoptionActionPreserveIdentity,
-		migration.AdoptionActionInstallSSHKeys,
 	}
 	if request.Policy == migration.GuestIdentitySafeClone {
 		actions = []string{
 			migration.AdoptionActionResetMachineID,
 			migration.AdoptionActionResetSSHHostKeys,
-			migration.AdoptionActionInstallSSHKeys,
 		}
 	}
+	if len(request.MountBindings) != 0 {
+		actions = append(actions, migration.AdoptionActionRebindDiskMounts)
+	}
+	actions = append(actions, migration.AdoptionActionInstallSSHKeys)
 	guestRequest := migration.AdoptionRequest{
 		Schema:      migration.AdoptionRequestSchema,
 		OperationID: request.Binding.OperationID, EnvironmentRef: request.EnvironmentRef,
@@ -282,7 +291,10 @@ func prepareMigrationAdoptionControl(
 		Policy: request.Policy, SourceIdentity: request.SourceIdentity,
 		DestinationSSHUser: configuration.GuestUser,
 		DestinationSSHKeys: []string{destinationSSHKey},
-		PermittedActions:   actions, Helper: request.Helper,
+		MountBindings: append(
+			[]migration.DiskMountBinding(nil), request.MountBindings...,
+		),
+		PermittedActions: actions, Helper: request.Helper,
 	}
 	if err := guestRequest.Validate(); err != nil {
 		return migration.AdoptionRequest{}, vzexecutor.ExecutionRequest{}, vzexecutor.ExecutionPaths{}, err
@@ -673,7 +685,27 @@ func migrationGuestRequestMatchesDestination(
 ) bool {
 	return guest.Validate() == nil && guest.OperationID == request.Binding.OperationID &&
 		guest.EnvironmentRef == request.EnvironmentRef && guest.Policy == request.Policy &&
-		guest.SourceIdentity.Equal(request.SourceIdentity) && guest.Helper == request.Helper
+		guest.SourceIdentity.Equal(request.SourceIdentity) &&
+		reflect.DeepEqual(guest.MountBindings, request.MountBindings) &&
+		guest.Helper == request.Helper
+}
+
+func migrationStageAdoptionMountBindings(
+	configuration migrationStageConfiguration,
+) ([]migration.DiskMountBinding, error) {
+	bindings := make([]migration.DiskMountBinding, len(configuration.AttachedDisks))
+	for index, disk := range configuration.AttachedDisks {
+		bindings[index] = migration.DiskMountBinding{
+			DiskID: disk.DiskID, SourceGuestPath: disk.SourceGuestPath,
+			DestinationGuestPath: "/mnt/lima-" + string(disk.ObjectHandle),
+			FSType:               disk.FSType,
+		}
+		if bindings[index].Validate() != nil ||
+			(index > 0 && bindings[index-1].DiskID >= bindings[index].DiskID) {
+			return nil, errors.New("stage adoption mount binding is invalid")
+		}
+	}
+	return bindings, nil
 }
 
 func newMigrationAdoptionNonce(prefix string) (migration.OpaqueID, error) {

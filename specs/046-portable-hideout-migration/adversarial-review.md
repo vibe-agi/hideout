@@ -150,9 +150,38 @@ current generic-name and previously unlisted-package fixtures are retained as
 self-proving drift sentinels: reverting either half of the discovery rule makes
 preflight fail before any expensive fuzz, TLA+, package, or VM work begins.
 
+### Attached-disk first-boot fidelity closure
+
+The first package-candidate real-Lima run exposed a destructive gap that the
+previous model and gate did not express. Staging wrote `additionalDisks` as a
+fresh scalar disk name. On Lima 2.2, a fresh name has no matching filesystem
+label; because formatting authority was omitted, Lima's guest bootstrap
+defaulted to partitioning and formatting the imported bytes. The gate then
+looked for its sentinel under any `/mnt/lima-*` path, so it also failed to prove
+that applications retained the authenticated source mount path.
+
+The closure carries filesystem type and source guest path in the authenticated
+disk edge and durable operation, emits the fresh destination disk as an object
+with explicit `format: false`, and rejects omitted/true formatting authority
+before first start. Isolated adoption receives the exact source/destination
+mount bindings, replaces only an absent or empty source mount with the exact
+destination symlink only after `/proc/<pid>/mountinfo` proves the exact mount
+point and filesystem type, and receipts `rebind-attached-disk-mounts`;
+conflicting, unmounted, mismatched, or nonempty paths fail closed. The TLA+ and
+Go refinement now require an abstract disk-fidelity proof before
+verification/activation and clear it on rollback.
+The real gate verifies the original source path and independently inspects the
+fresh Lima disk entry for `format: false` and the authenticated filesystem type.
+
+Focused source-inventory, staging, runtime, helper, protocol, Manager, and
+refinement tests cover default `ext4`, preserved supported filesystems, rejected
+`swap`, omitted formatting authority, mapping substitution, idempotent exact
+links, kernel mount-type mismatch, and refusal to hide a nonempty path. The
+exact signed-package real-Lima run remains the publication proof.
+
 ### Validation status
 
-Targeted Go packages, JSON schemas, shell syntax/ShellCheck, all 47 real-Lima
+Targeted Go packages, JSON schemas, shell syntax/ShellCheck, all 52 real-Lima
 semantic preflight fixtures, and both updated MigrationAdoption TLC
 configurations pass in the release worktree. This is implementation evidence,
 not public release evidence. The exact clean signed package must still pass the

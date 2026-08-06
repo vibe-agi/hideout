@@ -197,16 +197,12 @@ func migrationDestinationAdoptionFixture(
 	call int,
 ) backend.DestinationAdoption {
 	t.Helper()
-	actions := []string{
-		migration.AdoptionActionPreserveIdentity,
-		migration.AdoptionActionInstallSSHKeys,
-	}
+	actions := []string{migration.AdoptionActionPreserveIdentity}
 	post := fixed.SourceIdentity
 	if fixed.Policy == migration.GuestIdentitySafeClone {
 		actions = []string{
 			migration.AdoptionActionResetMachineID,
 			migration.AdoptionActionResetSSHHostKeys,
-			migration.AdoptionActionInstallSSHKeys,
 		}
 		machineDigit := fmt.Sprintf("%x", call+10)
 		sshDigit := fmt.Sprintf("%x", call+12)
@@ -217,6 +213,10 @@ func migrationDestinationAdoptionFixture(
 			},
 		}
 	}
+	if len(fixed.MountBindings) != 0 {
+		actions = append(actions, migration.AdoptionActionRebindDiskMounts)
+	}
+	actions = append(actions, migration.AdoptionActionInstallSSHKeys)
 	guestRequest := migration.AdoptionRequest{
 		Schema: migration.AdoptionRequestSchema, OperationID: fixed.Binding.OperationID,
 		EnvironmentRef: fixed.EnvironmentRef,
@@ -227,6 +227,9 @@ func migrationDestinationAdoptionFixture(
 		DestinationSSHKeys: []string{
 			fmt.Sprintf("ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFixture%d", call),
 		},
+		MountBindings: append(
+			[]migration.DiskMountBinding(nil), fixed.MountBindings...,
+		),
 		PermittedActions: actions, Helper: fixed.Helper,
 	}
 	results := make([]migration.AdoptionActionResult, len(actions))
@@ -239,8 +242,12 @@ func migrationDestinationAdoptionFixture(
 		Schema: migration.AdoptionReceiptSchema, OperationID: guestRequest.OperationID,
 		EnvironmentRef: guestRequest.EnvironmentRef,
 		RequestNonce:   guestRequest.RequestNonce, ReceiptNonce: guestRequest.ReceiptNonce,
-		Policy: guestRequest.Policy, Helper: guestRequest.Helper, ActionResults: results,
-		PostIdentity: &post, Status: migration.AdoptionReceiptStatusCompleted,
+		Policy: guestRequest.Policy, Helper: guestRequest.Helper,
+		MountBindings: append(
+			[]migration.DiskMountBinding(nil), guestRequest.MountBindings...,
+		),
+		ActionResults: results,
+		PostIdentity:  &post, Status: migration.AdoptionReceiptStatusCompleted,
 		CompletionMarker: true,
 	}
 	adoption := backend.DestinationAdoption{

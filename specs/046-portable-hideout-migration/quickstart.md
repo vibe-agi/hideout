@@ -196,8 +196,12 @@ cat /etc/machine-id
 ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub
 ```
 
-Verify all attached-disk fixtures, modes, owners, symlinks, and xattrs. The guest
-machine ID and SSH fingerprint must differ from computer A.
+Verify every attached-disk fixture at the same guest path recorded on computer
+A, including modes, owners, symlinks, and xattrs. Inspect the destination Lima
+configuration and require the fresh attached-disk object to carry explicit
+`format: false` and the authenticated filesystem type. The original path must
+resolve to that fresh destination mount, not merely to any `/mnt/lima-*`
+directory. The guest machine ID and SSH fingerprint must differ from computer A.
 
 Resolve the destination profile path named by the receipt. Verify the `home`,
 `config`, `data`, and `browser` fixture hashes. Prove the cache fixture is absent,

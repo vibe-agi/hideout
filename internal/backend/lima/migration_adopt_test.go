@@ -242,6 +242,20 @@ func migrationDestinationAdoptionFixture(
 	if capability.AdoptionHelper == nil {
 		t.Fatal("fixture capability lacks adoption helper")
 	}
+	mountBindings := make([]migration.DiskMountBinding, 0)
+	for _, edge := range stageRequest.Edges {
+		if edge.EnvironmentRef != stageRequest.Objects[0].EnvironmentRef ||
+			edge.Attachment != migration.DiskRoleAttached {
+			continue
+		}
+		mountBindings = append(mountBindings, migration.DiskMountBinding{
+			DiskID: edge.DiskID, SourceGuestPath: edge.GuestPath,
+			DestinationGuestPath: "/mnt/lima-" + string(
+				migrationDestinationDiskHandle(stageRequest, edge.DiskID),
+			),
+			FSType: edge.FSType,
+		})
+	}
 	return backend.DestinationAdoptionRequest{
 		Binding: backend.MigrationEffectBinding{
 			OperationID:        stageRequest.Binding.OperationID,
@@ -257,6 +271,7 @@ func migrationDestinationAdoptionFixture(
 				migration.Digest("sha256:" + strings.Repeat("b", 64)),
 			},
 		},
+		MountBindings: mountBindings,
 		Helper: migration.HelperBinding{
 			PackageID: capability.AdoptionHelper.PackageID,
 			Version:   capability.AdoptionHelper.Version,
@@ -350,6 +365,9 @@ func (runner *migrationAdoptionRunner) Run(
 		OperationID: guestRequest.OperationID, EnvironmentRef: guestRequest.EnvironmentRef,
 		RequestNonce: guestRequest.RequestNonce, ReceiptNonce: guestRequest.ReceiptNonce,
 		Policy: guestRequest.Policy, Helper: guestRequest.Helper,
+		MountBindings: append(
+			[]migration.DiskMountBinding(nil), guestRequest.MountBindings...,
+		),
 		ActionResults: actions, PostIdentity: &postIdentity,
 		Status: migration.AdoptionReceiptStatusCompleted, CompletionMarker: true,
 	}

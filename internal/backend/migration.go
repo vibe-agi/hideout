@@ -255,6 +255,7 @@ type MigrationSourceAttachment struct {
 	DiskRef        migration.OpaqueID `json:"diskRef"`
 	Attachment     migration.DiskRole `json:"attachment"`
 	GuestPath      string             `json:"guestPath"`
+	FSType         string             `json:"fsType,omitempty"`
 	ReadOnly       bool               `json:"readOnly"`
 }
 
@@ -363,11 +364,15 @@ func (inventory SourceInventory) Validate() error {
 		disk, diskExists := disks[attachment.DiskRef]
 		key := string(attachment.EnvironmentRef) + "\x00" + string(attachment.DiskRef)
 		if !environmentExists || !diskExists || key <= previousEdge ||
-			attachment.Attachment != disk.Role || !validMigrationGuestPath(attachment.GuestPath) {
+			attachment.Attachment != disk.Role || !validMigrationGuestPath(attachment.GuestPath) ||
+			(disk.Role == migration.DiskRoleAttached &&
+				(!migrationProviderTokenPattern.MatchString(attachment.FSType) ||
+					attachment.FSType == "swap")) {
 			return fmt.Errorf("%w: source attachment", ErrMigrationProviderResponse)
 		}
 		if disk.Role == migration.DiskRoleRoot &&
-			(attachment.DiskRef != instance.RootDiskRef || attachment.GuestPath != "/" || attachment.ReadOnly) {
+			(attachment.DiskRef != instance.RootDiskRef || attachment.GuestPath != "/" ||
+				attachment.FSType != "" || attachment.ReadOnly) {
 			return fmt.Errorf("%w: source root attachment", ErrMigrationProviderResponse)
 		}
 		if _, exists := edges[key]; exists {
@@ -889,11 +894,13 @@ func validateDestinationEdges(
 		disk, diskExists := disks[edge.DiskID]
 		key := string(edge.EnvironmentRef) + "\x00" + string(edge.DiskID)
 		if !environmentExists || !diskExists || edge.Attachment != disk.Role ||
-			!validMigrationGuestPath(edge.GuestPath) || key <= previousEdge {
+			!validMigrationGuestPath(edge.GuestPath) || key <= previousEdge ||
+			(disk.Role == migration.DiskRoleAttached &&
+				(!migrationProviderTokenPattern.MatchString(edge.FSType) || edge.FSType == "swap")) {
 			return fmt.Errorf("%w: destination disk edge", ErrMigrationProviderRequest)
 		}
 		if disk.Role == migration.DiskRoleRoot {
-			if edge.GuestPath != "/" || edge.ReadOnly {
+			if edge.GuestPath != "/" || edge.FSType != "" || edge.ReadOnly {
 				return fmt.Errorf("%w: destination root edge", ErrMigrationProviderRequest)
 			}
 			rootEdges[edge.EnvironmentRef]++
@@ -971,6 +978,7 @@ type DestinationAdoptionRequest struct {
 	EnvironmentRef migration.OpaqueID              `json:"environmentRef"`
 	Policy         migration.GuestIdentityPolicy   `json:"policy"`
 	SourceIdentity migration.GuestIdentityEvidence `json:"sourceIdentity"`
+	MountBindings  []migration.DiskMountBinding    `json:"mountBindings,omitempty"`
 	Helper         migration.HelperBinding         `json:"helper"`
 }
 
@@ -991,6 +999,23 @@ func (request DestinationAdoptionRequest) Validate() error {
 			request.Policy != migration.GuestIdentityExactRestore) ||
 		request.SourceIdentity.Validate() != nil || request.Helper.Validate() != nil {
 		return fmt.Errorf("%w: destination adoption request", ErrMigrationProviderRequest)
+	}
+	seenSources := make(map[string]struct{}, len(request.MountBindings))
+	seenDestinations := make(map[string]struct{}, len(request.MountBindings))
+	var previous migration.OpaqueID
+	for _, binding := range request.MountBindings {
+		if binding.Validate() != nil || (previous != "" && previous >= binding.DiskID) {
+			return fmt.Errorf("%w: destination adoption mount binding", ErrMigrationProviderRequest)
+		}
+		if _, duplicate := seenSources[binding.SourceGuestPath]; duplicate {
+			return fmt.Errorf("%w: duplicate destination adoption source mount", ErrMigrationProviderRequest)
+		}
+		if _, duplicate := seenDestinations[binding.DestinationGuestPath]; duplicate {
+			return fmt.Errorf("%w: duplicate destination adoption target mount", ErrMigrationProviderRequest)
+		}
+		seenSources[binding.SourceGuestPath] = struct{}{}
+		seenDestinations[binding.DestinationGuestPath] = struct{}{}
+		previous = binding.DiskID
 	}
 	return nil
 }
@@ -1018,6 +1043,7 @@ func (adoption DestinationAdoption) MatchesRequest(
 		adoption.Request.EnvironmentRef != request.EnvironmentRef ||
 		adoption.Request.Policy != request.Policy ||
 		!adoption.Request.SourceIdentity.Equal(request.SourceIdentity) ||
+		!slices.Equal(adoption.Request.MountBindings, request.MountBindings) ||
 		adoption.Request.Helper != request.Helper {
 		return fmt.Errorf("%w: destination adoption binding", ErrMigrationProviderResponse)
 	}

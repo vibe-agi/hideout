@@ -111,6 +111,145 @@ func TestExactGuestRestorePreservesIdentityWithoutCallingResetters(t *testing.T)
 	assertDestinationSSHKeyInstalled(t, fixture)
 }
 
+func TestAdoptionRebindsAttachedDiskMountWithoutFormattingAuthority(t *testing.T) {
+	fixture := newAdoptionFixture(t, migration.GuestIdentityExactRestore, 0x42)
+	sourceMount := filepath.Join(fixture.rootPath, "mnt", "lima-source-data")
+	if err := os.MkdirAll(sourceMount, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	binding := migration.DiskMountBinding{
+		DiskID: "disk_attached1", SourceGuestPath: "/mnt/lima-source-data",
+		DestinationGuestPath: "/mnt/lima-disk_destination1", FSType: "ext4",
+	}
+	destinationMount := writeAdoptionMountInventory(t, fixture.rootPath, binding, "ext4")
+	if err := os.WriteFile(
+		filepath.Join(destinationMount, "attached-proof"), []byte("preserved"), 0o600,
+	); err != nil {
+		t.Fatal(err)
+	}
+	fixture.request.MountBindings = []migration.DiskMountBinding{binding}
+	fixture.request.PermittedActions = []string{
+		migration.AdoptionActionPreserveIdentity,
+		migration.AdoptionActionRebindDiskMounts,
+		migration.AdoptionActionInstallSSHKeys,
+	}
+	writeAdoptionRequestFixture(t, fixture.requestPath, fixture.request)
+
+	runner := fixture.runner(errorReader{errors.New("randomness must not be read")})
+	if err := runner.run(); err != nil {
+		t.Fatal(err)
+	}
+	target, err := os.Readlink(sourceMount)
+	if err != nil || target != binding.DestinationGuestPath {
+		t.Fatalf("attached mount alias target=%q err=%v", target, err)
+	}
+	// The production symlink is intentionally guest-absolute. A host-side temp
+	// root cannot follow it without chroot, so assert the exact link above and
+	// independently prove that adoption left the mounted target data intact.
+	if proof, readErr := os.ReadFile(filepath.Join(destinationMount, "attached-proof")); readErr != nil || string(proof) != "preserved" {
+		t.Fatalf("attached mount target data changed: data=%q err=%v", proof, readErr)
+	}
+	receipt, err := readAdoptionReceipt(fixture.receiptPath)
+	if err != nil || receipt.MatchesRequest(fixture.request) != nil ||
+		len(receipt.ActionResults) != 3 ||
+		receipt.ActionResults[1].Action != migration.AdoptionActionRebindDiskMounts {
+		t.Fatalf("attached mount receipt=%+v err=%v", receipt, err)
+	}
+
+	if err := os.Remove(fixture.receiptPath); err != nil {
+		t.Fatal(err)
+	}
+	if err := runner.run(); err != nil {
+		t.Fatalf("idempotent mount rebind failed: %v", err)
+	}
+	target, err = os.Readlink(sourceMount)
+	if err != nil || target != binding.DestinationGuestPath {
+		t.Fatalf("replayed attached mount alias target=%q err=%v", target, err)
+	}
+}
+
+func TestAdoptionRefusesToHideFilesUnderAttachedDiskMountAlias(t *testing.T) {
+	fixture := newAdoptionFixture(t, migration.GuestIdentityExactRestore, 0x46)
+	sourceMount := filepath.Join(fixture.rootPath, "mnt", "lima-source-data")
+	if err := os.MkdirAll(sourceMount, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(sourceMount, "hidden.txt"), []byte("retain"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	fixture.request.MountBindings = []migration.DiskMountBinding{{
+		DiskID: "disk_attached1", SourceGuestPath: "/mnt/lima-source-data",
+		DestinationGuestPath: "/mnt/lima-disk_destination1", FSType: "ext4",
+	}}
+	writeAdoptionMountInventory(t, fixture.rootPath, fixture.request.MountBindings[0], "ext4")
+	fixture.request.PermittedActions = []string{
+		migration.AdoptionActionPreserveIdentity,
+		migration.AdoptionActionRebindDiskMounts,
+		migration.AdoptionActionInstallSSHKeys,
+	}
+	writeAdoptionRequestFixture(t, fixture.requestPath, fixture.request)
+	err := fixture.runner(errorReader{errors.New("randomness must not be read")}).run()
+	if err == nil || err.Error() != "migration.adoption.disk_mount_rebind_failed" {
+		t.Fatalf("non-empty source mount error=%v", err)
+	}
+	if data, readErr := os.ReadFile(filepath.Join(sourceMount, "hidden.txt")); readErr != nil || string(data) != "retain" {
+		t.Fatalf("non-empty source mount changed: data=%q err=%v", data, readErr)
+	}
+}
+
+func TestAdoptionRefusesUnprovedAttachedDiskMount(t *testing.T) {
+	fixture := newAdoptionFixture(t, migration.GuestIdentityExactRestore, 0x47)
+	sourceMount := filepath.Join(fixture.rootPath, "mnt", "lima-source-data")
+	if err := os.MkdirAll(sourceMount, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	binding := migration.DiskMountBinding{
+		DiskID: "disk_attached1", SourceGuestPath: "/mnt/lima-source-data",
+		DestinationGuestPath: "/mnt/lima-disk_destination1", FSType: "ext4",
+	}
+	writeAdoptionMountInventory(t, fixture.rootPath, binding, "xfs")
+	fixture.request.MountBindings = []migration.DiskMountBinding{binding}
+	fixture.request.PermittedActions = []string{
+		migration.AdoptionActionPreserveIdentity,
+		migration.AdoptionActionRebindDiskMounts,
+		migration.AdoptionActionInstallSSHKeys,
+	}
+	writeAdoptionRequestFixture(t, fixture.requestPath, fixture.request)
+	err := fixture.runner(errorReader{errors.New("randomness must not be read")}).run()
+	if err == nil || err.Error() != "migration.adoption.disk_mount_rebind_failed" {
+		t.Fatalf("unproved attached mount error=%v", err)
+	}
+	if info, statErr := os.Lstat(sourceMount); statErr != nil || !info.IsDir() {
+		t.Fatalf("unproved attached mount changed source path: info=%v err=%v", info, statErr)
+	}
+}
+
+func writeAdoptionMountInventory(
+	t *testing.T,
+	root string,
+	binding migration.DiskMountBinding,
+	observedFSType string,
+) string {
+	t.Helper()
+	destination := filepath.Join(root, strings.TrimPrefix(binding.DestinationGuestPath, "/"))
+	if err := os.MkdirAll(destination, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	mountInfoDir := filepath.Join(root, "proc", fmt.Sprintf("%d", os.Getpid()))
+	if err := os.MkdirAll(mountInfoDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	mountInfo := fmt.Sprintf(
+		"42 1 8:1 / %s rw,relatime - %s /dev/vdb1 rw\n",
+		binding.DestinationGuestPath,
+		observedFSType,
+	)
+	if err := os.WriteFile(filepath.Join(mountInfoDir, "mountinfo"), []byte(mountInfo), 0o444); err != nil {
+		t.Fatal(err)
+	}
+	return destination
+}
+
 func TestIdentityObservationReportsEvidenceWithoutMutatingGuest(t *testing.T) {
 	fixture := newAdoptionFixture(t, migration.GuestIdentityExactRestore, 0x43)
 	request := migration.IdentityObservationRequest{

@@ -417,6 +417,16 @@ func migrationImportOperationFixture() MigrationOperation {
 				},
 			},
 		},
+		ExpectedDiskEdges: []migration.DiskEdge{
+			{
+				EnvironmentRef: "source_environment1", DiskID: "disk_source0001",
+				Attachment: migration.DiskRoleRoot, GuestPath: "/",
+			},
+			{
+				EnvironmentRef: "source_environment2", DiskID: "disk_source0002",
+				Attachment: migration.DiskRoleRoot, GuestPath: "/",
+			},
+		},
 		IdentityActions: []migration.IdentityAction{
 			{SourceRef: "source_environment1", GuestPolicy: migration.GuestIdentitySafeClone, FreshControlIdentity: true, FreshBackendIdentity: true},
 			{SourceRef: "source_environment2", GuestPolicy: migration.GuestIdentityExactRestore, FreshControlIdentity: true, FreshBackendIdentity: true},
@@ -502,6 +512,7 @@ func migrationExportOperationFixture() MigrationOperation {
 	operation.AdoptionHelper = nil
 	operation.ImportObjects = nil
 	operation.ExpectedDisks = nil
+	operation.ExpectedDiskEdges = nil
 	operation.DestinationIdentities = nil
 	operation.DestinationDiskIdentities = nil
 	operation.DestinationAdoption = nil

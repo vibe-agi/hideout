@@ -84,6 +84,16 @@ func TestStageMigrationDestinationMaterializesBoundConfigAndResumesByComponent(t
 			stagedConfig.Images[0].Digest != "" {
 			t.Fatalf("normalized config has unsafe root-image fallback: %+v", stagedConfig.Images)
 		}
+		if len(stagedConfig.AdditionalDisks) != 1 ||
+			stagedConfig.AdditionalDisks[0].Format == nil ||
+			*stagedConfig.AdditionalDisks[0].Format ||
+			stagedConfig.AdditionalDisks[0].FSType != "ext4" ||
+			!strings.HasPrefix(stagedConfig.AdditionalDisks[0].Name, "disk_") {
+			t.Fatalf(
+				"normalized config could reformat or mis-mount attached disk: %+v",
+				stagedConfig.AdditionalDisks,
+			)
+		}
 		var normalized migrationNormalizedStageConfig
 		if err := readMigrationJSONStrict(
 			filepath.Join(stageDir, "instances", string(object.BackendIdentity), "normalized.json"),
@@ -96,6 +106,11 @@ func TestStageMigrationDestinationMaterializesBoundConfigAndResumesByComponent(t
 			normalized.RuntimeImageDigest != object.ImageProvenance.Digest ||
 			normalized.RootDiskLogicalBytes != 8192 {
 			t.Fatalf("normalized config lost runtime image provenance: %+v", normalized)
+		}
+		if len(normalized.AttachedDiskMounts) != 1 ||
+			normalized.AttachedDiskMounts[0].SourceGuestPath != "/mnt/lima-shared-data" ||
+			normalized.AttachedDiskMounts[0].FSType != "ext4" {
+			t.Fatalf("normalized config lost attached-disk mount fidelity: %+v", normalized)
 		}
 	}
 
@@ -638,9 +653,9 @@ func migrationDestinationStageFixture(
 		},
 		Disks: disks,
 		Edges: []migration.DiskEdge{
-			{EnvironmentRef: "environment_alpha1", DiskID: "disk_attached1", Attachment: migration.DiskRoleAttached, GuestPath: "/mnt/shared"},
+			{EnvironmentRef: "environment_alpha1", DiskID: "disk_attached1", Attachment: migration.DiskRoleAttached, GuestPath: "/mnt/lima-shared-data", FSType: "ext4"},
 			{EnvironmentRef: "environment_alpha1", DiskID: "disk_rootalpha1", Attachment: migration.DiskRoleRoot, GuestPath: "/"},
-			{EnvironmentRef: "environment_bravo1", DiskID: "disk_attached1", Attachment: migration.DiskRoleAttached, GuestPath: "/mnt/shared"},
+			{EnvironmentRef: "environment_bravo1", DiskID: "disk_attached1", Attachment: migration.DiskRoleAttached, GuestPath: "/mnt/lima-shared-data", FSType: "ext4"},
 			{EnvironmentRef: "environment_bravo1", DiskID: "disk_rootbravo1", Attachment: migration.DiskRoleRoot, GuestPath: "/"},
 		},
 		Components: components,

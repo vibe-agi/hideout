@@ -364,13 +364,16 @@ func validateManifestDiskGraph(
 		disk, diskExists := disks[edge.DiskID]
 		key := string(edge.EnvironmentRef) + "\x00" + string(edge.DiskID)
 		if !environmentExists || !diskExists || key <= previous ||
-			edge.Attachment != disk.Role || !validManifestGuestPath(edge.GuestPath) {
+			edge.Attachment != disk.Role || !validManifestGuestPath(edge.GuestPath) ||
+			(disk.Role == DiskRoleAttached &&
+				(!diskFSTypePattern.MatchString(edge.FSType) || edge.FSType == "swap")) {
 			return corruptManifest("disk attachment graph is invalid")
 		}
 		if _, exists := environment.diskRefs[edge.DiskID]; !exists {
 			return corruptManifest("disk attachment is absent from its environment")
 		}
-		if disk.Role == DiskRoleRoot && (edge.GuestPath != "/" || edge.ReadOnly) {
+		if disk.Role == DiskRoleRoot &&
+			(edge.GuestPath != "/" || edge.FSType != "" || edge.ReadOnly) {
 			return corruptManifest("root disk attachment is invalid")
 		}
 		if _, exists := edgeSet[key]; exists {

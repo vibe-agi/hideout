@@ -31,6 +31,11 @@ environment:
 - the referenced profile's application state under `home/`, `config/`,
   `data/`, and `browser/`.
 
+For each attached disk, the authenticated graph also preserves its supported
+filesystem type and original Lima guest mount path. A fresh destination disk
+handle is an implementation identity; it must not rename the path applications
+inside the guest use.
+
 A shared disk closes over all of its consumers; Hideout refuses a partial or
 running consumer set. Profile application state is captured as a bounded,
 deterministically ordered component and is named separately in inventory and
@@ -183,6 +188,16 @@ Guest identity is selected independently for each environment and each import:
 Import transforms only staged destination disks. The encrypted source bundle is
 never modified or consumed.
 
+For imported attached disks, Hideout writes an explicit Lima object entry with
+`format: false` and the authenticated filesystem type. It never relies on
+Lima's omitted-field default, which may initialize a disk whose label does not
+match its fresh destination handle. During the isolated adoption boot, Hideout
+first verifies the exact destination mount point and filesystem type against the
+guest kernel mount inventory, then binds the original guest mount path to that
+fresh destination mount and receipts the exact mapping. An absent, occupied,
+conflicting, unsupported, or unproved path fails before activation rather than
+hiding files or guessing.
+
 ## Encryption and Local Trust
 
 Bundle records use Argon2id-derived key wrapping, HKDF-separated keys, and
@@ -215,9 +230,9 @@ Resume authenticates the retained checkpoint and discards an unverified torn
 tail. A partial export is never importable. Import stages private backend
 objects and exact-owner profile application state, then publishes the fresh
 profile and environment only after profile-state digest, disk, identity,
-configuration, secret, and provider verification. Rollback removes only the
-operation-bound stage. Recovery advertises only the action valid for the current
-operation revision.
+configuration, attached-disk non-format/mount binding, secret, and provider
+verification. Rollback removes only the operation-bound stage. Recovery
+advertises only the action valid for the current operation revision.
 
 ## Release Evidence and Non-claims
 
@@ -251,7 +266,8 @@ profile `home`/`config`/`data`/`browser` sentinels, explicit cache/generated-sta
 negative controls, one unchanged encrypted bundle, three Safe Clone imports,
 one Exact Guest Restore import, materialization/adoption daemon crash recovery,
 fail-closed missing-executor compatibility, terminal receipts, identity
-separation, host-workspace exclusion, and source immutability. After export it
+separation, exact original attached-disk path, explicit `format: false` plus
+filesystem type, host-workspace exclusion, and source immutability. After export it
 retains a candidate-bound, secret-authenticated checkpoint so a post-export
 failure can resume without repeating source setup and export; invalid or stale
 checkpoints fail closed. Its current physical-host limitation is recorded in

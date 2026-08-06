@@ -2,6 +2,7 @@ package migration
 
 import (
 	"fmt"
+	"path"
 	"reflect"
 	"regexp"
 	"strings"
@@ -29,6 +30,7 @@ const (
 	AdoptionActionResetMachineID   = "reset-machine-id"
 	AdoptionActionResetSSHHostKeys = "reset-ssh-host-keys"
 	AdoptionActionPreserveIdentity = "preserve-guest-identity"
+	AdoptionActionRebindDiskMounts = "rebind-attached-disk-mounts"
 	AdoptionActionInstallSSHKeys   = "install-destination-ssh-keys"
 	AdoptionActionStatusCompleted  = "completed"
 	AdoptionActionStatusFailed     = "failed"
@@ -51,6 +53,7 @@ var (
 		`^(?:ssh-ed25519|ecdsa-sha2-nistp256|ssh-rsa) [A-Za-z0-9+/=]+(?: [^\r\n]{0,255})?$`,
 	)
 	adoptionCodePattern = regexp.MustCompile(`^migration\.[a-z0-9._-]{1,119}$`)
+	diskFSTypePattern   = regexp.MustCompile(`^[a-z0-9][a-z0-9._+-]{0,63}$`)
 )
 
 type BundleID string
@@ -302,6 +305,7 @@ type DiskEdge struct {
 	DiskID         OpaqueID `json:"diskId"`
 	Attachment     DiskRole `json:"attachment"`
 	GuestPath      string   `json:"guestPath"`
+	FSType         string   `json:"fsType,omitempty"`
 	ReadOnly       bool     `json:"readOnly"`
 }
 
@@ -667,8 +671,30 @@ type AdoptionRequest struct {
 	SourceIdentity     GuestIdentityEvidence `json:"sourceIdentity"`
 	DestinationSSHUser string                `json:"destinationSSHUser"`
 	DestinationSSHKeys []string              `json:"destinationSSHKeys"`
+	MountBindings      []DiskMountBinding    `json:"mountBindings,omitempty"`
 	PermittedActions   []string              `json:"permittedActions"`
 	Helper             HelperBinding         `json:"helper"`
+}
+
+// DiskMountBinding preserves the source guest path while assigning a fresh,
+// destination-local backend disk identity. The filesystem type is carried as
+// authenticated data so the destination never guesses or reformats imported
+// bytes merely because Lima's generated disk name changed.
+type DiskMountBinding struct {
+	DiskID               OpaqueID `json:"diskId"`
+	SourceGuestPath      string   `json:"sourceGuestPath"`
+	DestinationGuestPath string   `json:"destinationGuestPath"`
+	FSType               string   `json:"fsType"`
+}
+
+func (binding DiskMountBinding) Validate() error {
+	if _, err := ParseOpaqueID(string(binding.DiskID)); err != nil ||
+		!validAttachedDiskGuestPath(binding.SourceGuestPath) ||
+		!validAttachedDiskGuestPath(binding.DestinationGuestPath) ||
+		!diskFSTypePattern.MatchString(binding.FSType) || binding.FSType == "swap" {
+		return fmt.Errorf("%w: attached disk mount binding is invalid", ErrInvalidBundle)
+	}
+	return nil
 }
 
 type HelperBinding struct {
@@ -685,6 +711,7 @@ type AdoptionReceipt struct {
 	ReceiptNonce     OpaqueID               `json:"receiptNonce"`
 	Policy           GuestIdentityPolicy    `json:"policy"`
 	Helper           HelperBinding          `json:"helper"`
+	MountBindings    []DiskMountBinding     `json:"mountBindings,omitempty"`
 	ActionResults    []AdoptionActionResult `json:"actionResults"`
 	PostIdentity     *GuestIdentityEvidence `json:"postIdentity,omitempty"`
 	Status           string                 `json:"status"`
@@ -850,7 +877,10 @@ func (request AdoptionRequest) Validate() error {
 		}
 		seenKeys[key] = struct{}{}
 	}
-	expected := adoptionActionsForPolicy(request.Policy)
+	if err := validateDiskMountBindings(request.MountBindings); err != nil {
+		return err
+	}
+	expected := adoptionActionsForPolicy(request.Policy, len(request.MountBindings) != 0)
 	if !reflect.DeepEqual(request.PermittedActions, expected) {
 		return fmt.Errorf("%w: adoption actions do not match identity policy", ErrInvalidBundle)
 	}
@@ -874,7 +904,10 @@ func (receipt AdoptionReceipt) Validate() error {
 		!validGuestIdentityPolicy(receipt.Policy) || receipt.Helper.Validate() != nil {
 		return fmt.Errorf("%w: adoption receipt binding is invalid", ErrInvalidBundle)
 	}
-	expected := adoptionActionsForPolicy(receipt.Policy)
+	if err := validateDiskMountBindings(receipt.MountBindings); err != nil {
+		return err
+	}
+	expected := adoptionActionsForPolicy(receipt.Policy, len(receipt.MountBindings) != 0)
 	if len(receipt.ActionResults) == 0 || len(receipt.ActionResults) > len(expected) {
 		return fmt.Errorf("%w: adoption action results are invalid", ErrInvalidBundle)
 	}
@@ -926,7 +959,8 @@ func (receipt AdoptionReceipt) MatchesRequest(request AdoptionRequest) error {
 		receipt.EnvironmentRef != request.EnvironmentRef ||
 		receipt.RequestNonce != request.RequestNonce ||
 		receipt.ReceiptNonce != request.ReceiptNonce ||
-		receipt.Policy != request.Policy || receipt.Helper != request.Helper {
+		receipt.Policy != request.Policy || receipt.Helper != request.Helper ||
+		!reflect.DeepEqual(receipt.MountBindings, request.MountBindings) {
 		return fmt.Errorf("%w: adoption receipt does not match request", ErrInvalidBundle)
 	}
 	if receipt.Status != AdoptionReceiptStatusCompleted {
@@ -953,16 +987,67 @@ func (receipt AdoptionReceipt) MatchesRequest(request AdoptionRequest) error {
 	return nil
 }
 
-func adoptionActionsForPolicy(policy GuestIdentityPolicy) []string {
+func adoptionActionsForPolicy(policy GuestIdentityPolicy, rebindMounts bool) []string {
+	finish := func(actions []string) []string {
+		if rebindMounts {
+			actions = append(actions, AdoptionActionRebindDiskMounts)
+		}
+		return append(actions, AdoptionActionInstallSSHKeys)
+	}
 	if policy == GuestIdentitySafeClone {
-		return []string{
+		return finish([]string{
 			AdoptionActionResetMachineID,
 			AdoptionActionResetSSHHostKeys,
-			AdoptionActionInstallSSHKeys,
-		}
+		})
 	}
 	if policy == GuestIdentityExactRestore {
-		return []string{AdoptionActionPreserveIdentity, AdoptionActionInstallSSHKeys}
+		return finish([]string{AdoptionActionPreserveIdentity})
 	}
 	return nil
+}
+
+func validateDiskMountBindings(bindings []DiskMountBinding) error {
+	if len(bindings) > 256 {
+		return fmt.Errorf("%w: too many attached disk mount bindings", ErrInvalidBundle)
+	}
+	seenSources := make(map[string]struct{}, len(bindings))
+	seenDestinations := make(map[string]struct{}, len(bindings))
+	var previous OpaqueID
+	for _, binding := range bindings {
+		if binding.Validate() != nil || (previous != "" && previous >= binding.DiskID) {
+			return fmt.Errorf("%w: attached disk mount bindings are invalid", ErrInvalidBundle)
+		}
+		if _, exists := seenSources[binding.SourceGuestPath]; exists {
+			return fmt.Errorf("%w: attached disk source mount is duplicated", ErrInvalidBundle)
+		}
+		if _, exists := seenDestinations[binding.DestinationGuestPath]; exists {
+			return fmt.Errorf("%w: attached disk destination mount is duplicated", ErrInvalidBundle)
+		}
+		seenSources[binding.SourceGuestPath] = struct{}{}
+		seenDestinations[binding.DestinationGuestPath] = struct{}{}
+		previous = binding.DiskID
+	}
+	return nil
+}
+
+func validAttachedDiskGuestPath(value string) bool {
+	if value == "" || len(value) > 256 || !path.IsAbs(value) ||
+		path.Clean(value) != value || path.Dir(value) != "/mnt" ||
+		!strings.HasPrefix(path.Base(value), "lima-") {
+		return false
+	}
+	name := strings.TrimPrefix(path.Base(value), "lima-")
+	if name == "" || len(name) > 128 || name[0] == '_' {
+		return false
+	}
+	for _, character := range name {
+		if (character >= 'a' && character <= 'z') ||
+			(character >= 'A' && character <= 'Z') ||
+			(character >= '0' && character <= '9') ||
+			character == '.' || character == '_' || character == '-' {
+			continue
+		}
+		return false
+	}
+	return true
 }

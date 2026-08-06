@@ -482,6 +482,7 @@ type DestinationState struct {
 	AuthorityEffective   bool
 	Staged               bool
 	ReceiptValid         bool
+	DiskFidelityProved   bool
 	Runnable             bool
 	Decision             AdoptionDecision
 	StageEffects         uint8
@@ -701,8 +702,15 @@ func (state AdoptionState) Validate() error {
 		}
 		if adoptionIdentityPhase(destination.Phase) &&
 			(destination.GuestID == "" || !destination.ReceiptValid ||
-				destination.AdoptionEffects != 1) {
-			return invariantError("destination %q lacks proved adoption identity", id)
+				!destination.DiskFidelityProved || destination.AdoptionEffects != 1) {
+			return invariantError(
+				"destination %q lacks proved adoption identity or disk fidelity", id,
+			)
+		}
+		if destination.DiskFidelityProved &&
+			!adoptionIdentityPhase(destination.Phase) &&
+			destination.Phase != AdoptionPhaseRollingBack {
+			return invariantError("destination %q retained disk proof outside adoption", id)
 		}
 		if destination.Staged && destination.StageEffects != 1 {
 			return invariantError("destination %q is staged without one stage effect", id)
@@ -723,11 +731,12 @@ func (state AdoptionState) Validate() error {
 		}
 		if destination.Phase == AdoptionPhaseRolledBack &&
 			(destination.Staged || destination.ReceiptValid || destination.Runnable ||
-				destination.GuestID != "" || destination.AuthorityEffective) {
+				destination.DiskFidelityProved || destination.GuestID != "" ||
+				destination.AuthorityEffective) {
 			return invariantError("destination %q rollback retained active state", id)
 		}
 		if !state.BundleValid &&
-			(destination.Staged || destination.Runnable ||
+			(destination.Staged || destination.DiskFidelityProved || destination.Runnable ||
 				(destination.Phase != AdoptionPhaseDraft &&
 					destination.Phase != AdoptionPhaseBlocked)) {
 			return invariantError("invalid bundle produced destination effects")
@@ -907,10 +916,12 @@ func ApplyAdoptionTransition(
 		}
 		destination.Phase = AdoptionPhaseAdopted
 		destination.ReceiptValid = true
+		destination.DiskFidelityProved = true
 		destination.AdoptionEffects++
 	case AdoptionVerifyDestination:
 		if !state.BundleValid || destination.Phase != AdoptionPhaseAdopted ||
-			!destination.Staged || !destination.ReceiptValid {
+			!destination.Staged || !destination.ReceiptValid ||
+			!destination.DiskFidelityProved {
 			return state, adoptionTransitionError(transition, "destination proof is incomplete")
 		}
 		destination.Phase = AdoptionPhaseVerified
@@ -925,7 +936,8 @@ func ApplyAdoptionTransition(
 		destination.CommitEffects++
 	case AdoptionActivate:
 		if !state.BundleValid || destination.Phase != AdoptionPhaseCommitted ||
-			destination.Decision != AdoptionDecisionCommit {
+			destination.Decision != AdoptionDecisionCommit ||
+			!destination.DiskFidelityProved {
 			return state, adoptionTransitionError(transition, "activation is not enabled")
 		}
 		destination.Phase = AdoptionPhaseActive
@@ -952,6 +964,7 @@ func ApplyAdoptionTransition(
 		destination.AuthorityEffective = false
 		destination.Staged = false
 		destination.ReceiptValid = false
+		destination.DiskFidelityProved = false
 		destination.Runnable = false
 	default:
 		return state, adoptionTransitionError(transition, "unknown action")

@@ -171,6 +171,9 @@ func cloneMigrationAdoptionRequest(
 	cloned.PermittedActions = append(
 		[]string(nil), request.PermittedActions...,
 	)
+	cloned.MountBindings = append(
+		[]migration.DiskMountBinding(nil), request.MountBindings...,
+	)
 	cloned.SourceIdentity.SSHHostKeyDigests = append(
 		[]migration.Digest(nil), request.SourceIdentity.SSHHostKeyDigests...,
 	)
@@ -209,6 +212,9 @@ func cloneMigrationAdoptionReceipt(
 	cloned := receipt
 	cloned.ActionResults = append(
 		[]migration.AdoptionActionResult(nil), receipt.ActionResults...,
+	)
+	cloned.MountBindings = append(
+		[]migration.DiskMountBinding(nil), receipt.MountBindings...,
 	)
 	if receipt.PostIdentity != nil {
 		post := *receipt.PostIdentity

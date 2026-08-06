@@ -86,6 +86,15 @@ and cleanup effects are implemented, but TLC does not prove those provider calls
 `scripts/gates/migration.sh` checks the refinement inventory and the exact-package
 `scripts/gates/migration-lima.sh` supplies separate real-backend evidence.
 
+The adoption model also carries one abstract `diskFidelityProved` fact per
+destination. Only a completed, receipt-bound adoption may establish it;
+verification requires it, rollback clears it, and a destination cannot become
+runnable without it. The Go refinement binds that fact to the concrete attached-
+disk contract: authenticated filesystem type, explicit Lima `format: false`,
+fresh destination disk identity, and exact source-to-destination guest mount
+mapping. This prevents “staged bytes exist” from being mistaken for “the first
+boot will preserve and expose those bytes.”
+
 Imported-Lima first-start reconciliation does not add a transition before
 `active`: staging still has no host mounts and is never runnable or visible.
 After the atomic visibility commit, the backend may admit only
@@ -95,6 +104,10 @@ workspace mapping before it starts the stopped instance. This remains within
 Exact root-disk size, fail-closed image sentinel, and authenticated runtime-image
 provenance are concrete provider refinements covered by the closed migration
 test inventory; they are intentionally not abstracted as new TLA+ identities.
+Attached-disk filesystem and guest-path values are likewise concrete data, but
+their validated receipt is abstracted by `diskFidelityProved`; the real-Lima
+gate checks that the source path resolves to the fresh, non-formatting
+destination attachment before accepting data fidelity.
 Likewise, installing the destination Lima control key is an atomic sub-action of
 the already modeled isolated adoption step: the staged guest remains stopped and
 networkless, completion requires the matching action receipt, and no imported
@@ -104,9 +117,10 @@ the receipted host identity or root control key. It therefore preserves
 `StagedStateNeverRuns`, `RunnableIffActive`, and `AuthorityRequiresApproval`
 without adding another abstract state transition.
 
-The state spaces intentionally exclude concrete filesystem paths, file
-contents, secrets, Lima commands, and unbounded production identifiers. Those
-belong in implementation tests and real backend evidence.
+The state spaces intentionally exclude concrete filesystem path strings, file
+contents, secrets, Lima commands, and unbounded production identifiers. They
+model only whether the exact concrete disk contract was proved; the values
+themselves belong in implementation tests and real backend evidence.
 
 ## Running TLC
 
@@ -118,7 +132,7 @@ scripts/gates/formal.sh
 
 The gate reads `formal/inventory.json`, pins TLA+ tools `v1.7.4` by SHA-256,
 runs all 17 configurations across 12 modules and all 27 inventoried Go tests,
-checks the exact set of 140 safety invariants and 28 liveness properties,
+checks the exact set of 142 safety invariants and 28 liveness properties,
 verifies the evidence independently, and writes private digest-bound output
 below `.artifacts/045/formal/`. Java is a development dependency only; it is
 not included in the Hideout package and is not required in a target

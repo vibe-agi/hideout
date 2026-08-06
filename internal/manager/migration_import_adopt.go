@@ -3,6 +3,7 @@ package manager
 import (
 	"context"
 	"errors"
+	"sort"
 
 	"github.com/vibe-agi/hideout/internal/backend"
 	"github.com/vibe-agi/hideout/internal/migration"
@@ -124,6 +125,12 @@ func (service MigrationImportService) AdoptImportDestination(
 			return service.importAdoptionFailure(operation.ID, err)
 		}
 		source := operation.SourceGuestIdentities[index]
+		mountBindings, bindingErr := migrationAdoptionMountBindings(
+			operation, action.SourceRef,
+		)
+		if bindingErr != nil {
+			return service.importAdoptionFailure(operation.ID, bindingErr)
+		}
 		fixed := backend.DestinationAdoptionRequest{
 			Binding: backend.MigrationEffectBinding{
 				OperationID: migration.OpaqueID(operation.ID), EffectID: effect.ID,
@@ -131,7 +138,8 @@ func (service MigrationImportService) AdoptImportDestination(
 			},
 			StageHandle:    operation.DestinationStage.StageHandle,
 			EnvironmentRef: action.SourceRef, Policy: action.GuestPolicy,
-			SourceIdentity: source.Evidence, Helper: *operation.AdoptionHelper,
+			SourceIdentity: source.Evidence, MountBindings: mountBindings,
+			Helper: *operation.AdoptionHelper,
 		}
 		if err := fixed.Validate(); err != nil {
 			return service.importAdoptionFailure(operation.ID, err)
@@ -200,6 +208,43 @@ func (service MigrationImportService) AdoptImportDestination(
 		return MigrationOperation{}, nil, err
 	}
 	return operation, responses, nil
+}
+
+func migrationAdoptionMountBindings(
+	operation MigrationOperation,
+	environmentRef migration.OpaqueID,
+) ([]migration.DiskMountBinding, error) {
+	identities := make(
+		map[migration.OpaqueID]MigrationDestinationDiskIdentity,
+		len(operation.DestinationDiskIdentities),
+	)
+	for _, identity := range operation.DestinationDiskIdentities {
+		identities[identity.DiskID] = identity
+	}
+	bindings := make([]migration.DiskMountBinding, 0)
+	for _, edge := range operation.ExpectedDiskEdges {
+		if edge.EnvironmentRef != environmentRef ||
+			edge.Attachment != migration.DiskRoleAttached {
+			continue
+		}
+		identity, exists := identities[edge.DiskID]
+		if !exists || identity.Role != migration.DiskRoleAttached {
+			return nil, ErrMigrationOperationInvalid
+		}
+		binding := migration.DiskMountBinding{
+			DiskID: edge.DiskID, SourceGuestPath: edge.GuestPath,
+			DestinationGuestPath: "/mnt/lima-" + string(identity.BackendIdentity),
+			FSType:               edge.FSType,
+		}
+		if binding.Validate() != nil {
+			return nil, ErrMigrationOperationInvalid
+		}
+		bindings = append(bindings, binding)
+	}
+	sort.Slice(bindings, func(left, right int) bool {
+		return bindings[left].DiskID < bindings[right].DiskID
+	})
+	return bindings, nil
 }
 
 func (service MigrationImportService) importAdoptionFailure(

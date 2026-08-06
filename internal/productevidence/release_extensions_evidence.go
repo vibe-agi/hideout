@@ -264,7 +264,7 @@ func validateReleaseClosureArtifact(data []byte, expectedCommit string, expected
 		return err
 	}
 	if evidence.Formal.ConfigurationCount != 17 || evidence.Formal.ModuleCount != 12 ||
-		evidence.Formal.InvariantCount != 140 || evidence.Formal.PropertyCount != 28 ||
+		evidence.Formal.InvariantCount != 142 || evidence.Formal.PropertyCount != 28 ||
 		evidence.Formal.GoTestCount != 27 {
 		return errors.New("release closure formal inventory counts are invalid")
 	}

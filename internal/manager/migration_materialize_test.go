@@ -170,7 +170,8 @@ func TestMigrationDestinationValidationRejectsDiskStreamOrderMismatch(t *testing
 	manifest.DiskEdges = []migration.DiskEdge{
 		{
 			EnvironmentRef: "environment_source1", DiskID: "disk_attached0001",
-			Attachment: migration.DiskRoleAttached, GuestPath: "/mnt/data",
+			Attachment: migration.DiskRoleAttached,
+			GuestPath:  "/mnt/lima-source-attached", FSType: "ext4",
 		},
 		{
 			EnvironmentRef: "environment_source1", DiskID: "disk_root0001",
