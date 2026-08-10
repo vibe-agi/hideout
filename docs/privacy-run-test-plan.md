@@ -2288,7 +2288,7 @@ recovery claim in `docs/release/045-claim-matrix.md` needs both a positive
 judge and a retained negative fixture that makes that judge fail.
 
 The formal lane reads `formal/inventory.json` and must run exactly 17
-configurations across 12 modules, all 142 inventoried safety invariants, all 28
+configurations across 12 modules, all 150 inventoried safety invariants, all 28
 liveness properties, and all 27 named Go production-refinement/crash tests.
 The independent verifier rejects a missing result, counterexample, incomplete
 pass set, changed source/log digest, stale inventory, worker mismatch, or

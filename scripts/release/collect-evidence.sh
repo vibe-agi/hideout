@@ -2177,7 +2177,7 @@ jq -e '
   .candidateAcceptance == false and
   .inventory.configurationCount == 17 and
   .inventory.moduleCount == 12 and
-  .inventory.invariantCount == 142 and
+  .inventory.invariantCount == 150 and
   .inventory.propertyCount == 28 and
   .inventory.goTestCount == 27 and
   all(.configurations[]; .result == "passed") and

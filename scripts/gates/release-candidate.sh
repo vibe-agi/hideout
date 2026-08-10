@@ -28,7 +28,8 @@ usage() {
     "aggregate in diagnostic-cost order. A failing lane writes private digest-bound" \
     "evidence and stops before later work; a passing run executes all ten lanes." \
     "The run records its start/reuse decision and a measured post-run review." \
-    "Use --preflight to validate that review protocol without running a lane." \
+    "Use --preflight to validate the review protocol and every cheap" \
+    "release-blocker preflight without running generated/unit/race/fuzz lanes." \
     "This command never publishes or accepts an exact release candidate."
 }
 
@@ -633,16 +634,6 @@ lane_runner_self_test() {
 
 lane_runner_self_test
 
-if [ "$preflight_only" -eq 1 ]; then
-  gate_stage="preflight-complete"
-  write_gate_run_review passed "" ""
-  gate_completed=1
-  printf \
-    'release-candidate-local: preflight=passed plan=%s review=%s\n' \
-    "$run_dir/run-plan.json" "$run_dir/run-review.json"
-  exit 0
-fi
-
 unit_lane() {
   go test -json -failfast -p 4 -count=1 ./...
 }
@@ -1237,6 +1228,20 @@ EOF
   scripts/gates/formal.sh --preflight --out "$run_dir/formal-preflight"
   printf 'no required integration blocker remains\n'
 }
+
+if [ "$preflight_only" -eq 1 ]; then
+  gate_stage="release-blocker-preflight"
+  gate_failure_layer="preflight"
+  gate_failure_reason="release-blocker preflight failed"
+  release_blockers_lane
+  gate_stage="preflight-complete"
+  write_gate_run_review passed "" ""
+  gate_completed=1
+  printf \
+    'release-candidate-local: preflight=passed plan=%s review=%s\n' \
+    "$run_dir/run-plan.json" "$run_dir/run-review.json"
+  exit 0
+fi
 
 run_lane schema schema_lane
 run_lane static static_lane

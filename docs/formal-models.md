@@ -143,7 +143,7 @@ scripts/gates/formal.sh
 
 The gate reads `formal/inventory.json`, pins TLA+ tools `v1.7.4` by SHA-256,
 runs all 17 configurations across 12 modules and all 27 inventoried Go tests,
-checks the exact set of 142 safety invariants and 28 liveness properties,
+checks the exact set of 150 safety invariants and 28 liveness properties,
 verifies the evidence independently, and writes private digest-bound output
 below `.artifacts/045/formal/`. Java is a development dependency only; it is
 not included in the Hideout package and is not required in a target
