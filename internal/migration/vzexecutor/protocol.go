@@ -23,22 +23,41 @@ const (
 	GuestHelperFilename               = "hideout-migration-adopt"
 	StopReasonReceiptAndGuestShutdown = "receipt-and-guest-shutdown"
 
-	minimumMemoryBytes = 512 << 20
-	maximumMemoryBytes = 8 << 30
-	maximumCPUCount    = 64
+	minimumMemoryBytes   = 512 << 20
+	maximumMemoryBytes   = 8 << 30
+	maximumCPUCount      = 64
+	maximumAttachedDisks = 256
 )
 
-// ExecutionRequest contains paths and resource bounds only. It cannot carry a
-// command, script, environment variable, network option, or imported runtime
-// configuration.
+// AttachedDisk binds one authenticated, operation-owned stage object to the
+// exact guest mount which the fixed boothook must establish without formatting.
+type AttachedDisk struct {
+	DiskID         migration.OpaqueID `json:"diskId"`
+	RelativePath   string             `json:"relativePath"`
+	GuestMountPath string             `json:"guestMountPath"`
+	FSType         string             `json:"fsType"`
+}
+
+// ExecutionRequest contains operation-owned paths, typed attached-disk mount
+// facts, and resource bounds only. It cannot carry a command, script,
+// environment variable, network option, or imported runtime configuration.
 type ExecutionRequest struct {
 	Schema               string             `json:"schema"`
 	StageDirectory       string             `json:"stageDirectory"`
 	RootDiskRelativePath string             `json:"rootDiskRelativePath"`
+	AttachedDisks        []AttachedDisk     `json:"attachedDisks,omitempty"`
 	ControlRelativePath  string             `json:"controlRelativePath"`
 	ExecutionNonce       migration.OpaqueID `json:"executionNonce"`
 	CPUCount             uint               `json:"cpuCount"`
 	MemoryBytes          uint64             `json:"memoryBytes"`
+}
+
+type AttachedDiskPath struct {
+	DiskID                migration.OpaqueID
+	HostPath              string
+	GuestMountPath        string
+	FSType                string
+	BlockDeviceIdentifier string
 }
 
 type ExecutionPaths struct {
@@ -58,6 +77,7 @@ type ExecutionPaths struct {
 	EFIVariableStore  string
 	MachineIdentifier string
 	SerialLog         string
+	AttachedDisks     []AttachedDiskPath
 }
 
 func (request ExecutionRequest) Validate() error {
@@ -84,7 +104,65 @@ func (request ExecutionRequest) Validate() error {
 		request.MemoryBytes%(1<<20) != 0 {
 		return errors.New("VZ adoption resources are invalid")
 	}
+	if len(request.AttachedDisks) > maximumAttachedDisks {
+		return errors.New("VZ adoption attached disk count is invalid")
+	}
+	seenPaths := make(map[string]struct{}, len(request.AttachedDisks))
+	seenMounts := make(map[string]struct{}, len(request.AttachedDisks))
+	seenIdentifiers := make(map[string]struct{}, len(request.AttachedDisks))
+	var previous migration.OpaqueID
+	for _, disk := range request.AttachedDisks {
+		if err := disk.Validate(); err != nil ||
+			(previous != "" && previous >= disk.DiskID) {
+			return errors.New("VZ adoption attached disks are invalid")
+		}
+		identifier, err := disk.BlockDeviceIdentifier()
+		if err != nil {
+			return err
+		}
+		if _, exists := seenPaths[disk.RelativePath]; exists {
+			return errors.New("VZ adoption attached disk path is duplicated")
+		}
+		if _, exists := seenMounts[disk.GuestMountPath]; exists {
+			return errors.New("VZ adoption attached disk mount is duplicated")
+		}
+		if _, exists := seenIdentifiers[identifier]; exists {
+			return errors.New("VZ adoption attached disk device identifier collided")
+		}
+		seenPaths[disk.RelativePath] = struct{}{}
+		seenMounts[disk.GuestMountPath] = struct{}{}
+		seenIdentifiers[identifier] = struct{}{}
+		previous = disk.DiskID
+	}
 	return nil
+}
+
+func (disk AttachedDisk) Validate() error {
+	parts, ok := exactRelativeParts(disk.RelativePath, 3)
+	if !ok || parts[0] != "disks" || parts[2] != "datadisk" ||
+		!validPathToken(parts[1]) {
+		return errors.New("VZ adoption attached disk path is invalid")
+	}
+	binding := migration.DiskMountBinding{
+		DiskID: disk.DiskID, SourceGuestPath: disk.GuestMountPath,
+		DestinationGuestPath: disk.GuestMountPath, FSType: disk.FSType,
+	}
+	if binding.Validate() != nil ||
+		strings.TrimPrefix(disk.GuestMountPath, "/mnt/lima-") != parts[1] {
+		return errors.New("VZ adoption attached disk mount binding is invalid")
+	}
+	return nil
+}
+
+// BlockDeviceIdentifier returns a stable, bounded identifier selected solely
+// from the authenticated disk identity. VZ exposes it through Linux's
+// /dev/disk/by-id/virtio-* namespace, avoiding attachment-order authority.
+func (disk AttachedDisk) BlockDeviceIdentifier() (string, error) {
+	if err := disk.Validate(); err != nil {
+		return "", err
+	}
+	digest := sha256.Sum256([]byte(disk.DiskID))
+	return "ho" + hex.EncodeToString(digest[:])[:18], nil
 }
 
 func (request ExecutionRequest) Paths() (ExecutionPaths, error) {
@@ -100,6 +178,19 @@ func (request ExecutionRequest) Paths() (ExecutionPaths, error) {
 		HelperDirectory:  filepath.Join(control, "helper"),
 		ReceiptDirectory: filepath.Join(control, "receipt"),
 		RuntimeDirectory: filepath.Join(control, "runtime"),
+		AttachedDisks:    make([]AttachedDiskPath, 0, len(request.AttachedDisks)),
+	}
+	for _, disk := range request.AttachedDisks {
+		identifier, err := disk.BlockDeviceIdentifier()
+		if err != nil {
+			return ExecutionPaths{}, err
+		}
+		paths.AttachedDisks = append(paths.AttachedDisks, AttachedDiskPath{
+			DiskID:         disk.DiskID,
+			HostPath:       filepath.Join(request.StageDirectory, disk.RelativePath),
+			GuestMountPath: disk.GuestMountPath, FSType: disk.FSType,
+			BlockDeviceIdentifier: identifier,
+		})
 	}
 	paths.GuestRequest = filepath.Join(paths.RequestDirectory, "request.json")
 	paths.GuestHelper = filepath.Join(paths.HelperDirectory, GuestHelperFilename)
@@ -119,6 +210,11 @@ func (request ExecutionRequest) Paths() (ExecutionPaths, error) {
 	} {
 		if !pathWithin(request.StageDirectory, path) {
 			return ExecutionPaths{}, errors.New("VZ adoption path escaped its stage")
+		}
+	}
+	for _, disk := range paths.AttachedDisks {
+		if !pathWithin(request.StageDirectory, disk.HostPath) {
+			return ExecutionPaths{}, errors.New("VZ adoption attached disk escaped its stage")
 		}
 	}
 	return paths, nil

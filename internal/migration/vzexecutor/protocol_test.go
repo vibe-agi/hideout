@@ -17,6 +17,12 @@ func TestExecutionRequestDerivesOnlyOperationOwnedPaths(t *testing.T) {
 		ControlRelativePath: filepath.Join(
 			"adoption", "envref_dev1234", "control",
 		),
+		AttachedDisks: []AttachedDisk{{
+			DiskID: "disk_data1234", RelativePath: filepath.Join(
+				"disks", "disk_handle1234", "datadisk",
+			),
+			GuestMountPath: "/mnt/lima-disk_handle1234", FSType: "ext4",
+		}},
 		ExecutionNonce: "nonce_exec1234",
 		CPUCount:       2,
 		MemoryBytes:    1 << 30,
@@ -45,6 +51,13 @@ func TestExecutionRequestDerivesOnlyOperationOwnedPaths(t *testing.T) {
 	) {
 		t.Fatalf("guest request path=%q", got)
 	}
+	if len(paths.AttachedDisks) != 1 ||
+		paths.AttachedDisks[0].HostPath != filepath.Join(
+			stage, "disks", "disk_handle1234", "datadisk",
+		) || paths.AttachedDisks[0].GuestMountPath != "/mnt/lima-disk_handle1234" ||
+		len(paths.AttachedDisks[0].BlockDeviceIdentifier) != 20 {
+		t.Fatalf("attached disk paths=%+v", paths.AttachedDisks)
+	}
 }
 
 func TestExecutionRequestRejectsTraversalAndResourceMutation(t *testing.T) {
@@ -53,6 +66,11 @@ func TestExecutionRequestRejectsTraversalAndResourceMutation(t *testing.T) {
 		RootDiskRelativePath: filepath.Join("instances", "backend_dev1234", "disk"),
 		ControlRelativePath:  filepath.Join("adoption", "envref_dev1234", "control"),
 		ExecutionNonce:       "nonce_exec1234", CPUCount: 2, MemoryBytes: 1 << 30,
+		AttachedDisks: []AttachedDisk{{
+			DiskID:         "disk_data1234",
+			RelativePath:   filepath.Join("disks", "disk_handle1234", "datadisk"),
+			GuestMountPath: "/mnt/lima-disk_handle1234", FSType: "ext4",
+		}},
 	}
 	mutations := map[string]func(*ExecutionRequest){
 		"root traversal": func(request *ExecutionRequest) {
@@ -65,10 +83,33 @@ func TestExecutionRequestRejectsTraversalAndResourceMutation(t *testing.T) {
 		"oversized cpu":  func(request *ExecutionRequest) { request.CPUCount = 65 },
 		"tiny memory":    func(request *ExecutionRequest) { request.MemoryBytes = 128 << 20 },
 		"bad nonce":      func(request *ExecutionRequest) { request.ExecutionNonce = "exec" },
+		"attached traversal": func(request *ExecutionRequest) {
+			request.AttachedDisks[0].RelativePath = filepath.Join("..", "disk", "datadisk")
+		},
+		"attached handle mismatch": func(request *ExecutionRequest) {
+			request.AttachedDisks[0].GuestMountPath = "/mnt/lima-disk_other1234"
+		},
+		"attached swap": func(request *ExecutionRequest) {
+			request.AttachedDisks[0].FSType = "swap"
+		},
+		"attached unsorted": func(request *ExecutionRequest) {
+			request.AttachedDisks = append(request.AttachedDisks, AttachedDisk{
+				DiskID:         "disk_alpha1234",
+				RelativePath:   filepath.Join("disks", "disk_alpha1234", "datadisk"),
+				GuestMountPath: "/mnt/lima-disk_alpha1234", FSType: "ext4",
+			})
+		},
+		"attached duplicate path": func(request *ExecutionRequest) {
+			request.AttachedDisks = append(request.AttachedDisks, AttachedDisk{
+				DiskID: "disk_zulu1234", RelativePath: request.AttachedDisks[0].RelativePath,
+				GuestMountPath: request.AttachedDisks[0].GuestMountPath, FSType: "ext4",
+			})
+		},
 	}
 	for name, mutate := range mutations {
 		t.Run(name, func(t *testing.T) {
 			request := valid
+			request.AttachedDisks = append([]AttachedDisk(nil), valid.AttachedDisks...)
 			mutate(&request)
 			if err := request.Validate(); err == nil {
 				t.Fatalf("mutation accepted: %+v", request)

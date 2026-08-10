@@ -50,6 +50,19 @@ func TestAdoptMigrationDestinationRunsZeroNetworkExecutorAndReplaysEvidence(t *t
 		!result.Stopped || !result.TemporaryAuthorityRemoved || runner.executions != 1 {
 		t.Fatalf("adoption result=%+v executions=%d", result, runner.executions)
 	}
+	if len(runner.executionRequests) != 1 ||
+		len(runner.executionRequests[0].AttachedDisks) != 1 {
+		t.Fatalf("adoption execution requests=%+v", runner.executionRequests)
+	}
+	executionDisk := runner.executionRequests[0].AttachedDisks[0]
+	binding := request.MountBindings[0]
+	handle := strings.TrimPrefix(binding.DestinationGuestPath, "/mnt/lima-")
+	if executionDisk.DiskID != binding.DiskID ||
+		executionDisk.RelativePath != filepath.Join("disks", handle, "datadisk") ||
+		executionDisk.GuestMountPath != binding.DestinationGuestPath ||
+		executionDisk.FSType != binding.FSType {
+		t.Fatalf("attached disk execution=%+v binding=%+v", executionDisk, binding)
+	}
 	stageDir := filepath.Join(
 		fixture.home, "_hideout-migration", "stages", string(stage.StageHandle),
 	)
@@ -112,6 +125,61 @@ func TestAdoptMigrationDestinationRejectsExecutorNetworkMutationWithoutEvidence(
 		stageDir, migrationAdoptionEvidenceRelativePath(request.EnvironmentRef),
 	)); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("network-enabled adoption wrote evidence: %v", err)
+	}
+}
+
+func TestAdoptMigrationDestinationPreservesBoundGuestFailureWithoutEvidence(t *testing.T) {
+	fixture := newMigrationSourceFixture(t, []migrationSourceInstanceFixture{{
+		name: "hideout-source", environmentRef: "environment_source1", status: "Stopped",
+	}})
+	stageRequest, _, _ := migrationDestinationStageFixture(t, fixture, "guestfail")
+	stageRequest.Binding.OperationID = "op_migrationguestfail1"
+	stage, err := fixture.provider.StageMigrationDestination(context.Background(), stageRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	executor := migrationVZAdoptionExecutorFixture(t, "executor-v1")
+	runner := &migrationAdoptionRunner{
+		version:          "limactl version 2.2.0\n",
+		guestFailureCode: "migration.adoption.disk_mount_rebind_failed",
+	}
+	fixture.provider.Runner = runner
+	fixture.provider.Migration.AdoptionExecutorPath = executor
+	request := migrationDestinationAdoptionFixture(
+		t, fixture.provider, stageRequest, stage, migration.GuestIdentitySafeClone,
+	)
+
+	for attempt := 1; attempt <= 2; attempt++ {
+		_, err = fixture.provider.AdoptMigrationDestination(context.Background(), request)
+		var providerErr *backend.MigrationProviderError
+		if !errors.As(err, &providerErr) ||
+			providerErr.Code != "migration.provider.adoption_guest_failed" ||
+			!providerErr.RecoveryRequired || providerErr.Cause == nil ||
+			providerErr.Cause.Error() != runner.guestFailureCode {
+			t.Fatalf("attempt %d guest failure=%v provider=%+v", attempt, err, providerErr)
+		}
+	}
+	if runner.executions != 1 {
+		t.Fatalf("durable guest failure repeated boot: executions=%d", runner.executions)
+	}
+	stageDir := filepath.Join(
+		fixture.home, "_hideout-migration", "stages", string(stage.StageHandle),
+	)
+	control := filepath.Join(
+		stageDir, "adoption", string(request.EnvironmentRef), "control",
+	)
+	if info, err := os.Lstat(control); err != nil || !info.IsDir() {
+		t.Fatalf("failed guest control was not retained: %v", err)
+	}
+	if _, err := os.Lstat(filepath.Join(
+		stageDir, migrationAdoptionEvidenceRelativePath(request.EnvironmentRef),
+	)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("failed guest adoption wrote evidence: %v", err)
+	}
+	if _, err := os.Lstat(filepath.Join(
+		fixture.home, string(stageRequest.Objects[0].BackendIdentity),
+	)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("failed guest adoption materialized authority: %v", err)
 	}
 }
 
@@ -227,6 +295,60 @@ func TestAdoptMigrationDestinationExactRestorePreservesReceiptIdentity(t *testin
 	}
 }
 
+func TestMigrationAdoptionExecutionAttachedDisksBindsExactStageObject(t *testing.T) {
+	configuration := migrationStageConfiguration{AttachedDisks: []migrationStageAttachedDisk{{
+		DiskID: "disk_data1234", ObjectHandle: "disk_handle1234",
+		SourceGuestPath: "/mnt/lima-source-data", FSType: "ext4",
+	}}}
+	entries := []migrationStageEntry{{
+		DiskID: "disk_data1234", Role: migration.DiskRoleAttached, Format: "raw",
+		ObjectHandle: "disk_handle1234",
+		RelativePath: filepath.Join("disks", "disk_handle1234", "datadisk"),
+	}}
+	bindings := []migration.DiskMountBinding{{
+		DiskID: "disk_data1234", SourceGuestPath: "/mnt/lima-source-data",
+		DestinationGuestPath: "/mnt/lima-disk_handle1234", FSType: "ext4",
+	}}
+	disks, err := migrationAdoptionExecutionAttachedDisks(configuration, entries, bindings)
+	if err != nil || len(disks) != 1 || disks[0].DiskID != bindings[0].DiskID ||
+		disks[0].RelativePath != entries[0].RelativePath ||
+		disks[0].GuestMountPath != bindings[0].DestinationGuestPath {
+		t.Fatalf("execution disks=%+v error=%v", disks, err)
+	}
+
+	for name, mutate := range map[string]func(
+		*migrationStageConfiguration, []migrationStageEntry, []migration.DiskMountBinding,
+	){
+		"non-raw stage object": func(_ *migrationStageConfiguration, entries []migrationStageEntry, _ []migration.DiskMountBinding) {
+			entries[0].Format = "qcow2"
+		},
+		"stage path substitution": func(_ *migrationStageConfiguration, entries []migrationStageEntry, _ []migration.DiskMountBinding) {
+			entries[0].RelativePath = filepath.Join("instances", "backend_other1234", "disk")
+		},
+		"mount handle substitution": func(_ *migrationStageConfiguration, _ []migrationStageEntry, bindings []migration.DiskMountBinding) {
+			bindings[0].DestinationGuestPath = "/mnt/lima-disk_other1234"
+		},
+		"filesystem substitution": func(_ *migrationStageConfiguration, _ []migrationStageEntry, bindings []migration.DiskMountBinding) {
+			bindings[0].FSType = "xfs"
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			changedConfiguration := configuration
+			changedConfiguration.AttachedDisks = append(
+				[]migrationStageAttachedDisk(nil), configuration.AttachedDisks...,
+			)
+			changedEntries := append([]migrationStageEntry(nil), entries...)
+			changedBindings := append([]migration.DiskMountBinding(nil), bindings...)
+			mutate(&changedConfiguration, changedEntries, changedBindings)
+			if disks, err := migrationAdoptionExecutionAttachedDisks(
+				changedConfiguration, changedEntries, changedBindings,
+			); err == nil || disks != nil {
+				t.Fatalf("mutation accepted disks=%+v", disks)
+			}
+		})
+	}
+}
+
 func migrationDestinationAdoptionFixture(
 	t *testing.T,
 	provider Backend,
@@ -286,6 +408,8 @@ type migrationAdoptionRunner struct {
 	responseNetworkDevices uint8
 	leaveUnexpectedControl bool
 	failBeforeResponse     bool
+	guestFailureCode       string
+	executionRequests      []vzexecutor.ExecutionRequest
 }
 
 func (runner *migrationAdoptionRunner) LookPath(string) (string, error) {
@@ -321,6 +445,7 @@ func (runner *migrationAdoptionRunner) Run(
 	if err := decoder.Decode(&execution); err != nil {
 		return err
 	}
+	runner.executionRequests = append(runner.executionRequests, execution)
 	paths, err := execution.Paths()
 	if err != nil {
 		return err
@@ -370,6 +495,24 @@ func (runner *migrationAdoptionRunner) Run(
 		),
 		ActionResults: actions, PostIdentity: &postIdentity,
 		Status: migration.AdoptionReceiptStatusCompleted, CompletionMarker: true,
+	}
+	if runner.guestFailureCode != "" {
+		failedActions := make([]migration.AdoptionActionResult, 0, len(actions))
+		for _, action := range actions {
+			result := action
+			if action.Action == migration.AdoptionActionRebindDiskMounts {
+				result.Status = migration.AdoptionActionStatusFailed
+				result.Code = runner.guestFailureCode
+				failedActions = append(failedActions, result)
+				break
+			}
+			failedActions = append(failedActions, result)
+		}
+		receipt.ActionResults = failedActions
+		receipt.PostIdentity = nil
+		receipt.Status = migration.AdoptionReceiptStatusFailed
+		receipt.CompletionMarker = false
+		receipt.FailureCode = runner.guestFailureCode
 	}
 	if err := writeMigrationAdoptionJSONFixture(paths.GuestReceipt, receipt, 0o600); err != nil {
 		return err

@@ -127,6 +127,11 @@ func (b Backend) AdoptMigrationDestination(
 			request, controlRelative,
 		)
 		if recoveryErr != nil {
+			var providerErr *backend.MigrationProviderError
+			if errors.As(recoveryErr, &providerErr) &&
+				providerErr.Code == "migration.provider.adoption_guest_failed" {
+				return backend.DestinationAdoption{}, recoveryErr
+			}
 			return backend.DestinationAdoption{}, migrationStageError(
 				"migration.provider.adoption_recovery_required", request.Binding,
 				request.EnvironmentRef, recoveryErr, true,
@@ -153,7 +158,7 @@ func (b Backend) AdoptMigrationDestination(
 	}
 
 	guestRequest, executionRequest, paths, err := prepareMigrationAdoptionControl(
-		ctx, home, stageDir, configuration, rootEntry, request, helper,
+		ctx, home, stageDir, configuration, owner.Entries, rootEntry, request, helper,
 	)
 	if err != nil {
 		return backend.DestinationAdoption{}, migrationStageError(
@@ -178,6 +183,11 @@ func (b Backend) AdoptMigrationDestination(
 		return backend.DestinationAdoption{}, migrationStageError(
 			"migration.provider.adoption_receipt_invalid", request.Binding,
 			request.EnvironmentRef, err, true,
+		)
+	}
+	if receipt.Status == migration.AdoptionReceiptStatusFailed {
+		return backend.DestinationAdoption{}, migrationAdoptionGuestFailure(
+			request, receipt,
 		)
 	}
 	return finalizeMigrationAdoption(
@@ -251,6 +261,7 @@ func prepareMigrationAdoptionControl(
 	ctx context.Context,
 	home, stageDir string,
 	configuration migrationStageConfiguration,
+	entries []migrationStageEntry,
 	rootEntry migrationStageEntry,
 	request backend.DestinationAdoptionRequest,
 	helper helperbin.LinuxMigrationAdoptResolution,
@@ -299,12 +310,19 @@ func prepareMigrationAdoptionControl(
 	if err := guestRequest.Validate(); err != nil {
 		return migration.AdoptionRequest{}, vzexecutor.ExecutionRequest{}, vzexecutor.ExecutionPaths{}, err
 	}
+	attachedDisks, err := migrationAdoptionExecutionAttachedDisks(
+		configuration, entries, request.MountBindings,
+	)
+	if err != nil {
+		return migration.AdoptionRequest{}, vzexecutor.ExecutionRequest{}, vzexecutor.ExecutionPaths{}, err
+	}
 	controlRelative := filepath.Join(
 		"adoption", string(request.EnvironmentRef), "control",
 	)
 	executionRequest := vzexecutor.ExecutionRequest{
 		Schema: vzexecutor.ExecutionRequestSchema, StageDirectory: stageDir,
 		RootDiskRelativePath: rootEntry.RelativePath,
+		AttachedDisks:        attachedDisks,
 		ControlRelativePath:  controlRelative,
 		ExecutionNonce:       executionNonce, CPUCount: 2, MemoryBytes: 1 << 30,
 	}
@@ -457,6 +475,7 @@ func finalizeMigrationAdoption(
 	paths vzexecutor.ExecutionPaths,
 ) (backend.DestinationAdoption, error) {
 	if err := response.Validate(); err != nil || receipt.MatchesRequest(guestRequest) != nil ||
+		receipt.Status != migration.AdoptionReceiptStatusCompleted ||
 		!migrationGuestRequestMatchesDestination(guestRequest, request) ||
 		guestRequest.DestinationSSHUser != configuration.GuestUser {
 		if err == nil {
@@ -587,9 +606,16 @@ func (b Backend) recoverMigrationAdoptionControl(
 			"adoption control lacks a valid stopped executor response",
 		)
 	}
+	attachedDisks, err := migrationAdoptionExecutionAttachedDisks(
+		configuration, owner.Entries, request.MountBindings,
+	)
+	if err != nil {
+		return backend.DestinationAdoption{}, err
+	}
 	execution := vzexecutor.ExecutionRequest{
 		Schema: vzexecutor.ExecutionRequestSchema, StageDirectory: stageDir,
 		RootDiskRelativePath: rootEntry.RelativePath,
+		AttachedDisks:        attachedDisks,
 		ControlRelativePath:  controlRelative, ExecutionNonce: response.ExecutionNonce,
 		CPUCount: 2, MemoryBytes: 1 << 30,
 	}
@@ -609,6 +635,11 @@ func (b Backend) recoverMigrationAdoptionControl(
 	if err != nil || receipt.MatchesRequest(guestRequest) != nil {
 		return backend.DestinationAdoption{}, errors.New(
 			"recoverable adoption receipt is absent or changed",
+		)
+	}
+	if receipt.Status == migration.AdoptionReceiptStatusFailed {
+		return backend.DestinationAdoption{}, migrationAdoptionGuestFailure(
+			request, receipt,
 		)
 	}
 	return finalizeMigrationAdoption(
@@ -649,6 +680,7 @@ func loadMigrationAdoptionEvidenceReplay(
 		!evidence.TemporaryAuthorityRemoved || !evidence.ImportedAuthorityAbsent ||
 		!migrationGuestRequestMatchesDestination(evidence.Request, request) ||
 		evidence.Request.DestinationSSHUser != configuration.GuestUser ||
+		evidence.Receipt.Status != migration.AdoptionReceiptStatusCompleted ||
 		evidence.Receipt.MatchesRequest(evidence.Request) != nil {
 		return backend.DestinationAdoption{}, true, errors.New(
 			"durable adoption evidence binding changed",
@@ -679,6 +711,21 @@ func loadMigrationAdoptionEvidenceReplay(
 	return result, true, nil
 }
 
+func migrationAdoptionGuestFailure(
+	request backend.DestinationAdoptionRequest,
+	receipt migration.AdoptionReceipt,
+) error {
+	cause := errors.New(receipt.FailureCode)
+	if receipt.Status != migration.AdoptionReceiptStatusFailed ||
+		receipt.Validate() != nil || receipt.FailureCode == "" {
+		cause = errors.New("guest adoption failure receipt is invalid")
+	}
+	return migrationStageError(
+		"migration.provider.adoption_guest_failed", request.Binding,
+		request.EnvironmentRef, cause, true,
+	)
+}
+
 func migrationGuestRequestMatchesDestination(
 	guest migration.AdoptionRequest,
 	request backend.DestinationAdoptionRequest,
@@ -706,6 +753,46 @@ func migrationStageAdoptionMountBindings(
 		}
 	}
 	return bindings, nil
+}
+
+func migrationAdoptionExecutionAttachedDisks(
+	configuration migrationStageConfiguration,
+	entries []migrationStageEntry,
+	bindings []migration.DiskMountBinding,
+) ([]vzexecutor.AttachedDisk, error) {
+	if len(configuration.AttachedDisks) != len(bindings) {
+		return nil, errors.New("adoption attached disk execution binding is incomplete")
+	}
+	entriesByDisk := make(map[migration.OpaqueID]migrationStageEntry, len(entries))
+	for _, entry := range entries {
+		if entry.Role != migration.DiskRoleAttached {
+			continue
+		}
+		if _, exists := entriesByDisk[entry.DiskID]; exists {
+			return nil, errors.New("adoption attached disk stage entry is duplicated")
+		}
+		entriesByDisk[entry.DiskID] = entry
+	}
+	disks := make([]vzexecutor.AttachedDisk, len(configuration.AttachedDisks))
+	for index, configured := range configuration.AttachedDisks {
+		binding := bindings[index]
+		entry, exists := entriesByDisk[configured.DiskID]
+		if !exists || binding.DiskID != configured.DiskID ||
+			entry.ObjectHandle != configured.ObjectHandle || entry.Format != "raw" ||
+			binding.SourceGuestPath != configured.SourceGuestPath ||
+			binding.DestinationGuestPath != "/mnt/lima-"+string(configured.ObjectHandle) ||
+			binding.FSType != configured.FSType {
+			return nil, errors.New("adoption attached disk execution binding changed")
+		}
+		disks[index] = vzexecutor.AttachedDisk{
+			DiskID: configured.DiskID, RelativePath: entry.RelativePath,
+			GuestMountPath: binding.DestinationGuestPath, FSType: binding.FSType,
+		}
+		if err := disks[index].Validate(); err != nil {
+			return nil, err
+		}
+	}
+	return disks, nil
 }
 
 func newMigrationAdoptionNonce(prefix string) (migration.OpaqueID, error) {

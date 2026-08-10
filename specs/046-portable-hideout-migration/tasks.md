@@ -428,3 +428,9 @@ Converge: T031 -> T034 -> T035 -> T036 -> T043
 - [x] T133 Update `docs/migration.md`, `docs/STATUS.md`, `docs/threat-model.md`, `docs/privacy-run-design.md`, `docs/privacy-run-test-plan.md`, and the release adversarial report with the profile-state include/exclude, identity-reset, sensitivity, recovery, and gate evidence boundaries per Development Workflow (partial)
 - [x] T134 Preserve attached-disk filesystem type and original Lima guest path, emit explicit `format: false` for every fresh imported disk handle, receipt the isolated-guest mount rebind, require disk-fidelity proof before activation in TLA+/Go refinement, and make the real gate reject broad-path or formatting-default false greens
 - [x] T135 Bind adoption request/receipt and disk-edge JSON Schema acceptance to actual production struct serialization, including destination SSH user, destination-key installation, mount bindings, and mount-dependent action order, so cheap schema validation detects protocol drift before candidate or VM work
+
+## Phase 12: Release-candidate refinement closure
+
+- [x] T136 Hoist migration terminal polling across fresh and authenticated checkpoint-resume paths, and make zero-VM semantic preflight execute completed and recoverable-failure polling before any expensive restore or VM work
+- [x] T137 Bind every authenticated staged attached disk into the zero-network VZ adoption machine with a deterministic block-device identifier and fixed no-format guest mount, replacing the obsolete root-plus-CIDATA-only invariant with stage-to-device-to-mount refinement tests
+- [x] T138 Treat a bound failed guest adoption receipt as a stable terminal provider failure before configuration materialization, control removal, or evidence writing, and replay that durable failure without a second guest boot

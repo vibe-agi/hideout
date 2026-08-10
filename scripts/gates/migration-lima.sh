@@ -311,6 +311,39 @@ wait_operation_phase() {
   done
 }
 
+wait_migration() {
+  local store="$1" operation="$2" kind="$3" status_path="$4"
+  local started now state
+  started="$(date +%s)"
+  while :; do
+    if hideout_for_store "$store" migrate status "$operation" --json \
+      >"$status_path.tmp" 2>"$status_path.err"; then
+      mv "$status_path.tmp" "$status_path"
+      state="$(jq -er '.state' "$status_path")"
+      case "$state" in
+        complete)
+          jq -e --arg operation "$operation" --arg kind "$kind" '
+            .operationId == $operation and
+            .kind == $kind and
+            .state == "complete" and
+            .terminalReceipt != null and
+            .terminalReceipt.terminalState == "complete" and
+            .terminalReceipt.allEffectsSucceeded == true and
+            .terminalReceipt.claimsReleased == true
+          ' "$status_path" >/dev/null || return 1
+          return 0
+          ;;
+        cancelled | rolled-back | failed | recoverable-failure)
+          return 1
+          ;;
+      esac
+    fi
+    now="$(date +%s)"
+    [ $((now - started)) -lt "$timeout_seconds" ] || return 1
+    sleep 1
+  done
+}
+
 migration_destination_profile() {
   local store="$1" environment_id="$2" environment_name="$3"
   local record profile_path profile_name
@@ -1294,6 +1327,26 @@ if [ "$preflight_only" -eq 1 ]; then
   fi
   timeout_seconds="$saved_timeout_seconds"
 
+  migration_wait_fixture="$diagnostic_fixture/migration-wait-status.json"
+  hideout_for_store() {
+    printf '%s\n' \
+      '{"operationId":"op_migration_wait_fixture","kind":"import","state":"complete","terminalReceipt":{"terminalState":"complete","allEffectsSucceeded":true,"claimsReleased":true}}'
+  }
+  if ! wait_migration fixture-store op_migration_wait_fixture import \
+    "$migration_wait_fixture"; then
+    find "$diagnostic_fixture" -depth -delete
+    fail "terminal migration waiter is unavailable to checkpoint resume"
+  fi
+  hideout_for_store() {
+    printf '%s\n' \
+      '{"operationId":"op_migration_wait_fixture","kind":"import","state":"recoverable-failure"}'
+  }
+  if wait_migration fixture-store op_migration_wait_fixture import \
+    "$migration_wait_fixture"; then
+    find "$diagnostic_fixture" -depth -delete
+    fail "terminal migration waiter accepted a recoverable failure"
+  fi
+
   authority_fixture="$diagnostic_fixture/migration-inspect.json"
   authority_fixture_source="env_source_fixture1"
   authority_fixture_network="authority_network_fixture1"
@@ -1427,7 +1480,7 @@ if [ "$preflight_only" -eq 1 ]; then
   scratch=""
   run_dir=""
   source_store=""
-  printf 'migration-lima: preflight=passed semantic-fixtures=52\n'
+  printf 'migration-lima: preflight=passed semantic-fixtures=54\n'
   exit 0
 fi
 
@@ -2057,39 +2110,6 @@ export_operation="$(
     tail -1
 )"
 [ -n "$export_operation" ] || fail "export operation identity is missing"
-
-wait_migration() {
-  local store="$1" operation="$2" kind="$3" status_path="$4"
-  local started now state
-  started="$(date +%s)"
-  while :; do
-    if hideout_for_store "$store" migrate status "$operation" --json \
-      >"$status_path.tmp" 2>"$status_path.err"; then
-      mv "$status_path.tmp" "$status_path"
-      state="$(jq -er '.state' "$status_path")"
-      case "$state" in
-        complete)
-          jq -e --arg operation "$operation" --arg kind "$kind" '
-            .operationId == $operation and
-            .kind == $kind and
-            .state == "complete" and
-            .terminalReceipt != null and
-            .terminalReceipt.terminalState == "complete" and
-            .terminalReceipt.allEffectsSucceeded == true and
-            .terminalReceipt.claimsReleased == true
-          ' "$status_path" >/dev/null || return 1
-          return 0
-          ;;
-        cancelled | rolled-back | failed | recoverable-failure)
-          return 1
-          ;;
-      esac
-    fi
-    now="$(date +%s)"
-    [ $((now - started)) -lt "$timeout_seconds" ] || return 1
-    sleep 1
-  done
-}
 
 wait_migration "$source_store" "$export_operation" export \
   "$scratch/export-status.json" ||

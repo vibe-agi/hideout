@@ -183,6 +183,11 @@ func validatePreparedExecutionPaths(paths vzexecutor.ExecutionPaths) error {
 	if err := requireRegularFile(paths.RootDisk, false, false); err != nil {
 		return err
 	}
+	for _, disk := range paths.AttachedDisks {
+		if err := requireRegularFile(disk.HostPath, false, false); err != nil {
+			return err
+		}
+	}
 	if err := requireRegularFile(paths.GuestRequest, true, false); err != nil {
 		return err
 	}
@@ -236,8 +241,12 @@ func prepareAdoptionRuntime(
 	); err != nil {
 		return err
 	}
+	boothook, err := adoptionCloudBoothook(request)
+	if err != nil {
+		return err
+	}
 	if err := writeExclusiveFile(
-		filepath.Join(paths.CIDDataSource, "user-data"), []byte(cloudBoothook), 0o400,
+		filepath.Join(paths.CIDDataSource, "user-data"), []byte(boothook), 0o400,
 	); err != nil {
 		return err
 	}
@@ -318,9 +327,28 @@ func buildVirtualMachineConfiguration(
 	if err != nil {
 		return nil, err
 	}
-	configuration.SetStorageDevicesVirtualMachineConfiguration(
-		[]vz.StorageDeviceConfiguration{rootDevice, cidataDevice},
+	storageDevices := make(
+		[]vz.StorageDeviceConfiguration, 0, 2+len(paths.AttachedDisks),
 	)
+	storageDevices = append(storageDevices, rootDevice, cidataDevice)
+	for _, disk := range paths.AttachedDisks {
+		attachment, err := vz.NewDiskImageStorageDeviceAttachmentWithCacheAndSync(
+			disk.HostPath, false, vz.DiskImageCachingModeCached,
+			vz.DiskImageSynchronizationModeFsync,
+		)
+		if err != nil {
+			return nil, err
+		}
+		device, err := vz.NewVirtioBlockDeviceConfiguration(attachment)
+		if err != nil {
+			return nil, err
+		}
+		if err := device.SetBlockDeviceIdentifier(disk.BlockDeviceIdentifier); err != nil {
+			return nil, err
+		}
+		storageDevices = append(storageDevices, device)
+	}
+	configuration.SetStorageDevicesVirtualMachineConfiguration(storageDevices)
 
 	shares := make([]vz.DirectorySharingDeviceConfiguration, 0, 3)
 	for _, share := range []struct {
@@ -461,7 +489,7 @@ func waitForReceipt(path string, limit time.Duration) error {
 	for {
 		if err := requireRegularFile(path, false, false); err == nil {
 			info, statErr := os.Lstat(path)
-			if statErr == nil && info.Size() <= maximumExecutorDocumentBytes {
+			if statErr == nil && info.Size() <= maximumExecutorResponseBytes {
 				return nil
 			}
 		}

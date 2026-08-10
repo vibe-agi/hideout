@@ -179,9 +179,29 @@ refinement tests cover default `ext4`, preserved supported filesystems, rejected
 links, kernel mount-type mismatch, and refusal to hide a nonempty path. The
 exact signed-package real-Lima run remains the publication proof.
 
+The next exact run exposed the missing concrete refinement below that abstract
+disk-fidelity state: the package-owned zero-network VZ executor still attached
+only root plus CIDATA. The execution request now carries a sorted typed list of
+operation-owned raw disk paths, authenticated destination mount points, and
+filesystem types. Each disk receives a deterministic bounded VZ block
+identifier; the fixed boothook waits for the corresponding Linux by-id
+partition and mounts it without any partitioning, formatting, label mutation,
+network device, caller command, or caller script before invoking the helper.
+Backend, protocol, boothook, and Darwin VZ tests jointly bind stage entry to VZ
+device and guest mount, replacing the prior isolation-only test that encoded the
+wrong product assumption.
+
+A separate receipt-state audit found that a valid failed receipt was allowed to
+enter success finalization because request matching deliberately accepts both
+terminal statuses. The provider now returns the stable guest-failure code before
+materialization, authority removal, or evidence writing; recovery replays the
+same durable failure without a second boot. The abstract TLA+ rule already
+forbids verification or activation without completed disk-fidelity evidence, so
+this is a concrete refinement closure rather than a new abstract state.
+
 ### Validation status
 
-Targeted Go packages, JSON schemas, shell syntax/ShellCheck, all 52 real-Lima
+Targeted Go packages, JSON schemas, shell syntax/ShellCheck, all 54 real-Lima
 semantic preflight fixtures, and both updated MigrationAdoption TLC
 configurations pass in the release worktree. This is implementation evidence,
 not public release evidence. The exact clean signed package must still pass the
