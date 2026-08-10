@@ -119,6 +119,7 @@ func (b Backend) rebindImportedRuntimeAttachedDisks(
 	hostEnv []string,
 	session *backend.Session,
 ) error {
+	session.ImportedDiskMounts = nil
 	state, err := loadImportedLimaRuntimeState(hostEnv, session)
 	if err != nil || state == nil {
 		return err
@@ -127,11 +128,16 @@ func (b Backend) rebindImportedRuntimeAttachedDisks(
 		state.normalized.AttachedDiskMounts,
 	)
 	if err != nil || len(command) == 0 {
+		if err == nil {
+			session.ImportedDiskMounts = slices.Clone(
+				state.normalized.AttachedDiskMounts,
+			)
+		}
 		return err
 	}
 	bootSession := *session
 	bootSession.PrivilegedSetupRequired = true
-	return b.runSetupCommand(
+	if err := b.runSetupCommand(
 		ctx,
 		&bootSession,
 		setupCategoryBoot,
@@ -141,7 +147,31 @@ func (b Backend) rebindImportedRuntimeAttachedDisks(
 		},
 		command,
 		nil,
+	); err != nil {
+		return err
+	}
+	session.ImportedDiskMounts = slices.Clone(
+		state.normalized.AttachedDiskMounts,
 	)
+	return nil
+}
+
+func (b Backend) loadImportedRuntimeDiskMounts(
+	hostEnv []string,
+	session *backend.Session,
+) error {
+	if session == nil {
+		return errors.New("imported Lima runtime session is incomplete")
+	}
+	session.ImportedDiskMounts = nil
+	state, err := loadImportedLimaRuntimeState(hostEnv, session)
+	if err != nil || state == nil {
+		return err
+	}
+	session.ImportedDiskMounts = slices.Clone(
+		state.normalized.AttachedDiskMounts,
+	)
+	return nil
 }
 
 func importedRuntimeDiskRebindCommand(

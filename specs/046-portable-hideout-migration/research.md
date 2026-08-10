@@ -356,7 +356,8 @@ ordering. Its key invariants are:
 - a name has at most one live claimant;
 - durable adoption disk fidelity does not imply per-boot mount readiness;
 - no target starts until the current boot has proved and rebound every imported
-  attached-disk path, and stopping clears that proof;
+  attached-disk path and the target's private view projects only those
+  authenticated bindings; stopping clears both proofs;
 - a valid operation reaches complete or rolled-back under eventual provider and
   daemon availability.
 

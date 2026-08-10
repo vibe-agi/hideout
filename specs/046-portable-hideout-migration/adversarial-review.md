@@ -221,11 +221,21 @@ filesystem options, and idempotently restores the original-path symlink. It
 refuses a conflicting link, file, nonempty directory, missing mount, wrong
 filesystem, read-only mount, duplicate path, or cross-binding collision. The
 target identity never receives this authority, and a failure leaves the
-runtime unready. `MigrationAdoption.tla` now models stopped, booting, rebound,
-and first-target states; stopping clears per-boot mount readiness, so every
-cold-start trace must cross the rebind action again. Both focused TLC
-configurations and the Go call-order/failure regressions pass. The exact clean
-package real-Lima rerun remains the publication proof.
+runtime unready.
+
+The next exact run proved that root namespace state but exposed a distinct
+target-view gap: root diagnostics showed the restored alias after the ordinary
+Portal target reported it missing because its intentionally narrow chroot did
+not include `/mnt`. The correction does not widen that chroot to the guest mount
+tree. It carries only authenticated imported bindings into the session,
+revalidates the exact live mount/type/read-write/alias facts under root control,
+bind-projects each exact destination, and recreates only its original-path alias
+before target start. CIDATA and unrelated mounts remain absent.
+`MigrationAdoption.tla` now models stopped, booting, rebound,
+target-view-ready, and first-target states; stopping clears both per-boot
+readiness facts, so every cold-start trace must cross both actions again. Both
+focused TLC configurations and the Go call-order/private-view regressions pass.
+The exact clean-package real-Lima rerun remains the publication proof.
 
 A separate receipt-state audit found that a valid failed receipt was allowed to
 enter success finalization because request matching deliberately accepts both

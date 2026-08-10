@@ -187,8 +187,10 @@ Expected behavior:
 - Completion does not automatically start the environment.
 - Every later cold start proves the fresh attached-disk mounts and restores the
   authenticated original guest paths through root control before the runtime
-  becomes ready or the first target command starts; the one-time adoption
-  receipt alone is not sufficient.
+  becomes ready. A Portal target then receives only those exact mounts and
+  aliases in its private filesystem view before its first command; unrelated
+  `/mnt` entries remain absent. The one-time adoption receipt alone is not
+  sufficient.
 
 Start it only after completion using the ordinary Hideout run/attach flow. Inside
 the VM, verify:
@@ -207,7 +209,9 @@ configuration and require the fresh attached-disk object to carry explicit
 resolve to that fresh destination mount, not merely to any `/mnt/lima-*`
 directory. Stop and start the imported environment once more and repeat the
 same path check; a cold boot must not depend on a symlink left by isolated
-adoption. The guest machine ID and SSH fingerprint must differ from computer A.
+adoption. Perform the path check from the ordinary target command, not only a
+root diagnostic shell, so private-view projection is part of the proof. The
+guest machine ID and SSH fingerprint must differ from computer A.
 
 Resolve the destination profile path named by the receipt. Verify the `home`,
 `config`, `data`, and `browser` fixture hashes. Prove the cache fixture is absent,

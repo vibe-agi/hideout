@@ -84,6 +84,7 @@ func (b Backend) runIsolatedSupervisor(ctx context.Context, session *backend.Ses
 		ExpectedBootID:       session.ExpectedBootID,
 		SessionSupervisor:    true,
 		RequiredRuntimePaths: sessionRuntimePrerequisites(session, true),
+		ImportedDiskMounts:   session.ImportedDiskMounts,
 		Workspace:            session.Workspace,
 	})
 	if err != nil {

@@ -2493,10 +2493,12 @@ machine/SSH identity, and pre-export root/attached/profile/record hashes. The ga
   another bundle secret;
 - cold-starts all four destinations, then stops and cold-starts the first Safe
   Clone a second time; on every run it proves the per-boot root-control rebind
-  completed before the first target and verifies root-disk, the exact original
-  attached-disk path, and all four profile application-state fixtures while
-  proving cache exclusion, generated destination profile state, and stable
-  guest identity across the repeated boot;
+  completed, the private target view exposes only the exact authenticated disk
+  destination and original alias, and the ordinary target verifies root-disk,
+  the exact original attached-disk path, and all four profile application-state
+  fixtures while proving broad `/mnt`/CIDATA exclusion, cache exclusion,
+  generated destination profile state, and stable guest identity across the
+  repeated boot;
 - proves all control and backend identities are fresh and pairwise distinct;
 - proves all three Safe Clone machine IDs and SSH host keys are fresh and pairwise
   distinct, while Exact Guest Restore preserves both;

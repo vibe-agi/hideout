@@ -44,6 +44,22 @@ func TestMigrationImportedRuntimeReconcilesOnlyDestinationMountsBeforeFirstStart
 	if len(setup.calls) != 2 || !setup.calls[0].check {
 		t.Fatalf("imported disk rebind setup calls=%+v", setup.calls)
 	}
+	if !reflect.DeepEqual(fixture.session.ImportedDiskMounts, []migration.DiskMountBinding{{
+		DiskID: "disk_imported_data1", SourceGuestPath: "/mnt/lima-source-data",
+		DestinationGuestPath: "/mnt/lima-disk_imported_data1", FSType: "ext4",
+	}}) {
+		t.Fatalf("imported target-view disk bindings=%+v", fixture.session.ImportedDiskMounts)
+	}
+	fixture.session.ImportedDiskMounts = nil
+	if err := b.loadImportedRuntimeDiskMounts(
+		HostCommandEnv(os.Environ()), fixture.session,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if len(fixture.session.ImportedDiskMounts) != 1 ||
+		fixture.session.ImportedDiskMounts[0].SourceGuestPath != "/mnt/lima-source-data" {
+		t.Fatalf("warm target-view disk bindings=%+v", fixture.session.ImportedDiskMounts)
+	}
 	rebind := setup.calls[1]
 	if rebind.instance != fixture.session.InstanceName || rebind.workdir != "/" ||
 		!reflect.DeepEqual(rebind.env, []string{
@@ -124,6 +140,9 @@ func TestMigrationImportedRuntimeDiskRebindFailureBlocksFirstTarget(t *testing.T
 	}
 	if fixture.session.RuntimeReady {
 		t.Fatal("failed imported disk rebind marked the runtime ready")
+	}
+	if len(fixture.session.ImportedDiskMounts) != 0 {
+		t.Fatalf("failed rebind exposed target-view disk bindings=%+v", fixture.session.ImportedDiskMounts)
 	}
 	if len(runner.calls) != 3 ||
 		!reflect.DeepEqual(runner.calls[2].args, []string{

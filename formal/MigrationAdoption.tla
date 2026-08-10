@@ -37,6 +37,7 @@ VARIABLES phase,
           environmentVisible,
           runtimePhase,
           runtimeMountReady,
+          runtimeViewReady,
           targetStarted,
           decision,
           daemonUp,
@@ -52,7 +53,8 @@ vars ==
       authorityApproved, authorityEffective, staged, profileStateStaged,
       receiptValid, diskFidelityProved, runnable, profileVisible,
       profileStateVisible,
-      environmentVisible, runtimePhase, runtimeMountReady, targetStarted,
+      environmentVisible, runtimePhase, runtimeMountReady, runtimeViewReady,
+      targetStarted,
       decision, daemonUp,
       crashCount, stageEffects,
       adoptionEffects, commitEffects, replacementEffects>>
@@ -85,9 +87,11 @@ HasNameClaim(destination) ==
     nameOwner[requestedName[destination]] = destination
 
 ProfileStateVars == <<profileStateStaged, profileStateVisible>>
-\* Disk fidelity is durable adoption evidence. Runtime mount readiness is a
-\* separate per-boot fact and is cleared whenever the runtime stops.
-RuntimeVars == <<runtimePhase, runtimeMountReady, targetStarted>>
+\* Disk fidelity is durable adoption evidence. Runtime mount readiness and the
+\* target's private-view projection are separate per-boot facts and are cleared
+\* whenever the runtime stops.
+RuntimeVars ==
+    <<runtimePhase, runtimeMountReady, runtimeViewReady, targetStarted>>
 AdoptionVars ==
     <<phase, requestedName, policy, plannedPolicy, bundleDigest,
       bundleValid, nameOwner, controlID, backendID, guestID,
@@ -98,7 +102,7 @@ AdoptionVars ==
       replacementEffects>>
 StableStageFacts ==
     <<profileStateStaged, profileStateVisible, diskFidelityProved,
-      runtimePhase, runtimeMountReady, targetStarted>>
+      runtimePhase, runtimeMountReady, runtimeViewReady, targetStarted>>
 
 Init ==
     /\ phase = [destination \in Destinations |-> "draft"]
@@ -123,6 +127,7 @@ Init ==
     /\ environmentVisible = [destination \in Destinations |-> FALSE]
     /\ runtimePhase = [destination \in Destinations |-> "stopped"]
     /\ runtimeMountReady = [destination \in Destinations |-> FALSE]
+    /\ runtimeViewReady = [destination \in Destinations |-> FALSE]
     /\ targetStarted = [destination \in Destinations |-> FALSE]
     /\ decision = [destination \in Destinations |-> "none"]
     /\ daemonUp = TRUE
@@ -509,6 +514,8 @@ BeginRuntimeBoot(destination) ==
           [runtimePhase EXCEPT ![destination] = "booting"]
     /\ runtimeMountReady' =
           [runtimeMountReady EXCEPT ![destination] = FALSE]
+    /\ runtimeViewReady' =
+          [runtimeViewReady EXCEPT ![destination] = FALSE]
     /\ targetStarted' = [targetStarted EXCEPT ![destination] = FALSE]
     /\ UNCHANGED AdoptionVars
 
@@ -519,11 +526,26 @@ FinishRuntimeDiskRebind(destination) ==
     /\ diskFidelityProved[destination]
     /\ runtimePhase[destination] = "booting"
     /\ ~runtimeMountReady[destination]
+    /\ ~runtimeViewReady[destination]
     /\ ~targetStarted[destination]
     /\ runtimePhase' = [runtimePhase EXCEPT ![destination] = "ready"]
     /\ runtimeMountReady' =
           [runtimeMountReady EXCEPT ![destination] = TRUE]
-    /\ UNCHANGED targetStarted
+    /\ UNCHANGED <<runtimeViewReady, targetStarted>>
+    /\ UNCHANGED AdoptionVars
+
+PrepareTargetDiskView(destination) ==
+    /\ daemonUp
+    /\ phase[destination] = "active"
+    /\ runnable[destination]
+    /\ diskFidelityProved[destination]
+    /\ runtimePhase[destination] = "ready"
+    /\ runtimeMountReady[destination]
+    /\ ~runtimeViewReady[destination]
+    /\ ~targetStarted[destination]
+    /\ runtimeViewReady' =
+          [runtimeViewReady EXCEPT ![destination] = TRUE]
+    /\ UNCHANGED <<runtimePhase, runtimeMountReady, targetStarted>>
     /\ UNCHANGED AdoptionVars
 
 StartTarget(destination) ==
@@ -533,9 +555,10 @@ StartTarget(destination) ==
     /\ diskFidelityProved[destination]
     /\ runtimePhase[destination] = "ready"
     /\ runtimeMountReady[destination]
+    /\ runtimeViewReady[destination]
     /\ ~targetStarted[destination]
     /\ targetStarted' = [targetStarted EXCEPT ![destination] = TRUE]
-    /\ UNCHANGED <<runtimePhase, runtimeMountReady>>
+    /\ UNCHANGED <<runtimePhase, runtimeMountReady, runtimeViewReady>>
     /\ UNCHANGED AdoptionVars
 
 StopRuntime(destination) ==
@@ -546,6 +569,8 @@ StopRuntime(destination) ==
           [runtimePhase EXCEPT ![destination] = "stopped"]
     /\ runtimeMountReady' =
           [runtimeMountReady EXCEPT ![destination] = FALSE]
+    /\ runtimeViewReady' =
+          [runtimeViewReady EXCEPT ![destination] = FALSE]
     /\ targetStarted' = [targetStarted EXCEPT ![destination] = FALSE]
     /\ UNCHANGED AdoptionVars
 
@@ -572,6 +597,7 @@ Next ==
     \/ \E destination \in Destinations : Rollback(destination)
     \/ \E destination \in Destinations : BeginRuntimeBoot(destination)
     \/ \E destination \in Destinations : FinishRuntimeDiskRebind(destination)
+    \/ \E destination \in Destinations : PrepareTargetDiskView(destination)
     \/ \E destination \in Destinations : StartTarget(destination)
     \/ \E destination \in Destinations : StopRuntime(destination)
     \/ Crash
@@ -639,6 +665,7 @@ TypeOK ==
     /\ environmentVisible \in [Destinations -> BOOLEAN]
     /\ runtimePhase \in [Destinations -> RuntimePhases]
     /\ runtimeMountReady \in [Destinations -> BOOLEAN]
+    /\ runtimeViewReady \in [Destinations -> BOOLEAN]
     /\ targetStarted \in [Destinations -> BOOLEAN]
     /\ decision \in
           [Destinations -> {"none", "commit", "rollback"}]
@@ -776,9 +803,13 @@ RuntimeActivityRequiresActiveDestination ==
             /\ runnable[destination]
 
 RuntimeMountReadyIffRebound ==
-    \A destination \in Destinations :
-        runtimeMountReady[destination] <=>
-            runtimePhase[destination] = "ready"
+    /\ \A destination \in Destinations :
+          runtimeMountReady[destination] <=>
+              runtimePhase[destination] = "ready"
+    /\ \A destination \in Destinations :
+          runtimeViewReady[destination] =>
+              /\ runtimePhase[destination] = "ready"
+              /\ runtimeMountReady[destination]
 
 RuntimeMountRequiresAdoptionFidelity ==
     \A destination \in Destinations :
@@ -789,6 +820,7 @@ TargetRequiresRuntimeDiskRebind ==
         targetStarted[destination] =>
             /\ runtimePhase[destination] = "ready"
             /\ runtimeMountReady[destination]
+            /\ runtimeViewReady[destination]
             /\ diskFidelityProved[destination]
 
 EveryDestinationEventuallyTerminal ==

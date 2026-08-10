@@ -404,6 +404,9 @@ func (b Backend) WarmActivate(ctx context.Context, session *backend.Session, env
 	if !exists {
 		return errors.New("warm Lima activation refused because the instance is absent")
 	}
+	if err := b.loadImportedRuntimeDiskMounts(hostEnv, session); err != nil {
+		return fmt.Errorf("load imported Lima attached disks for warm activation: %w", err)
+	}
 	session.ExpectedBootID = receipt.BootID
 	session.Env = append([]string(nil), env...)
 	session.RunAttempted = true

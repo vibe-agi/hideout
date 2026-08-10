@@ -16,6 +16,7 @@ import (
 
 	"github.com/vibe-agi/hideout/internal/broker"
 	"github.com/vibe-agi/hideout/internal/environment"
+	"github.com/vibe-agi/hideout/internal/migration"
 	"github.com/vibe-agi/hideout/internal/privilege"
 	"github.com/vibe-agi/hideout/internal/profile"
 	"github.com/vibe-agi/hideout/internal/workspacepath"
@@ -212,6 +213,7 @@ type Session struct {
 	ProjectionReadiness            *ProjectionReadinessExpectation
 	ProjectionReadinessObservation *ProjectionReadinessObservation
 	ObserverHelperDigest           string
+	ImportedDiskMounts             []migration.DiskMountBinding
 	Activity                       *ActivityPreparation
 	ActivationOwnerID              string
 	ExpectedBootID                 string

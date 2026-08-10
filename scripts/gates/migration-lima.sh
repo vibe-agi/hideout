@@ -81,6 +81,21 @@ migration_guest_verify_script='
   [ -d "$attached_destination" ]
   [ "$(findmnt -rn -o TARGET --target "$attached_destination")" = "$attached_destination" ]
   [ -f "$attached_destination/migration-attached-proof" ]
+  mnt_entry_count=0
+  for mnt_entry in /mnt/* /mnt/.[!.]* /mnt/..?*; do
+    [ -e "$mnt_entry" ] || [ -L "$mnt_entry" ] || continue
+    case "$mnt_entry" in
+      /mnt/lima-migration-attached|"$attached_destination") ;;
+      *)
+        printf "attached-view=unexpected:%s\n" "$mnt_entry"
+        exit 73
+        ;;
+    esac
+    mnt_entry_count=$((mnt_entry_count + 1))
+  done
+  [ "$mnt_entry_count" -eq 2 ]
+  [ ! -e /mnt/lima-cidata ]
+  printf "attached-view=exact\n"
   printf "attached="
   cat "$attached_destination/migration-attached-proof"
   [ ! -e /workspace/host-only.txt ]
@@ -94,6 +109,7 @@ migration_guest_fidelity_output() {
   grep -Fxq "root=$root_value" "$output_path" &&
     grep -Fxq "attached=$attached_value" "$output_path" &&
     grep -Fxq "attached-alias=symlink:$attached_destination" "$output_path" &&
+    grep -Fxq "attached-view=exact" "$output_path" &&
     grep -Fxq "profile-home=$home_value" "$output_path" &&
     grep -Fxq "profile-config=$config_value" "$output_path" &&
     grep -Fxq "profile-data=$data_value" "$output_path" &&
@@ -1001,6 +1017,9 @@ if [ "$preflight_only" -eq 1 ]; then
     [[ "$migration_guest_verify_script" == *'readlink /mnt/lima-migration-attached'* ]] &&
     [[ "$migration_guest_verify_script" == *"\"\$attached_destination/migration-attached-proof\""* ]] ||
     fail "guest fidelity judge does not prove the authenticated source mount path"
+  [[ "$migration_guest_verify_script" == *'[ ! -e /mnt/lima-cidata ]'* ]] &&
+    [[ "$migration_guest_verify_script" == *'attached-view=exact'* ]] ||
+    fail "guest fidelity judge does not prove the bounded private mount view"
   summary_fixture="$(migration_lima_summary_fixture)"
   printf '%s\n' "$summary_fixture" | validate_migration_lima_summary ||
     fail "summary validator rejected its valid preflight fixture"
@@ -1080,6 +1099,7 @@ if [ "$preflight_only" -eq 1 ]; then
     'profile-generated=regenerated' \
     'machine=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' \
     "attached-alias=symlink:$fidelity_attached_destination" \
+    'attached-view=exact' \
     "attached=$fidelity_attached" \
     >"$fidelity_fixture"
   migration_guest_fidelity_output \
@@ -1092,7 +1112,7 @@ if [ "$preflight_only" -eq 1 ]; then
   }
   for fidelity_judge in \
     root attached profile-home profile-config profile-data profile-browser \
-    profile-cache profile-generated attached-alias; do
+    profile-cache profile-generated attached-alias attached-view; do
     awk -v prefix="$fidelity_judge=" '
       index($0, prefix) == 1 { print prefix "mutated"; next }
       { print }

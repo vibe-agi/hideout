@@ -244,8 +244,11 @@ the fresh destination disks, then use the separate destination root-control
 identity to prove each exact destination mount point, filesystem type, and
 read-write VFS/filesystem option and idempotently restore the authenticated
 source-path symlink. This fixed action MUST finish before the runtime is marked
-ready or a target command starts. Conflicts or failed proofs block the target;
-the target command and imported provisioning receive no setup authority.
+ready. Before a target command starts in a private filesystem view, the provider
+MUST re-prove those facts and project only the exact authenticated destination
+mounts plus original-path aliases into that view; broad `/mnt` projection is
+forbidden. Conflicts or failed root/view proofs block the target; the target
+command and imported provisioning receive no setup authority.
 
 The provider waits for exact stopped proof, removes ephemeral adoption channels,
 and returns the receipt plus provider observations. Timeout, helper/package digest

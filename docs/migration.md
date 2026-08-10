@@ -274,7 +274,8 @@ negative controls, one unchanged encrypted bundle, three Safe Clone imports,
 one Exact Guest Restore import, materialization/adoption daemon crash recovery,
 fail-closed missing-executor compatibility, terminal receipts, identity
 separation, exact original attached-disk path, explicit `format: false` plus
-filesystem type, ordinary cold-start rebind before the first target, host-
+filesystem type, ordinary cold-start rebind and exact private-target-view
+projection before the first target, host-
 workspace exclusion, source immutability, and a second cold start of the first
 Safe Clone to prove the binding is per-boot rather than an adoption leftover.
 After export it retains a

@@ -17,6 +17,7 @@ import (
 
 	"github.com/vibe-agi/hideout/internal/backend"
 	"github.com/vibe-agi/hideout/internal/environment"
+	"github.com/vibe-agi/hideout/internal/migration"
 	"github.com/vibe-agi/hideout/internal/privilege"
 	"github.com/vibe-agi/hideout/internal/workspaceattach"
 	"golang.org/x/crypto/ssh"
@@ -64,6 +65,7 @@ type SessionViewSpec struct {
 	GuardianControl      bool
 	SessionSupervisor    bool
 	RequiredRuntimePaths []string
+	ImportedDiskMounts   []migration.DiskMountBinding
 	Workspace            backend.WorkspaceAttachmentSpec
 }
 
@@ -112,6 +114,9 @@ func BuildSessionViewCommand(spec SessionViewSpec) ([]string, error) {
 			!strings.HasPrefix(requiredPath, GuestSessionDir+"/") {
 			return nil, fmt.Errorf("runtime prerequisite %q is outside the session view", requiredPath)
 		}
+	}
+	if err := validateImportedRuntimeDiskMountBindings(spec.ImportedDiskMounts); err != nil {
+		return nil, err
 	}
 	portalWorkspace := spec.Workspace.Transport == backend.WorkspaceTransportPortal
 	if portalWorkspace {
@@ -164,6 +169,7 @@ func BuildSessionViewCommand(spec SessionViewSpec) ([]string, error) {
 	}
 	if portalWorkspace {
 		writePortalWorkspaceRoot(&script, spec)
+		writePortalImportedDiskMounts(&script, spec.ImportedDiskMounts)
 		writePortalWorkspaceSeal(&script, spec)
 	}
 	script.WriteString("cleanup_session_view() {\n")
@@ -229,6 +235,41 @@ exec "$@"
 `
 	command := []string{"sh", "-c", launcher, "hideout-session-launcher", control, source}
 	return append(command, viewCommand...), nil
+}
+
+func writePortalImportedDiskMounts(
+	script *strings.Builder,
+	bindings []migration.DiskMountBinding,
+) {
+	if len(bindings) == 0 {
+		return
+	}
+	script.WriteString("mkdir -p \"$workspace_root/mnt\"\n")
+	for _, binding := range bindings {
+		fmt.Fprintf(script, "imported_source=%s\n", shellQuote(binding.SourceGuestPath))
+		fmt.Fprintf(script, "imported_destination=%s\n", shellQuote(binding.DestinationGuestPath))
+		fmt.Fprintf(script, "imported_filesystem=%s\n", shellQuote(binding.FSType))
+		if binding.SourceGuestPath != binding.DestinationGuestPath {
+			script.WriteString("[ -L \"$imported_source\" ]\n")
+			script.WriteString("[ \"$(readlink \"$imported_source\")\" = \"$imported_destination\" ]\n")
+		}
+		script.WriteString("[ -d \"$imported_destination\" ]\n")
+		script.WriteString("[ ! -L \"$imported_destination\" ]\n")
+		script.WriteString("[ \"$(findmnt -rn -o TARGET --target \"$imported_destination\")\" = \"$imported_destination\" ]\n")
+		script.WriteString("[ \"$(findmnt -rn -o FSTYPE --target \"$imported_destination\")\" = \"$imported_filesystem\" ]\n")
+		script.WriteString("imported_vfs_options=\",$(findmnt -rn -o VFS-OPTIONS --target \"$imported_destination\"),\"\n")
+		script.WriteString("imported_fs_options=\",$(findmnt -rn -o FS-OPTIONS --target \"$imported_destination\"),\"\n")
+		script.WriteString("case \"$imported_vfs_options\" in *,rw,*) ;; *) exit 73 ;; esac\n")
+		script.WriteString("case \"$imported_vfs_options\" in *,ro,*) exit 73 ;; esac\n")
+		script.WriteString("case \"$imported_fs_options\" in *,rw,*) ;; *) exit 73 ;; esac\n")
+		script.WriteString("case \"$imported_fs_options\" in *,ro,*) exit 73 ;; esac\n")
+		script.WriteString("mkdir \"$workspace_root$imported_destination\"\n")
+		script.WriteString("mount --rbind \"$imported_destination\" \"$workspace_root$imported_destination\"\n")
+		script.WriteString("mount --make-rslave \"$workspace_root$imported_destination\"\n")
+		if binding.SourceGuestPath != binding.DestinationGuestPath {
+			script.WriteString("ln -s \"$imported_destination\" \"$workspace_root$imported_source\"\n")
+		}
+	}
 }
 
 func writePortalWorkspaceMount(script *strings.Builder, spec SessionViewSpec) {
@@ -615,6 +656,7 @@ func (b Backend) runIsolatedSession(ctx context.Context, session *backend.Sessio
 		Command:              CommandCheck(command[0]),
 		ExpectedBootID:       session.ExpectedBootID,
 		RequiredRuntimePaths: sessionRuntimePrerequisites(session, false),
+		ImportedDiskMounts:   session.ImportedDiskMounts,
 		Workspace:            session.Workspace,
 	})
 	if err != nil {
@@ -651,6 +693,7 @@ func (b Backend) runIsolatedSession(ctx context.Context, session *backend.Sessio
 		HostFSGrafts:         session.HostFSGrafts,
 		ExpectedBootID:       session.ExpectedBootID,
 		GuardianControl:      true,
+		ImportedDiskMounts:   session.ImportedDiskMounts,
 		Workspace:            session.Workspace,
 	})
 	if err != nil {

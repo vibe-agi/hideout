@@ -93,10 +93,12 @@ runnable without it. The Go refinement binds that fact to the concrete attached-
 disk contract: authenticated filesystem type, explicit Lima `format: false`,
 fresh destination disk identity, and exact source-to-destination guest mount
 mapping. Durable adoption fidelity is deliberately separate from the model's
-per-boot `runtimeMountReady`: activation begins stopped, boot begins with that
-fact false, only the rebind action makes it true, target start requires it, and
-stop clears it. This prevents both “staged bytes exist” and “adoption once made
-the alias” from being mistaken for “this cold boot will expose those bytes at
+per-boot `runtimeMountReady`, and both are separate from
+`runtimeViewReady`: activation begins stopped, boot begins with both facts false,
+the root rebind makes only mount readiness true, private target-view projection
+makes view readiness true, target start requires both, and stop clears both.
+This prevents “staged bytes exist,” “adoption once made the alias,” and “root can
+see the alias” from being mistaken for “this target view exposes those bytes at
 the authenticated path.”
 
 Imported-Lima first-start reconciliation does not add a transition before
@@ -112,8 +114,11 @@ Attached-disk filesystem and guest-path values are likewise concrete data. The
 adoption receipt establishes `diskFidelityProved`; a separate root-control
 check after each Lima start establishes `runtimeMountReady` only after exact
 mount target, filesystem type, read-write options, and alias destination all
-match. The real-Lima gate cold-starts the activated import and checks the
-original source path before accepting data fidelity.
+match. A separate session-view step re-proves those facts, exposes only the exact
+authenticated destination mounts and aliases, and establishes
+`runtimeViewReady`; broad `/mnt` projection is forbidden. The real-Lima gate
+cold-starts the activated import and checks the original source path from the
+ordinary target before accepting data fidelity.
 Likewise, installing the destination Lima control key is an atomic sub-action of
 the already modeled isolated adoption step: the staged guest remains stopped and
 networkless, completion requires the matching action receipt, and no imported

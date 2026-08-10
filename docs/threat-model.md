@@ -978,9 +978,12 @@ That durable adoption receipt does not stand in for ordinary-boot readiness.
 After every imported Lima cold start, a separate destination root-control
 action proves the exact fresh attached-disk mount path, filesystem type, and
 read-write options and restores only the authenticated original-path symlink
-before runtime readiness or target execution. Conflicts or missing proof leave
-the target blocked; imported provisioning and target commands receive no such
-setup authority.
+before runtime readiness. A Portal target's separate private filesystem view
+then re-proves those bindings and projects only the exact destination mounts and
+original aliases before execution; the broad `/mnt` tree and CIDATA remain
+hidden. Conflicts, missing root proof, or missing view projection leave the
+target blocked; imported provisioning and target commands receive no such setup
+authority.
 The activation decision is durable and one-way; restart reconciliation finishes
 or rolls back proved effects without exposing a half-imported environment. The
 source bundle is never an import cleanup target.

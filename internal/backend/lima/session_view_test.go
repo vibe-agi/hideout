@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/vibe-agi/hideout/internal/backend"
+	"github.com/vibe-agi/hideout/internal/migration"
 	"golang.org/x/crypto/ssh"
 	"golang.org/x/term"
 )
@@ -454,6 +455,12 @@ func TestBuildSessionViewCommandRejectsUnsafeInputs(t *testing.T) {
 		{"empty argv", func(s *SessionViewSpec) { s.Command = nil }},
 		{"network escape", func(s *SessionViewSpec) { s.NetworkBootstrapPath = "/tmp/operator.sh" }},
 		{"runtime prerequisite escape", func(s *SessionViewSpec) { s.RequiredRuntimePaths = []string{"/tmp/operator.sh"} }},
+		{"imported disk escape", func(s *SessionViewSpec) {
+			s.ImportedDiskMounts = []migration.DiskMountBinding{{
+				DiskID: "disk_imported_data1", SourceGuestPath: "/mnt/lima-source-data",
+				DestinationGuestPath: "/tmp/target-controlled", FSType: "ext4",
+			}}
+		}},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -596,6 +603,10 @@ func TestSessionViewConstructsPrivatePortalWorkspaceIdentity(t *testing.T) {
 		SessionID: "ses_20260716T120000Z_0123456789abcdef", TargetUser: "developer",
 		GuestWork: "/workspace", Env: []string{"PATH=/hideout/session/shims:/usr/bin", "PWD=/caller-controlled"},
 		Command: []string{"git", "status"}, Workspace: workspace,
+		ImportedDiskMounts: []migration.DiskMountBinding{{
+			DiskID: "disk_imported_data1", SourceGuestPath: "/mnt/lima-migration-attached",
+			DestinationGuestPath: "/mnt/lima-disk_imported_data1", FSType: "ext4",
+		}},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -614,6 +625,13 @@ func TestSessionViewConstructsPrivatePortalWorkspaceIdentity(t *testing.T) {
 		"'PWD=/workspace'",
 		"for hostfs_root in Users Volumes private; do",
 		"ln -s \"/hideout/hostfs/$hostfs_root\" \"$workspace_root/$hostfs_root\"",
+		"mkdir -p \"$workspace_root/mnt\"",
+		"[ -L \"$imported_source\" ]",
+		"[ \"$(readlink \"$imported_source\")\" = \"$imported_destination\" ]",
+		"findmnt -rn -o FSTYPE --target \"$imported_destination\"",
+		"mount --rbind \"$imported_destination\" \"$workspace_root$imported_destination\"",
+		"mount --make-rslave \"$workspace_root$imported_destination\"",
+		"ln -s \"$imported_destination\" \"$workspace_root$imported_source\"",
 		"'chroot' '/hideout/runtime/workspace-rootfs'",
 		`[ "$workspace_attempt" -lt 2000 ]`,
 		`[ "$workspace_stop_attempt" -lt 1000 ]`,
@@ -630,8 +648,14 @@ func TestSessionViewConstructsPrivatePortalWorkspaceIdentity(t *testing.T) {
 	if strings.Contains(joined, workspace.HostRoot) || strings.Contains(joined, "/Users/alice") {
 		t.Fatalf("Portal session command exposed host root: %s", joined)
 	}
+	if strings.Contains(joined, "mount --rbind /mnt ") || strings.Contains(joined, "lima-cidata") {
+		t.Fatalf("Portal session command exposed the broad guest mount root: %s", joined)
+	}
 	if strings.Contains(joined, "PWD=/caller-controlled") {
 		t.Fatalf("Portal session retained a caller-controlled logical cwd: %s", joined)
+	}
+	if out, err := exec.Command("sh", "-n", "-c", command[9]).CombinedOutput(); err != nil {
+		t.Fatalf("Portal imported-disk session view has invalid shell syntax: %v\n%s", err, out)
 	}
 }
 
