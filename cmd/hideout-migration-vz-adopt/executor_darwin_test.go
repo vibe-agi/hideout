@@ -12,6 +12,9 @@ import (
 )
 
 func TestVirtualMachineConfigurationHasNoNetworkAndBindsImportedDisks(t *testing.T) {
+	if !adoptionAttachedDiskReadOnly {
+		t.Fatal("temporary adoption guest has write authority over an imported attached disk")
+	}
 	stage := filepath.Join(t.TempDir(), "stage")
 	request := vzexecutor.ExecutionRequest{
 		Schema: vzexecutor.ExecutionRequestSchema, StageDirectory: stage,

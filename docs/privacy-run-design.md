@@ -5115,7 +5115,13 @@ Staged objects are not addressable by ordinary run/attach paths. Profile state
 uses deterministic operation/profile/component ownership, rejects traversal,
 alias, symlink escape, special-file, substitution, and expansion failures, and
 is atomically renamed into place only with the fresh destination profile. A
-restart reconciles the durable effect set and advertises only a revision-valid
+temporary no-network adoption VM may mutate only the staged root disk. Every
+imported attached disk is exposed to that VM as a read-only VZ device, mounted
+read-only at its authenticated destination path, and rechecked against its
+pre-adoption host file identity before the provider can write success evidence.
+A later ordinary activated Lima boot applies the reviewed writable data-disk
+configuration. A restart reconciles the durable effect set and advertises only a
+revision-valid
 finish, rollback, resume, cancel, or partial-removal action. Compensation runs
 in reverse ownership order and never treats the immutable input bundle or
 pre-existing destination objects as cleanup targets.

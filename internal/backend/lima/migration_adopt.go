@@ -128,9 +128,12 @@ func (b Backend) AdoptMigrationDestination(
 		)
 		if recoveryErr != nil {
 			var providerErr *backend.MigrationProviderError
-			if errors.As(recoveryErr, &providerErr) &&
-				providerErr.Code == "migration.provider.adoption_guest_failed" {
-				return backend.DestinationAdoption{}, recoveryErr
+			if errors.As(recoveryErr, &providerErr) {
+				switch providerErr.Code {
+				case "migration.provider.adoption_guest_failed",
+					"migration.provider.adoption_attached_disk_changed":
+					return backend.DestinationAdoption{}, recoveryErr
+				}
 			}
 			return backend.DestinationAdoption{}, migrationStageError(
 				"migration.provider.adoption_recovery_required", request.Binding,
@@ -486,6 +489,14 @@ func finalizeMigrationAdoption(
 			request.EnvironmentRef, err, true,
 		)
 	}
+	if err := verifyMigrationAdoptionAttachedDisksUnchanged(
+		home, stageDir, owner, ownerDigest, configuration,
+	); err != nil {
+		return backend.DestinationAdoption{}, migrationStageError(
+			"migration.provider.adoption_attached_disk_changed", request.Binding,
+			request.EnvironmentRef, err, true,
+		)
+	}
 	if err := verifyMigrationStageDestinationNamesFree(home, owner); err != nil {
 		return backend.DestinationAdoption{}, migrationStageError(
 			"migration.provider.adoption_stopped_unproved", request.Binding,
@@ -542,6 +553,49 @@ func finalizeMigrationAdoption(
 		)
 	}
 	return result, nil
+}
+
+func verifyMigrationAdoptionAttachedDisksUnchanged(
+	home,
+	stageDir string,
+	owner migrationStageOwner,
+	ownerDigest migration.Digest,
+	configuration migrationStageConfiguration,
+) error {
+	for _, attached := range configuration.AttachedDisks {
+		var entry migrationStageEntry
+		for _, candidate := range owner.Entries {
+			if candidate.DiskID == attached.DiskID {
+				entry = candidate
+				break
+			}
+		}
+		if entry.ComponentID == "" || entry.Role != migration.DiskRoleAttached ||
+			entry.ObjectHandle != attached.ObjectHandle {
+			return errors.New("adoption attached disk is absent from its authenticated stage")
+		}
+		checkpoint, err := loadMigrationStageCheckpointMetadata(
+			stageDir, owner, ownerDigest, entry,
+			filepath.Join(stageDir, "checkpoints", string(entry.ComponentID)+".json"),
+		)
+		if err != nil {
+			return err
+		}
+		path := filepath.Join(stageDir, entry.RelativePath)
+		info, err := protectedMigrationRegularFile(home, path, entry.LogicalBytes)
+		if err != nil {
+			return err
+		}
+		identity, err := platformMigrationStageFileIdentity(info)
+		if err != nil || identity != checkpoint.FileIdentity {
+			return errors.New("adoption changed an imported attached disk")
+		}
+		format, logical, _, err := inspectMigrationDiskFile(path)
+		if err != nil || format != entry.Format || logical != entry.LogicalBytes {
+			return errors.New("adoption changed an imported attached disk shape")
+		}
+	}
+	return nil
 }
 
 func removeMigrationAdoptionControl(
@@ -699,6 +753,11 @@ func loadMigrationAdoptionEvidenceReplay(
 		return backend.DestinationAdoption{}, true, errors.New(
 			"adopted root changed after durable stopped proof",
 		)
+	}
+	if err := verifyMigrationAdoptionAttachedDisksUnchanged(
+		home, stageDir, owner, ownerDigest, configuration,
+	); err != nil {
+		return backend.DestinationAdoption{}, true, err
 	}
 	result := backend.DestinationAdoption{
 		Binding: request.Binding, StageHandle: request.StageHandle,

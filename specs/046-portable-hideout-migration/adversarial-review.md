@@ -145,7 +145,7 @@ package/evidence integration tests.
 The preflight now derives its search space from `go list ./...`, parses only the
 active target's test files, and owns both explicit migration names and complete
 migration-specific files plus the dedicated profile-state package. The checked-
-in inventory is therefore 225 sorted unique tests across 19 packages. The
+in inventory is therefore 229 sorted unique tests across 19 packages. The
 current generic-name and previously unlisted-package fixtures are retained as
 self-proving drift sentinels: reverting either half of the discovery rule makes
 preflight fail before any expensive fuzz, TLA+, package, or VM work begins.
@@ -190,6 +190,19 @@ network device, caller command, or caller script before invoking the helper.
 Backend, protocol, boothook, and Darwin VZ tests jointly bind stage entry to VZ
 device and guest mount, replacing the prior isolation-only test that encoded the
 wrong product assumption.
+
+The first concrete run then exposed a second refinement error: the temporary VZ
+guest attached and mounted the imported data disk read-write, while destination
+verification correctly required its authenticated staged identity to remain
+unchanged. Even a normal filesystem mount may update journal or mount metadata;
+more importantly, an imported guest root must not receive authority to rewrite
+another preserved disk before verification. Adoption now attaches the data disk
+read-only at VZ, mounts it read-only in the fixed boothook, requires both mount
+option layers to prove `ro`, and independently compares the stopped host file
+identity and shape with its authenticated checkpoint before removing control or
+writing success evidence. A mutation fixture proves the durable stopped failure
+does not reboot or create evidence. The ordinary activated Lima configuration
+remains writable after this temporary verification boundary.
 
 A separate receipt-state audit found that a valid failed receipt was allowed to
 enter success finalization because request matching deliberately accepts both

@@ -967,6 +967,8 @@ if [ "$preflight_only" -eq 1 ]; then
   bash -n scripts/gates/migration-lima.sh scripts/gates/migration.sh
   shellcheck scripts/gates/migration-lima.sh scripts/gates/migration.sh
   sh -n -c "$migration_guest_verify_script"
+  "$repo_root/scripts/gates/migration.sh" --preflight ||
+    fail "shared migration contract preflight failed"
   case "$migration_guest_verify_script" in
     *'/mnt/lima-*/'*)
       fail "guest fidelity judge still accepts an arbitrary attached-disk path"
@@ -1483,6 +1485,9 @@ if [ "$preflight_only" -eq 1 ]; then
   printf 'migration-lima: preflight=passed semantic-fixtures=54\n'
   exit 0
 fi
+
+"$repo_root/scripts/gates/migration.sh" --preflight ||
+  fail "shared migration contract preflight failed"
 
 for command in awk cat cp cut date find go grep jq limactl lsof mktemp mv openssl ps \
   python3 security sed shasum sort ssh stat tail tar tr uname; do

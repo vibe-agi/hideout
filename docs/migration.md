@@ -192,11 +192,14 @@ For imported attached disks, Hideout writes an explicit Lima object entry with
 `format: false` and the authenticated filesystem type. It never relies on
 Lima's omitted-field default, which may initialize a disk whose label does not
 match its fresh destination handle. During the isolated adoption boot, Hideout
-first verifies the exact destination mount point and filesystem type against the
-guest kernel mount inventory, then binds the original guest mount path to that
-fresh destination mount and receipts the exact mapping. An absent, occupied,
-conflicting, unsupported, or unproved path fails before activation rather than
-hiding files or guessing.
+attaches and mounts imported attached disks read-only, verifies that the guest
+kernel mount inventory reports read-only and the host-side staged-file identity
+remains unchanged, then binds the original guest mount path to that fresh
+destination mount and receipts the exact mapping. The ordinary activated Lima
+environment regains its configured read-write data-disk access only after
+verification. An
+absent, occupied, conflicting, writable, unsupported, changed, or unproved path
+fails before activation rather than hiding files, changing data, or guessing.
 
 ## Encryption and Local Trust
 
@@ -242,7 +245,7 @@ The portable, schema, fuzz, refinement, and no-side-effect inventory gate is:
 scripts/gates/migration.sh
 ```
 
-It fail-closes on drift from the checked-in 225-test migration inventory across
+It fail-closes on drift from the checked-in 229-test migration inventory across
 19 packages, the separate nine-category hostile-input matrix, and an exact
 13-cut durable restart inventory covering every export/import boundary listed
 in the feature quickstart. Discovery scans every active repository package and

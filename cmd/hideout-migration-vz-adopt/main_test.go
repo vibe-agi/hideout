@@ -85,7 +85,7 @@ func TestCloudBoothookContainsOnlyFixedOfflineMountsAndHelperEntrypoint(t *testi
 		"-t virtiofs",
 		"/dev/disk/by-id/virtio-" + identifier + "-part1",
 		"/mnt/lima-disk_handle1234",
-		"-t 'ext4' -o rw,nodev,nosuid,noexec",
+		"-t 'ext4' -o ro,nodev,nosuid,noexec",
 		"poweroff -f",
 	} {
 		if !strings.Contains(script, required) {

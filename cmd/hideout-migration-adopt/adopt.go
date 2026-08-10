@@ -378,7 +378,7 @@ func verifyAttachedDiskMounts(
 				break
 			}
 		}
-		if len(fields) < 10 || separator < 6 || separator+2 >= len(fields) {
+		if len(fields) < 10 || separator < 6 || separator+3 >= len(fields) {
 			return errors.New("guest mount inventory is malformed")
 		}
 		mountPoint := fields[4]
@@ -389,6 +389,10 @@ func verifyAttachedDiskMounts(
 		if _, duplicate := observed[mountPoint]; duplicate || fields[separator+1] != fsType {
 			return errors.New("attached disk mount filesystem does not match its binding")
 		}
+		if !readOnlyMountOptions(fields[5]) ||
+			!readOnlyMountOptions(fields[separator+3]) {
+			return errors.New("attached disk adoption mount is not read-only")
+		}
 		observed[mountPoint] = struct{}{}
 	}
 	if err := scanner.Err(); err != nil {
@@ -398,6 +402,20 @@ func verifyAttachedDiskMounts(
 		return errors.New("attached disk mount target is not mounted")
 	}
 	return nil
+}
+
+func readOnlyMountOptions(value string) bool {
+	hasReadOnly := false
+	hasReadWrite := false
+	for _, option := range strings.Split(value, ",") {
+		switch option {
+		case "ro":
+			hasReadOnly = true
+		case "rw":
+			hasReadWrite = true
+		}
+	}
+	return hasReadOnly && !hasReadWrite
 }
 
 func syncGuestDirectory(path string) error {

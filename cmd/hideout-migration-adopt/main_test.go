@@ -224,11 +224,51 @@ func TestAdoptionRefusesUnprovedAttachedDiskMount(t *testing.T) {
 	}
 }
 
+func TestAdoptionRefusesWritableAttachedDiskMount(t *testing.T) {
+	fixture := newAdoptionFixture(t, migration.GuestIdentityExactRestore, 0x48)
+	sourceMount := filepath.Join(fixture.rootPath, "mnt", "lima-source-data")
+	if err := os.MkdirAll(sourceMount, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	binding := migration.DiskMountBinding{
+		DiskID: "disk_attached1", SourceGuestPath: "/mnt/lima-source-data",
+		DestinationGuestPath: "/mnt/lima-disk_destination1", FSType: "ext4",
+	}
+	writeAdoptionMountInventoryWithMode(t, fixture.rootPath, binding, "ext4", "rw")
+	fixture.request.MountBindings = []migration.DiskMountBinding{binding}
+	fixture.request.PermittedActions = []string{
+		migration.AdoptionActionPreserveIdentity,
+		migration.AdoptionActionRebindDiskMounts,
+		migration.AdoptionActionInstallSSHKeys,
+	}
+	writeAdoptionRequestFixture(t, fixture.requestPath, fixture.request)
+	err := fixture.runner(errorReader{errors.New("randomness must not be read")}).run()
+	if err == nil || err.Error() != "migration.adoption.disk_mount_rebind_failed" {
+		t.Fatalf("writable attached mount error=%v", err)
+	}
+	if info, statErr := os.Lstat(sourceMount); statErr != nil || !info.IsDir() {
+		t.Fatalf("writable attached mount changed source path: info=%v err=%v", info, statErr)
+	}
+}
+
 func writeAdoptionMountInventory(
 	t *testing.T,
 	root string,
 	binding migration.DiskMountBinding,
 	observedFSType string,
+) string {
+	t.Helper()
+	return writeAdoptionMountInventoryWithMode(
+		t, root, binding, observedFSType, "ro",
+	)
+}
+
+func writeAdoptionMountInventoryWithMode(
+	t *testing.T,
+	root string,
+	binding migration.DiskMountBinding,
+	observedFSType,
+	mountMode string,
 ) string {
 	t.Helper()
 	destination := filepath.Join(root, strings.TrimPrefix(binding.DestinationGuestPath, "/"))
@@ -240,9 +280,11 @@ func writeAdoptionMountInventory(
 		t.Fatal(err)
 	}
 	mountInfo := fmt.Sprintf(
-		"42 1 8:1 / %s rw,relatime - %s /dev/vdb1 rw\n",
+		"42 1 8:1 / %s %s,relatime - %s /dev/vdb1 %s\n",
 		binding.DestinationGuestPath,
+		mountMode,
 		observedFSType,
+		mountMode,
 	)
 	if err := os.WriteFile(filepath.Join(mountInfoDir, "mountinfo"), []byte(mountInfo), 0o444); err != nil {
 		t.Fatal(err)

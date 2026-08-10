@@ -2446,7 +2446,7 @@ checked-in `scripts/gates/migration-tests.txt` inventory is sorted, unique, and
 fail-on-drift: the gate scans every active repository package, discovers every
 top-level test containing `Migration`, `Migrate`, or `ConfigOnly`, and also owns
 every test in a migration-specific test file or the dedicated profile-state
-package. The resulting 225-test, 19-package closed set prevents both a newly
+package. The resulting 229-test, 19-package closed set prevents both a newly
 introduced package and a generically named safety test from escaping because
 the old inventory did not already mention it. The separate sorted
 `scripts/gates/migration-hostile-tests.txt` matrix requires exactly nine

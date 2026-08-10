@@ -183,6 +183,54 @@ func TestAdoptMigrationDestinationPreservesBoundGuestFailureWithoutEvidence(t *t
 	}
 }
 
+func TestAdoptMigrationDestinationRejectsAttachedDiskMutationWithoutEvidence(t *testing.T) {
+	fixture := newMigrationSourceFixture(t, []migrationSourceInstanceFixture{{
+		name: "hideout-source", environmentRef: "environment_source1", status: "Stopped",
+	}})
+	stageRequest, _, _ := migrationDestinationStageFixture(t, fixture, "diskchange")
+	stageRequest.Binding.OperationID = "op_migrationdiskchange1"
+	stage, err := fixture.provider.StageMigrationDestination(context.Background(), stageRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	executor := migrationVZAdoptionExecutorFixture(t, "executor-v1")
+	runner := &migrationAdoptionRunner{
+		version: "limactl version 2.2.0\n", mutateAttachedDisk: true,
+	}
+	fixture.provider.Runner = runner
+	fixture.provider.Migration.AdoptionExecutorPath = executor
+	request := migrationDestinationAdoptionFixture(
+		t, fixture.provider, stageRequest, stage, migration.GuestIdentitySafeClone,
+	)
+
+	for attempt := 1; attempt <= 2; attempt++ {
+		_, err = fixture.provider.AdoptMigrationDestination(context.Background(), request)
+		var providerErr *backend.MigrationProviderError
+		if !errors.As(err, &providerErr) ||
+			providerErr.Code != "migration.provider.adoption_attached_disk_changed" ||
+			!providerErr.RecoveryRequired {
+			t.Fatalf("attempt %d attached mutation error=%v provider=%+v", attempt, err, providerErr)
+		}
+	}
+	if runner.executions != 1 {
+		t.Fatalf("durable attached mutation repeated boot: executions=%d", runner.executions)
+	}
+	stageDir := filepath.Join(
+		fixture.home, "_hideout-migration", "stages", string(stage.StageHandle),
+	)
+	control := filepath.Join(
+		stageDir, "adoption", string(request.EnvironmentRef), "control",
+	)
+	if info, err := os.Lstat(control); err != nil || !info.IsDir() {
+		t.Fatalf("attached mutation control was not retained: %v", err)
+	}
+	if _, err := os.Lstat(filepath.Join(
+		stageDir, migrationAdoptionEvidenceRelativePath(request.EnvironmentRef),
+	)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("attached mutation wrote adoption evidence: %v", err)
+	}
+}
+
 func TestAdoptMigrationDestinationRecoversDurableStoppedResponseWithoutSecondBoot(t *testing.T) {
 	fixture := newMigrationSourceFixture(t, []migrationSourceInstanceFixture{{
 		name: "hideout-source", environmentRef: "environment_source1", status: "Stopped",
@@ -409,6 +457,7 @@ type migrationAdoptionRunner struct {
 	leaveUnexpectedControl bool
 	failBeforeResponse     bool
 	guestFailureCode       string
+	mutateAttachedDisk     bool
 	executionRequests      []vzexecutor.ExecutionRequest
 }
 
@@ -466,6 +515,21 @@ func (runner *migrationAdoptionRunner) Run(
 		_, writeErr := root.WriteAt([]byte{0x7f}, 0)
 		syncErr := root.Sync()
 		closeErr := root.Close()
+		if err := errors.Join(writeErr, syncErr, closeErr); err != nil {
+			return err
+		}
+	}
+	if runner.mutateAttachedDisk {
+		if len(paths.AttachedDisks) == 0 {
+			return errors.New("injected attached-disk mutation lacks a disk")
+		}
+		disk, err := os.OpenFile(paths.AttachedDisks[0].HostPath, os.O_WRONLY, 0)
+		if err != nil {
+			return err
+		}
+		_, writeErr := disk.WriteAt([]byte{0x6f}, 0)
+		syncErr := disk.Sync()
+		closeErr := disk.Close()
 		if err := errors.Join(writeErr, syncErr, closeErr); err != nil {
 			return err
 		}

@@ -18,6 +18,12 @@ import (
 	"github.com/vibe-agi/hideout/internal/migration/vzexecutor"
 )
 
+// The temporary adoption guest may rewrite its root disk to apply the selected
+// identity policy, but it must never gain write authority over imported data
+// disks. The ordinary Lima configuration exposes those disks read-write only
+// after verification and activation complete.
+const adoptionAttachedDiskReadOnly = true
+
 const adoptionBootTimeout = 5 * time.Minute
 
 const (
@@ -333,7 +339,7 @@ func buildVirtualMachineConfiguration(
 	storageDevices = append(storageDevices, rootDevice, cidataDevice)
 	for _, disk := range paths.AttachedDisks {
 		attachment, err := vz.NewDiskImageStorageDeviceAttachmentWithCacheAndSync(
-			disk.HostPath, false, vz.DiskImageCachingModeCached,
+			disk.HostPath, adoptionAttachedDiskReadOnly, vz.DiskImageCachingModeCached,
 			vz.DiskImageSynchronizationModeFsync,
 		)
 		if err != nil {

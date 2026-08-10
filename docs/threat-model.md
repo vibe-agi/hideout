@@ -970,6 +970,10 @@ operation-owned and unpublished until capacity, profile-state and disk digests,
 adoption identity, configuration, and provider observations verify. Profile
 state is published only by the same batch that makes its freshly identified
 destination profile visible; exact-owner markers constrain rollback and resume.
+The no-network adoption guest may write the staged root to apply the selected
+identity policy, but imported attached disks are VZ-attached and guest-mounted
+read-only. The helper proves read-only mount options and the host independently
+rejects any attached-disk file-identity or shape change before success evidence.
 The activation decision is durable and one-way; restart reconciliation finishes
 or rolls back proved effects without exposing a half-imported environment. The
 source bundle is never an import cleanup target.

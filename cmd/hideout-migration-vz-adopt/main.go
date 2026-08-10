@@ -55,7 +55,7 @@ func adoptionCloudBoothook(request vzexecutor.ExecutionRequest) (string, error) 
 				"  /bin/sleep 0.1\n"+
 				"done\n"+
 				"/bin/mkdir -m 0700 '%s'\n"+
-				"/bin/mount -t '%s' -o rw,nodev,nosuid,noexec '%s' '%s'\n",
+				"/bin/mount -t '%s' -o ro,nodev,nosuid,noexec '%s' '%s'\n",
 			device, disk.GuestMountPath, disk.FSType, device, disk.GuestMountPath,
 		)
 	}
