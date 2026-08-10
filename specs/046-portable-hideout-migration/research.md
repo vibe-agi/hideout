@@ -344,7 +344,8 @@ cancel, crash, resume, manifest seal, and cleanup. Its key invariants are:
 `MigrationAdoption` models one immutable bundle imported to at least two
 destinations under Safe Clone and Exact Guest Restore. It includes name claims,
 authority review, staging, secret preparation, adoption boot, receipt validation,
-commit, rollback, crash, and recovery. Its key invariants are:
+commit, rollback, crash, recovery, and ordinary stop/boot/rebind/first-target
+ordering. Its key invariants are:
 
 - no staged/failed object is runnable;
 - control-plane and backend identities are fresh and pairwise distinct;
@@ -353,6 +354,9 @@ commit, rollback, crash, and recovery. Its key invariants are:
 - unapproved imported authority is never effective;
 - an import policy cannot change after plan confirmation;
 - a name has at most one live claimant;
+- durable adoption disk fidelity does not imply per-boot mount readiness;
+- no target starts until the current boot has proved and rebound every imported
+  attached-disk path, and stopping clears that proof;
 - a valid operation reaches complete or rolled-back under eventual provider and
   daemon availability.
 

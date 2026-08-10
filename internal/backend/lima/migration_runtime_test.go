@@ -24,7 +24,11 @@ func TestMigrationImportedRuntimeReconcilesOnlyDestinationMountsBeforeFirstStart
 		instance: fixture.session.InstanceName,
 		config:   fixture.instanceConfig,
 	}
-	b := Backend{Runner: runner, Stdout: io.Discard, Stderr: io.Discard}
+	setup := &recordingSetupRunner{}
+	b := Backend{
+		Runner: runner, SetupRunner: setup,
+		Stdout: io.Discard, Stderr: io.Discard,
+	}
 
 	if _, _, err := b.startAndObserveRuntime(
 		context.Background(), fixture.session, []string{"PATH=/usr/bin:/bin"},
@@ -36,6 +40,39 @@ func TestMigrationImportedRuntimeReconcilesOnlyDestinationMountsBeforeFirstStart
 		len(runner.calls[1].args) != 5 || runner.calls[1].args[0] != "edit" ||
 		!reflect.DeepEqual(runner.calls[2].args, []string{"start", "--tty=false", fixture.session.InstanceName}) {
 		t.Fatalf("imported first-start calls=%+v", runner.calls)
+	}
+	if len(setup.calls) != 2 || !setup.calls[0].check {
+		t.Fatalf("imported disk rebind setup calls=%+v", setup.calls)
+	}
+	rebind := setup.calls[1]
+	if rebind.instance != fixture.session.InstanceName || rebind.workdir != "/" ||
+		!reflect.DeepEqual(rebind.env, []string{
+			"PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+		}) || len(rebind.command) != 7 ||
+		!reflect.DeepEqual(rebind.command[3:], []string{
+			"hideout-migration-runtime-disk-rebind",
+			"/mnt/lima-source-data", "/mnt/lima-disk_imported_data1", "ext4",
+		}) {
+		t.Fatalf("imported disk rebind setup=%+v", rebind)
+	}
+	for _, required := range []string{
+		`findmnt -rn -o TARGET --target "$destination"`,
+		`findmnt -rn -o FSTYPE --target "$destination"`,
+		`rmdir -- "$source"`,
+		`ln -s -- "$destination" "$source"`,
+		`readlink "$source"`,
+	} {
+		if !strings.Contains(rebind.command[2], required) {
+			t.Fatalf("imported disk rebind lacks %q:\n%s", required, rebind.command[2])
+		}
+	}
+	for _, forbidden := range []string{"rm -rf", "mkfs", "curl", "wget"} {
+		if strings.Contains(rebind.command[2], forbidden) {
+			t.Fatalf("imported disk rebind contains %q:\n%s", forbidden, rebind.command[2])
+		}
+	}
+	if err := exec.Command("sh", "-n", "-c", rebind.command[2]).Run(); err != nil {
+		t.Fatalf("imported disk rebind shell syntax: %v", err)
 	}
 	setExpression := runner.calls[1].args[3]
 	if !strings.HasPrefix(setExpression, ".mounts = [") ||
@@ -64,6 +101,51 @@ func TestMigrationImportedRuntimeReconcilesOnlyDestinationMountsBeforeFirstStart
 	}
 	if len(runner.calls) != callCount {
 		t.Fatalf("idempotent mount reconciliation repeated an edit: %+v", runner.calls[callCount:])
+	}
+}
+
+func TestMigrationImportedRuntimeDiskRebindFailureBlocksFirstTarget(t *testing.T) {
+	fixture := newImportedRuntimeFixture(t)
+	runner := &importedRuntimeRunner{
+		instance: fixture.session.InstanceName,
+		config:   fixture.instanceConfig,
+	}
+	setup := &recordingSetupRunner{failRun: true}
+	b := Backend{
+		Runner: runner, SetupRunner: setup,
+		Stdout: io.Discard, Stderr: io.Discard,
+	}
+
+	_, _, err := b.startAndObserveRuntime(
+		context.Background(), fixture.session, []string{"PATH=/usr/bin:/bin"},
+	)
+	if err == nil || !strings.Contains(err.Error(), "rebind imported Lima attached disks") {
+		t.Fatalf("disk rebind failure=%v", err)
+	}
+	if fixture.session.RuntimeReady {
+		t.Fatal("failed imported disk rebind marked the runtime ready")
+	}
+	if len(runner.calls) != 3 ||
+		!reflect.DeepEqual(runner.calls[2].args, []string{
+			"start", "--tty=false", fixture.session.InstanceName,
+		}) || len(setup.calls) != 2 {
+		t.Fatalf("disk rebind failure calls runner=%+v setup=%+v", runner.calls, setup.calls)
+	}
+}
+
+func TestMigrationImportedRuntimeDiskRebindRejectsCrossBindingCollisions(t *testing.T) {
+	_, err := importedRuntimeDiskRebindCommand([]migration.DiskMountBinding{
+		{
+			DiskID: "disk_collision1", SourceGuestPath: "/mnt/lima-source-a",
+			DestinationGuestPath: "/mnt/lima-destination-a", FSType: "ext4",
+		},
+		{
+			DiskID: "disk_collision2", SourceGuestPath: "/mnt/lima-destination-a",
+			DestinationGuestPath: "/mnt/lima-destination-b", FSType: "ext4",
+		},
+	})
+	if err == nil || !strings.Contains(err.Error(), "source overlaps another destination") {
+		t.Fatalf("cross-binding collision error=%v", err)
 	}
 }
 

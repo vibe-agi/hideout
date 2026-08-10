@@ -145,12 +145,12 @@ package/evidence integration tests.
 The preflight now derives its search space from `go list ./...`, parses only the
 active target's test files, and owns both explicit migration names and complete
 migration-specific files plus the dedicated profile-state package. The checked-
-in inventory is therefore 229 sorted unique tests across 19 packages. The
+in inventory is now 231 sorted unique tests across 19 packages. The
 current generic-name and previously unlisted-package fixtures are retained as
 self-proving drift sentinels: reverting either half of the discovery rule makes
 preflight fail before any expensive fuzz, TLA+, package, or VM work begins.
 
-### Attached-disk first-boot fidelity closure
+### Attached-disk adoption and cold-start fidelity closure
 
 The first package-candidate real-Lima run exposed a destructive gap that the
 previous model and gate did not express. Staging wrote `additionalDisks` as a
@@ -203,6 +203,29 @@ identity and shape with its authenticated checkpoint before removing control or
 writing success evidence. A mutation fixture proves the durable stopped failure
 does not reboot or create evidence. The ordinary activated Lima configuration
 remains writable after this temporary verification boundary.
+
+The next package-candidate run then reached activation but failed its first
+ordinary `hideout run`: `/mnt/lima-migration-attached` was missing even though
+the isolated adoption receipt had proved that alias. An authenticated
+checkpoint resume reproduced `attached-alias=missing` without repeating source
+setup, export, or import materialization. This exposed a model/refinement gap,
+not an adoption failure: the old model treated durable adoption disk fidelity
+as if it also proved a per-boot mount-path invariant, while Lima reconstructs
+its attached-disk mounts during an ordinary cold start.
+
+The closure now separates those facts. After Lima starts and mounts each fresh
+destination disk, but before `RuntimeReady` or any target command, a fixed
+root-control command revalidates the authenticated marker and disk graph,
+requires the exact `findmnt` target, filesystem type, and read-write VFS and
+filesystem options, and idempotently restores the original-path symlink. It
+refuses a conflicting link, file, nonempty directory, missing mount, wrong
+filesystem, read-only mount, duplicate path, or cross-binding collision. The
+target identity never receives this authority, and a failure leaves the
+runtime unready. `MigrationAdoption.tla` now models stopped, booting, rebound,
+and first-target states; stopping clears per-boot mount readiness, so every
+cold-start trace must cross the rebind action again. Both focused TLC
+configurations and the Go call-order/failure regressions pass. The exact clean
+package real-Lima rerun remains the publication proof.
 
 A separate receipt-state audit found that a valid failed receipt was allowed to
 enter success finalization because request matching deliberately accepts both

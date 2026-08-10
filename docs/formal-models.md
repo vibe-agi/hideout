@@ -46,7 +46,7 @@ each has an explicit Manager plan mapping and behavioral parity tests.
 | `AttachReservation` | The attach-establishment reservation excludes reconciliation without the rejected lock cycle; reconcile scrubs only provably orphaned residue, cancellation removes only the run's own state, and daemon-crash residue stays scrubbable. |
 | `DisposableRecovery` | Disposable owner cleanup binds an exact lifecycle generation and cannot remove retained evidence before backend absence and metadata cleanup are proved. |
 | `MigrationBundle` | A stopped source is claimed only until an independent snapshot exists; authenticated checkpoints survive crash, unverified tails are discarded, only a complete footer publishes, cancellation never publishes, an explicitly retained partial remains non-importable until separately removed, tampering blocks import, and export never changes source content. |
-| `MigrationAdoption` | One immutable bundle may feed several destination operations; name claims remain exclusive; conflicts default to refusal; rename preserves the existing owner; replacement requires a separate confirmation and destructive effect followed by a fresh import plan; backend and profile application state are stage-owned and become visible only together at activation; staged objects never run; control/backend IDs are fresh; Safe Clone guest IDs are pairwise fresh; Exact Guest Restore preserves identity without a uniqueness claim; and imported authority stays disabled without approval. |
+| `MigrationAdoption` | One immutable bundle may feed several destination operations; name claims remain exclusive; conflicts default to refusal; rename preserves the existing owner; replacement requires a separate confirmation and destructive effect followed by a fresh import plan; backend and profile application state are stage-owned and become visible only together at activation; staged objects never run; control/backend IDs are fresh; Safe Clone guest IDs are pairwise fresh; Exact Guest Restore preserves identity without a uniqueness claim; imported authority stays disabled without approval; and every ordinary cold boot must prove its own attached-disk rebind before a target starts. |
 | `OperatorConfiguration` | Multiple clients share CAS revisions, canonical operation identity, leases, crash recovery, rollback evidence, and fail-closed terminal publication. |
 | `SecretTransition` | Live secret rotation proves route stage/probe/activate/prove/drain before the provider generation changes; daemon authority reset closes connections, exact committed or unchanged generations reconcile without replay, and mismatches remain recovery-required. |
 | `WorkloadObservation` / `WorkloadObservationLiveness` | The full boundary proves owner isolation, known loss, retention truncation, coverage degradation, exact cleanup, and observer tail-drain safety. A second configuration checks the same combined state machine's weak-fair transition/progress properties without multiplying the full safety graph. |
@@ -92,8 +92,12 @@ verification requires it, rollback clears it, and a destination cannot become
 runnable without it. The Go refinement binds that fact to the concrete attached-
 disk contract: authenticated filesystem type, explicit Lima `format: false`,
 fresh destination disk identity, and exact source-to-destination guest mount
-mapping. This prevents “staged bytes exist” from being mistaken for “the first
-boot will preserve and expose those bytes.”
+mapping. Durable adoption fidelity is deliberately separate from the model's
+per-boot `runtimeMountReady`: activation begins stopped, boot begins with that
+fact false, only the rebind action makes it true, target start requires it, and
+stop clears it. This prevents both “staged bytes exist” and “adoption once made
+the alias” from being mistaken for “this cold boot will expose those bytes at
+the authenticated path.”
 
 Imported-Lima first-start reconciliation does not add a transition before
 `active`: staging still has no host mounts and is never runnable or visible.
@@ -104,10 +108,12 @@ workspace mapping before it starts the stopped instance. This remains within
 Exact root-disk size, fail-closed image sentinel, and authenticated runtime-image
 provenance are concrete provider refinements covered by the closed migration
 test inventory; they are intentionally not abstracted as new TLA+ identities.
-Attached-disk filesystem and guest-path values are likewise concrete data, but
-their validated receipt is abstracted by `diskFidelityProved`; the real-Lima
-gate checks that the source path resolves to the fresh, non-formatting
-destination attachment before accepting data fidelity.
+Attached-disk filesystem and guest-path values are likewise concrete data. The
+adoption receipt establishes `diskFidelityProved`; a separate root-control
+check after each Lima start establishes `runtimeMountReady` only after exact
+mount target, filesystem type, read-write options, and alias destination all
+match. The real-Lima gate cold-starts the activated import and checks the
+original source path before accepting data fidelity.
 Likewise, installing the destination Lima control key is an atomic sub-action of
 the already modeled isolated adoption step: the staged guest remains stopped and
 networkless, completion requires the matching action receipt, and no imported

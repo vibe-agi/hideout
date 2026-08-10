@@ -35,6 +35,9 @@ VARIABLES phase,
           profileVisible,
           profileStateVisible,
           environmentVisible,
+          runtimePhase,
+          runtimeMountReady,
+          targetStarted,
           decision,
           daemonUp,
           crashCount,
@@ -49,7 +52,8 @@ vars ==
       authorityApproved, authorityEffective, staged, profileStateStaged,
       receiptValid, diskFidelityProved, runnable, profileVisible,
       profileStateVisible,
-      environmentVisible, decision, daemonUp,
+      environmentVisible, runtimePhase, runtimeMountReady, targetStarted,
+      decision, daemonUp,
       crashCount, stageEffects,
       adoptionEffects, commitEffects, replacementEffects>>
 
@@ -59,6 +63,7 @@ NoPolicy == "unset"
 ExternalOwner == "external-destination"
 
 Policies == {"safe-clone", "exact-guest-restore"}
+RuntimePhases == {"stopped", "booting", "ready"}
 Phases == {"draft", "planned", "claimed", "staged", "adopting",
            "adopted", "verified", "committed", "active",
            "rolling-back", "rolled-back", "blocked",
@@ -80,8 +85,20 @@ HasNameClaim(destination) ==
     nameOwner[requestedName[destination]] = destination
 
 ProfileStateVars == <<profileStateStaged, profileStateVisible>>
+\* Disk fidelity is durable adoption evidence. Runtime mount readiness is a
+\* separate per-boot fact and is cleared whenever the runtime stops.
+RuntimeVars == <<runtimePhase, runtimeMountReady, targetStarted>>
+AdoptionVars ==
+    <<phase, requestedName, policy, plannedPolicy, bundleDigest,
+      bundleValid, nameOwner, controlID, backendID, guestID,
+      authorityApproved, authorityEffective, staged, profileStateStaged,
+      receiptValid, diskFidelityProved, runnable, profileVisible,
+      profileStateVisible, environmentVisible, decision, daemonUp,
+      crashCount, stageEffects, adoptionEffects, commitEffects,
+      replacementEffects>>
 StableStageFacts ==
-    <<profileStateStaged, profileStateVisible, diskFidelityProved>>
+    <<profileStateStaged, profileStateVisible, diskFidelityProved,
+      runtimePhase, runtimeMountReady, targetStarted>>
 
 Init ==
     /\ phase = [destination \in Destinations |-> "draft"]
@@ -104,6 +121,9 @@ Init ==
     /\ profileVisible = [destination \in Destinations |-> FALSE]
     /\ profileStateVisible = [destination \in Destinations |-> FALSE]
     /\ environmentVisible = [destination \in Destinations |-> FALSE]
+    /\ runtimePhase = [destination \in Destinations |-> "stopped"]
+    /\ runtimeMountReady = [destination \in Destinations |-> FALSE]
+    /\ targetStarted = [destination \in Destinations |-> FALSE]
     /\ decision = [destination \in Destinations |-> "none"]
     /\ daemonUp = TRUE
     /\ crashCount = 0
@@ -278,6 +298,7 @@ StageDestination(destination) ==
           [profileStateStaged EXCEPT ![destination] = TRUE]
     /\ stageEffects' = [stageEffects EXCEPT ![destination] = @ + 1]
     /\ UNCHANGED <<profileStateVisible, diskFidelityProved>>
+    /\ UNCHANGED RuntimeVars
     /\ UNCHANGED <<requestedName, policy, plannedPolicy, bundleDigest,
                     bundleValid, nameOwner, controlID, backendID, guestID,
                     authorityApproved, authorityEffective, receiptValid,
@@ -316,6 +337,7 @@ FinishSafeClone(destination) ==
         /\ adoptionEffects' =
               [adoptionEffects EXCEPT ![destination] = @ + 1]
         /\ UNCHANGED ProfileStateVars
+        /\ UNCHANGED RuntimeVars
         /\ UNCHANGED <<requestedName, policy, plannedPolicy, bundleDigest,
                         bundleValid, nameOwner, controlID, backendID,
                         authorityApproved, authorityEffective, staged,
@@ -337,6 +359,7 @@ FinishExactRestore(destination) ==
     /\ adoptionEffects' =
           [adoptionEffects EXCEPT ![destination] = @ + 1]
     /\ UNCHANGED ProfileStateVars
+    /\ UNCHANGED RuntimeVars
     /\ UNCHANGED <<requestedName, policy, plannedPolicy, bundleDigest,
                     bundleValid, nameOwner, controlID, backendID,
                     authorityApproved, authorityEffective, staged,
@@ -396,6 +419,7 @@ Activate(destination) ==
           [authorityEffective EXCEPT
               ![destination] = authorityApproved[destination]]
     /\ UNCHANGED <<profileStateStaged, diskFidelityProved>>
+    /\ UNCHANGED RuntimeVars
     /\ UNCHANGED <<requestedName, policy, plannedPolicy, bundleDigest,
                     bundleValid, nameOwner, controlID, backendID, guestID,
                     authorityApproved, staged, receiptValid, decision,
@@ -444,6 +468,7 @@ Rollback(destination) ==
           [profileStateVisible EXCEPT ![destination] = FALSE]
     /\ environmentVisible' =
           [environmentVisible EXCEPT ![destination] = FALSE]
+    /\ UNCHANGED RuntimeVars
     /\ UNCHANGED <<requestedName, policy, plannedPolicy, bundleDigest,
                     bundleValid, authorityApproved, decision, daemonUp,
                     crashCount, stageEffects, adoptionEffects,
@@ -475,6 +500,55 @@ Restart ==
                     decision, crashCount, stageEffects, adoptionEffects,
 	                commitEffects, replacementEffects>>
 
+BeginRuntimeBoot(destination) ==
+    /\ daemonUp
+    /\ phase[destination] = "active"
+    /\ runnable[destination]
+    /\ runtimePhase[destination] = "stopped"
+    /\ runtimePhase' =
+          [runtimePhase EXCEPT ![destination] = "booting"]
+    /\ runtimeMountReady' =
+          [runtimeMountReady EXCEPT ![destination] = FALSE]
+    /\ targetStarted' = [targetStarted EXCEPT ![destination] = FALSE]
+    /\ UNCHANGED AdoptionVars
+
+FinishRuntimeDiskRebind(destination) ==
+    /\ daemonUp
+    /\ phase[destination] = "active"
+    /\ runnable[destination]
+    /\ diskFidelityProved[destination]
+    /\ runtimePhase[destination] = "booting"
+    /\ ~runtimeMountReady[destination]
+    /\ ~targetStarted[destination]
+    /\ runtimePhase' = [runtimePhase EXCEPT ![destination] = "ready"]
+    /\ runtimeMountReady' =
+          [runtimeMountReady EXCEPT ![destination] = TRUE]
+    /\ UNCHANGED targetStarted
+    /\ UNCHANGED AdoptionVars
+
+StartTarget(destination) ==
+    /\ daemonUp
+    /\ phase[destination] = "active"
+    /\ runnable[destination]
+    /\ diskFidelityProved[destination]
+    /\ runtimePhase[destination] = "ready"
+    /\ runtimeMountReady[destination]
+    /\ ~targetStarted[destination]
+    /\ targetStarted' = [targetStarted EXCEPT ![destination] = TRUE]
+    /\ UNCHANGED <<runtimePhase, runtimeMountReady>>
+    /\ UNCHANGED AdoptionVars
+
+StopRuntime(destination) ==
+    /\ daemonUp
+    /\ phase[destination] = "active"
+    /\ runtimePhase[destination] # "stopped"
+    /\ runtimePhase' =
+          [runtimePhase EXCEPT ![destination] = "stopped"]
+    /\ runtimeMountReady' =
+          [runtimeMountReady EXCEPT ![destination] = FALSE]
+    /\ targetStarted' = [targetStarted EXCEPT ![destination] = FALSE]
+    /\ UNCHANGED AdoptionVars
+
 Idle == UNCHANGED vars
 
 Next ==
@@ -496,6 +570,10 @@ Next ==
     \/ \E destination \in Destinations : Activate(destination)
     \/ \E destination \in Destinations : RequestRollback(destination)
     \/ \E destination \in Destinations : Rollback(destination)
+    \/ \E destination \in Destinations : BeginRuntimeBoot(destination)
+    \/ \E destination \in Destinations : FinishRuntimeDiskRebind(destination)
+    \/ \E destination \in Destinations : StartTarget(destination)
+    \/ \E destination \in Destinations : StopRuntime(destination)
     \/ Crash
     \/ Restart
     \/ Idle
@@ -559,6 +637,9 @@ TypeOK ==
     /\ profileVisible \in [Destinations -> BOOLEAN]
     /\ profileStateVisible \in [Destinations -> BOOLEAN]
     /\ environmentVisible \in [Destinations -> BOOLEAN]
+    /\ runtimePhase \in [Destinations -> RuntimePhases]
+    /\ runtimeMountReady \in [Destinations -> BOOLEAN]
+    /\ targetStarted \in [Destinations -> BOOLEAN]
     /\ decision \in
           [Destinations -> {"none", "commit", "rollback"}]
     /\ daemonUp \in BOOLEAN
@@ -687,6 +768,28 @@ StagedStateNeverRuns ==
 RunnableRequiresDiskFidelity ==
     \A destination \in Destinations :
         runnable[destination] => diskFidelityProved[destination]
+
+RuntimeActivityRequiresActiveDestination ==
+    \A destination \in Destinations :
+        runtimePhase[destination] # "stopped" =>
+            /\ phase[destination] = "active"
+            /\ runnable[destination]
+
+RuntimeMountReadyIffRebound ==
+    \A destination \in Destinations :
+        runtimeMountReady[destination] <=>
+            runtimePhase[destination] = "ready"
+
+RuntimeMountRequiresAdoptionFidelity ==
+    \A destination \in Destinations :
+        runtimeMountReady[destination] => diskFidelityProved[destination]
+
+TargetRequiresRuntimeDiskRebind ==
+    \A destination \in Destinations :
+        targetStarted[destination] =>
+            /\ runtimePhase[destination] = "ready"
+            /\ runtimeMountReady[destination]
+            /\ diskFidelityProved[destination]
 
 EveryDestinationEventuallyTerminal ==
     \A destination \in Destinations :

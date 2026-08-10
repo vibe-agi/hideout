@@ -22,7 +22,8 @@ The implementation adds a pure Go bundle layer, a durable Manager migration
 operation built on the existing plan/review/apply and operation-ledger patterns,
 and an optional backend migration provider. Lima is the first full-state provider;
 native remains a config-only harness. Two bounded TLA+ models cover export sealing
-and multi-destination adoption, with Go refinement tests and real Lima gates.
+and multi-destination adoption plus per-cold-start runtime mount readiness, with
+Go refinement tests and real Lima gates.
 
 ## Technical Context
 

@@ -792,6 +792,11 @@ func (b Backend) startAndObserveRuntime(ctx context.Context, session *backend.Se
 			return nil, nil, errors.Join(err, fmt.Errorf("retry existing Lima instance start: %w", retryErr))
 		}
 	}
+	if err := b.rebindImportedRuntimeAttachedDisks(
+		ctx, hostEnv, session,
+	); err != nil {
+		return nil, nil, fmt.Errorf("rebind imported Lima attached disks: %w", err)
+	}
 	session.RuntimeReady = true
 	var (
 		instance backend.RuntimeInstanceObservation

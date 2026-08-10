@@ -2446,7 +2446,7 @@ checked-in `scripts/gates/migration-tests.txt` inventory is sorted, unique, and
 fail-on-drift: the gate scans every active repository package, discovers every
 top-level test containing `Migration`, `Migrate`, or `ConfigOnly`, and also owns
 every test in a migration-specific test file or the dedicated profile-state
-package. The resulting 229-test, 19-package closed set prevents both a newly
+package. The resulting 231-test, 19-package closed set prevents both a newly
 introduced package and a generically named safety test from escaping because
 the old inventory did not already mention it. The separate sorted
 `scripts/gates/migration-hostile-tests.txt` matrix requires exactly nine
@@ -2491,9 +2491,12 @@ machine/SSH identity, and pre-export root/attached/profile/record hashes. The ga
   proves protected passphrase re-unlock and checkpoint resume, kills its fresh
   daemon again during adoption, and proves startup recovery completes without
   another bundle secret;
-- runs all four destinations and verifies root-disk, attached-disk, and all four
-  profile application-state fixtures while proving cache exclusion and generated
-  destination profile state;
+- cold-starts all four destinations, then stops and cold-starts the first Safe
+  Clone a second time; on every run it proves the per-boot root-control rebind
+  completed before the first target and verifies root-disk, the exact original
+  attached-disk path, and all four profile application-state fixtures while
+  proving cache exclusion, generated destination profile state, and stable
+  guest identity across the repeated boot;
 - proves all control and backend identities are fresh and pairwise distinct;
 - proves all three Safe Clone machine IDs and SSH host keys are fresh and pairwise
   distinct, while Exact Guest Restore preserves both;

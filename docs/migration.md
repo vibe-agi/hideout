@@ -197,9 +197,13 @@ kernel mount inventory reports read-only and the host-side staged-file identity
 remains unchanged, then binds the original guest mount path to that fresh
 destination mount and receipts the exact mapping. The ordinary activated Lima
 environment regains its configured read-write data-disk access only after
-verification. An
-absent, occupied, conflicting, writable, unsupported, changed, or unproved path
-fails before activation rather than hiding files, changing data, or guessing.
+verification. Because Lima rebuilds attached-disk mounts on cold boot, every
+ordinary start separately proves the exact fresh mount path, filesystem type,
+and read-write state and then idempotently restores the authenticated original
+path through Hideout's root-control setup channel before the runtime is marked
+ready or a target command starts. An absent, occupied, conflicting, mistyped,
+wrong-mode, changed, or unproved path fails closed rather than hiding files,
+changing data, or guessing; the target never receives this setup authority.
 
 ## Encryption and Local Trust
 
@@ -245,7 +249,7 @@ The portable, schema, fuzz, refinement, and no-side-effect inventory gate is:
 scripts/gates/migration.sh
 ```
 
-It fail-closes on drift from the checked-in 229-test migration inventory across
+It fail-closes on drift from the checked-in 231-test migration inventory across
 19 packages, the separate nine-category hostile-input matrix, and an exact
 13-cut durable restart inventory covering every export/import boundary listed
 in the feature quickstart. Discovery scans every active repository package and
@@ -270,12 +274,14 @@ negative controls, one unchanged encrypted bundle, three Safe Clone imports,
 one Exact Guest Restore import, materialization/adoption daemon crash recovery,
 fail-closed missing-executor compatibility, terminal receipts, identity
 separation, exact original attached-disk path, explicit `format: false` plus
-filesystem type, host-workspace exclusion, and source immutability. After export it
-retains a candidate-bound, secret-authenticated checkpoint so a post-export
-failure can resume without repeating source setup and export; invalid or stale
-checkpoints fail closed. Its current physical-host limitation is recorded in
-its evidence; cross-computer acceptance remains required before claiming broad
-portability.
+filesystem type, ordinary cold-start rebind before the first target, host-
+workspace exclusion, source immutability, and a second cold start of the first
+Safe Clone to prove the binding is per-boot rather than an adoption leftover.
+After export it retains a
+candidate-bound, secret-authenticated checkpoint so a post-export failure can
+resume without repeating source setup and export; invalid or stale checkpoints
+fail closed. Its current physical-host limitation is recorded in its evidence;
+cross-computer acceptance remains required before claiming broad portability.
 
 Migration performance qualification is separately deferred. Until its quiet-host
 process-scoped gate passes, Hideout makes no migration CPU, I/O, peak-memory,

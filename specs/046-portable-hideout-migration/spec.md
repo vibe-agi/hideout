@@ -526,6 +526,15 @@ effects, confirmation requirements, and terminal receipts.
   cannot classify and transform truthfully MUST remain opaque guest-disk data;
   the import review MUST disclose that they may be duplicated or fail after a
   move rather than claim they were reset.
+- **FR-053**: Every ordinary cold start of an activated imported environment
+  with attached disks MUST, after the fresh destination disks are mounted and
+  before the runtime is marked ready or any target command starts, prove each
+  authenticated destination mount's exact path, filesystem type, and
+  read-write state and idempotently restore its authenticated original guest
+  path through a setup identity separate from the target. A missing,
+  conflicting, read-only, mistyped, or unmounted binding MUST fail closed, and
+  this proof MUST repeat after every stop/start cycle rather than relying on
+  the one-time adoption receipt.
 
 ### Key Entities *(include if feature involves data)*
 

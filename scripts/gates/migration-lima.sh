@@ -67,20 +67,33 @@ migration_guest_verify_script='
   set -- /etc/ssh/ssh_host_*_key.pub
   [ -e "$1" ]
   cat "$@" | sha256sum | sed "s/ .*//"
-  [ -L /mnt/lima-migration-attached ]
-  [ -f /mnt/lima-migration-attached/migration-attached-proof ]
+  printf "attached-alias="
+  if [ -L /mnt/lima-migration-attached ]; then
+    attached_destination="$(readlink /mnt/lima-migration-attached)"
+    printf "symlink:%s\n" "$attached_destination"
+  elif [ -e /mnt/lima-migration-attached ]; then
+    printf "not-symlink\n"
+    exit 71
+  else
+    printf "missing\n"
+    exit 72
+  fi
+  [ -d "$attached_destination" ]
+  [ "$(findmnt -rn -o TARGET --target "$attached_destination")" = "$attached_destination" ]
+  [ -f "$attached_destination/migration-attached-proof" ]
   printf "attached="
-  cat /mnt/lima-migration-attached/migration-attached-proof
+  cat "$attached_destination/migration-attached-proof"
   [ ! -e /workspace/host-only.txt ]
 '
 
 migration_guest_fidelity_output() {
   local output_path="$1" root_value="$2" attached_value="$3"
   local home_value="$4" config_value="$5" data_value="$6"
-  local browser_value="$7" host_value="$8"
+  local browser_value="$7" host_value="$8" attached_destination="$9"
   [ -f "$output_path" ] && [ ! -L "$output_path" ] || return 1
   grep -Fxq "root=$root_value" "$output_path" &&
     grep -Fxq "attached=$attached_value" "$output_path" &&
+    grep -Fxq "attached-alias=symlink:$attached_destination" "$output_path" &&
     grep -Fxq "profile-home=$home_value" "$output_path" &&
     grep -Fxq "profile-config=$config_value" "$output_path" &&
     grep -Fxq "profile-data=$data_value" "$output_path" &&
@@ -505,6 +518,16 @@ migration_lima_safe_attached_disk_config() {
       $disk.fsType == "ext4"
     end
   ' "$inventory_path" >/dev/null
+}
+
+migration_lima_attached_disk_name() {
+  local inventory_path="$1" instance="$2"
+  jq -s -r -e --arg instance "$instance" '
+    [.[] | select(.name == $instance)] as $matches |
+    select(($matches | length) == 1) |
+    $matches[0].config.additionalDisks[0].name |
+    select(type == "string" and test("^disk_[a-z0-9_-]+$"))
+  ' "$inventory_path"
 }
 
 validate_migration_lima_summary() {
@@ -975,7 +998,8 @@ if [ "$preflight_only" -eq 1 ]; then
       ;;
   esac
   [[ "$migration_guest_verify_script" == *'[ -L /mnt/lima-migration-attached ]'* ]] &&
-    [[ "$migration_guest_verify_script" == *'/mnt/lima-migration-attached/migration-attached-proof'* ]] ||
+    [[ "$migration_guest_verify_script" == *'readlink /mnt/lima-migration-attached'* ]] &&
+    [[ "$migration_guest_verify_script" == *"\"\$attached_destination/migration-attached-proof\""* ]] ||
     fail "guest fidelity judge does not prove the authenticated source mount path"
   summary_fixture="$(migration_lima_summary_fixture)"
   printf '%s\n' "$summary_fixture" | validate_migration_lima_summary ||
@@ -1045,6 +1069,7 @@ if [ "$preflight_only" -eq 1 ]; then
   fidelity_data="data-proof"
   fidelity_browser="browser-proof"
   fidelity_host="host-content-must-stay-local"
+  fidelity_attached_destination="/mnt/lima-disk_destination1234"
   printf '%s\n' \
     "root=$fidelity_root" \
     "profile-home=$fidelity_home" \
@@ -1054,18 +1079,20 @@ if [ "$preflight_only" -eq 1 ]; then
     'profile-cache=excluded' \
     'profile-generated=regenerated' \
     'machine=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' \
+    "attached-alias=symlink:$fidelity_attached_destination" \
     "attached=$fidelity_attached" \
     >"$fidelity_fixture"
   migration_guest_fidelity_output \
     "$fidelity_fixture" "$fidelity_root" "$fidelity_attached" \
     "$fidelity_home" "$fidelity_config" "$fidelity_data" \
-    "$fidelity_browser" "$fidelity_host" || {
+    "$fidelity_browser" "$fidelity_host" \
+    "$fidelity_attached_destination" || {
     find "$diagnostic_fixture" -depth -delete
     fail "valid three-class fidelity fixture was rejected"
   }
   for fidelity_judge in \
     root attached profile-home profile-config profile-data profile-browser \
-    profile-cache profile-generated; do
+    profile-cache profile-generated attached-alias; do
     awk -v prefix="$fidelity_judge=" '
       index($0, prefix) == 1 { print prefix "mutated"; next }
       { print }
@@ -1073,7 +1100,8 @@ if [ "$preflight_only" -eq 1 ]; then
     if migration_guest_fidelity_output \
       "$fidelity_fixture.mutated" "$fidelity_root" "$fidelity_attached" \
       "$fidelity_home" "$fidelity_config" "$fidelity_data" \
-      "$fidelity_browser" "$fidelity_host"; then
+      "$fidelity_browser" "$fidelity_host" \
+      "$fidelity_attached_destination"; then
       find "$diagnostic_fixture" -depth -delete
       fail "fidelity judge accepted mutated $fidelity_judge evidence"
     fi
@@ -1083,7 +1111,8 @@ if [ "$preflight_only" -eq 1 ]; then
   if migration_guest_fidelity_output \
     "$fidelity_fixture.mutated" "$fidelity_root" "$fidelity_attached" \
     "$fidelity_home" "$fidelity_config" "$fidelity_data" \
-    "$fidelity_browser" "$fidelity_host"; then
+    "$fidelity_browser" "$fidelity_host" \
+    "$fidelity_attached_destination"; then
     find "$diagnostic_fixture" -depth -delete
     fail "fidelity judge accepted leaked host-workspace evidence"
   fi
@@ -2449,6 +2478,63 @@ wait_for_resume_action() {
   done
 }
 
+capture_import_guest_diagnostics() {
+  local instance="$1" label="$2"
+  local ssh_config="" ssh_host="" source bytes
+  ssh_config="$(lima list --format '{{.SSHConfigFile}}' "$instance" 2>/dev/null || true)"
+  case "$ssh_config" in
+    "$lima_home/$instance"/*) ;;
+    *) ssh_config="" ;;
+  esac
+  if [ -n "$ssh_config" ] && [ -f "$ssh_config" ] && [ ! -L "$ssh_config" ]; then
+    ssh_host="$(awk '$1 == "Host" && NF == 2 {print $2; exit}' "$ssh_config")"
+    [[ "$ssh_host" =~ ^lima-[A-Za-z0-9._-]+$ ]] || ssh_host=""
+  fi
+  if [ -n "$ssh_host" ]; then
+    ssh \
+      -F "$ssh_config" \
+      -o BatchMode=yes \
+      -o User=root \
+      -o ControlMaster=no \
+      -o ControlPath=none \
+      -o ConnectionAttempts=1 \
+      -o ConnectTimeout=10 \
+      "$ssh_host" -- sh -s \
+      >"$scratch/guest-diagnostics-$label.txt" 2>&1 <<'GUESTDIAG' || true
+set +e
+printf '%s\n' '## mount paths'
+for path in /mnt /mnt/lima-*; do
+  [ -e "$path" ] || [ -L "$path" ] || continue
+  ls -ld -- "$path"
+  if [ -L "$path" ]; then
+    printf 'readlink=%s\n' "$(readlink "$path" 2>/dev/null)"
+  fi
+done
+printf '%s\n' '## mount inventory'
+findmnt -rn -o SOURCE,TARGET,FSTYPE,VFS-OPTIONS,FS-OPTIONS 2>&1
+printf '%s\n' '## block inventory'
+lsblk -o NAME,PATH,TYPE,FSTYPE,LABEL,RO,SIZE,MOUNTPOINTS 2>&1
+printf '%s\n' '## cloud-init status'
+cloud-init status --long 2>&1
+printf '%s\n' '## lima boot journal'
+journalctl --no-pager -b -u cloud-final.service -u cloud-init.service -u cloud-config.service -n 300 2>&1
+GUESTDIAG
+  fi
+  for source in \
+    "$lima_home/$instance/serial.log" \
+    "$lima_home/$instance/ha.stderr.log" \
+    "$lima_home/$instance/ha.stdout.log"; do
+    [ -f "$source" ] && [ ! -L "$source" ] || continue
+    bytes="$(file_bytes "$source" 2>/dev/null || printf '0')"
+    case "$bytes" in
+      "" | *[!0-9]*) continue ;;
+    esac
+    [ "$bytes" -le 1048576 ] || continue
+    cp "$source" "$scratch/guest-$(basename "$source")-$label"
+    chmod 0600 "$scratch/guest-$(basename "$source")-$label"
+  done
+}
+
 verify_import() {
   local store="$1" workspace="$2" label="$3"
   local inspect_path="$scratch/environment-$label.txt"
@@ -2456,6 +2542,7 @@ verify_import() {
   local inventory_path="$scratch/lima-inventory-$label.json"
   local inventory_error_path="$scratch/lima-inventory-$label.err"
   local environment_id instance inspected_profile destination_profile profile_path
+  local attached_disk_name attached_destination
   local machine ssh_digest
   hideout_for_store "$store" env inspect "$source_name" >"$inspect_path" 2>&1 ||
     return 1
@@ -2468,21 +2555,28 @@ verify_import() {
     >"$inventory_path" 2>"$inventory_error_path" || return 1
   migration_lima_stopped_inventory "$inventory_path" "$instance" || return 1
   migration_lima_safe_attached_disk_config "$inventory_path" "$instance" || return 1
+  attached_disk_name="$(migration_lima_attached_disk_name \
+    "$inventory_path" "$instance")" || return 1
+  attached_destination="/mnt/lima-$attached_disk_name"
   destination_profile="$(migration_destination_profile \
     "$store" "$environment_id" "$source_name")" || return 1
   [ "$destination_profile" = "$inspected_profile" ] || return 1
   profile_path="$store/profiles/$destination_profile/profile.json"
   migration_guest_profile_authorized "$profile_path" || return 1
   # shellcheck disable=SC2016 # evaluated by the guest shell
-  hideout_for_store "$store" run \
+  if ! hideout_for_store "$store" run \
     --profile "$destination_profile" --env "$source_name" \
     --workspace "$workspace" --terminal never -- \
     sh -c "$migration_guest_verify_script" hideout-migration-verify \
-    >"$run_path" 2>&1 || return 1
+    >"$run_path" 2>&1; then
+    capture_import_guest_diagnostics "$instance" "$label"
+    return 1
+  fi
   migration_guest_fidelity_output \
     "$run_path" "$root_canary" "$attached_canary" \
     "$profile_home_canary" "$profile_config_canary" \
-    "$profile_data_canary" "$profile_browser_canary" "$host_canary" || return 1
+    "$profile_data_canary" "$profile_browser_canary" "$host_canary" \
+    "$attached_destination" || return 1
   machine="$(sed -n 's/^machine=//p' "$run_path" | tail -1 | tr -d '[:space:]')"
   ssh_digest="$(sed -n 's/^ssh=//p' "$run_path" | tail -1 | tr -d '[:space:]')"
   printf '%s\n' "$machine" | grep -Eq '^[a-f0-9]{32}$' || return 1
@@ -2497,6 +2591,11 @@ mark_gate_stage safe-one-import-and-verify
 import_bundle "$safe_one_store" safe-one safe || fail "first Safe Clone import"
 verify_import "$safe_one_store" "$safe_one_workspace" safe-one ||
   fail "verify first Safe Clone destination"
+mark_gate_stage safe-one-cold-restart
+verify_import "$safe_one_store" "$safe_one_workspace" safe-one-restart ||
+  fail "verify first Safe Clone destination after a second cold start"
+cmp -s "$scratch/identity-safe-one" "$scratch/identity-safe-one-restart" ||
+  fail "first Safe Clone identity changed across the cold-start rebind proof"
 mark_gate_stage safe-two-import-and-verify
 import_bundle "$safe_two_store" safe-two safe || fail "second Safe Clone import"
 verify_import "$safe_two_store" "$safe_two_workspace" safe-two ||

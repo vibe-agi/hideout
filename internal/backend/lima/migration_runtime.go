@@ -108,6 +108,133 @@ func expectedImportedRuntimeMounts(session *backend.Session) ([]mount, error) {
 	return expected, nil
 }
 
+// rebindImportedRuntimeAttachedDisks closes the adoption-to-runtime refinement:
+// isolated adoption receipts the authenticated old-path -> fresh-path mapping,
+// while every ordinary cold start must re-establish and verify that mapping
+// after Lima has mounted the fresh destination disks and before a target can
+// run. A fixed root-control command owns the mutation; target commands never
+// inherit this authority.
+func (b Backend) rebindImportedRuntimeAttachedDisks(
+	ctx context.Context,
+	hostEnv []string,
+	session *backend.Session,
+) error {
+	state, err := loadImportedLimaRuntimeState(hostEnv, session)
+	if err != nil || state == nil {
+		return err
+	}
+	command, err := importedRuntimeDiskRebindCommand(
+		state.normalized.AttachedDiskMounts,
+	)
+	if err != nil || len(command) == 0 {
+		return err
+	}
+	bootSession := *session
+	bootSession.PrivilegedSetupRequired = true
+	return b.runSetupCommand(
+		ctx,
+		&bootSession,
+		setupCategoryBoot,
+		"/",
+		[]string{
+			"PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+		},
+		command,
+		nil,
+	)
+}
+
+func importedRuntimeDiskRebindCommand(
+	bindings []migration.DiskMountBinding,
+) ([]string, error) {
+	if err := validateImportedRuntimeDiskMountBindings(bindings); err != nil {
+		return nil, err
+	}
+	if len(bindings) == 0 {
+		return nil, nil
+	}
+	const script = `set -eu
+[ "$#" -gt 0 ]
+[ $(( $# % 3 )) -eq 0 ]
+[ -d /mnt ]
+[ ! -L /mnt ]
+while [ "$#" -gt 0 ]; do
+  source=$1
+  destination=$2
+  filesystem=$3
+  shift 3
+  [ -d "$destination" ]
+  [ ! -L "$destination" ]
+  [ "$(findmnt -rn -o TARGET --target "$destination")" = "$destination" ]
+  [ "$(findmnt -rn -o FSTYPE --target "$destination")" = "$filesystem" ]
+  vfs_options=",$(findmnt -rn -o VFS-OPTIONS --target "$destination"),"
+  fs_options=",$(findmnt -rn -o FS-OPTIONS --target "$destination"),"
+  case "$vfs_options" in *,rw,*) ;; *) exit 73 ;; esac
+  case "$vfs_options" in *,ro,*) exit 73 ;; esac
+  case "$fs_options" in *,rw,*) ;; *) exit 73 ;; esac
+  case "$fs_options" in *,ro,*) exit 73 ;; esac
+  if [ "$source" = "$destination" ]; then
+    continue
+  fi
+  if [ -L "$source" ]; then
+    [ "$(readlink "$source")" = "$destination" ]
+    continue
+  fi
+  if [ -e "$source" ]; then
+    [ -d "$source" ]
+    rmdir -- "$source"
+  fi
+  ln -s -- "$destination" "$source"
+  [ -L "$source" ]
+  [ "$(readlink "$source")" = "$destination" ]
+done
+`
+	command := []string{
+		"sh", "-c", script, "hideout-migration-runtime-disk-rebind",
+	}
+	for _, binding := range bindings {
+		command = append(
+			command,
+			binding.SourceGuestPath,
+			binding.DestinationGuestPath,
+			binding.FSType,
+		)
+	}
+	return command, nil
+}
+
+func validateImportedRuntimeDiskMountBindings(
+	bindings []migration.DiskMountBinding,
+) error {
+	if len(bindings) > 256 {
+		return errors.New("imported Lima runtime has too many attached-disk mount bindings")
+	}
+	sources := make(map[string]struct{}, len(bindings))
+	destinations := make(map[string]struct{}, len(bindings))
+	for _, binding := range bindings {
+		if binding.Validate() != nil {
+			return errors.New("imported Lima runtime attached-disk mount binding is invalid")
+		}
+		if _, duplicate := sources[binding.SourceGuestPath]; duplicate {
+			return errors.New("imported Lima runtime attached-disk source path is duplicated")
+		}
+		if _, duplicate := destinations[binding.DestinationGuestPath]; duplicate {
+			return errors.New("imported Lima runtime attached-disk destination path is duplicated")
+		}
+		sources[binding.SourceGuestPath] = struct{}{}
+		destinations[binding.DestinationGuestPath] = struct{}{}
+	}
+	for _, binding := range bindings {
+		if binding.SourceGuestPath == binding.DestinationGuestPath {
+			continue
+		}
+		if _, collision := destinations[binding.SourceGuestPath]; collision {
+			return errors.New("imported Lima runtime attached-disk source overlaps another destination")
+		}
+	}
+	return nil
+}
+
 func loadImportedLimaRuntimeState(
 	hostEnv []string,
 	session *backend.Session,
@@ -184,6 +311,9 @@ func validateImportedLimaRuntimeMarker(
 	}
 	if len(value.AttachedDiskMounts) != len(value.AttachedDiskHandles) {
 		return errors.New("imported Lima runtime marker attached-disk mount closure is invalid")
+	}
+	if err := validateImportedRuntimeDiskMountBindings(value.AttachedDiskMounts); err != nil {
+		return err
 	}
 	mountHandles := make([]migration.OpaqueID, len(value.AttachedDiskMounts))
 	for index, binding := range value.AttachedDiskMounts {
