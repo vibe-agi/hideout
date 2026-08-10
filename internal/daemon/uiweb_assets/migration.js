@@ -29,6 +29,11 @@
   const CONTROL_PATTERN =
     /[\u0000-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]/u;
   const TERMINAL = new Set(["complete", "cancelled", "rolled-back", "failed"]);
+  const PROGRESS_REFRESH_PHASES = new Set([
+    "claiming", "snapshotting", "writing", "sealing", "materializing",
+    "preparing-secrets", "adopting", "verifying", "committing",
+    "cancelling", "rolling-back"
+  ]);
   const PHASES = new Set([
     "draft", "validating", "awaiting-confirmation", "claiming",
     "snapshotting", "writing", "sealing", "materializing",
@@ -149,6 +154,22 @@
       const known = previous.get(value.operationId);
       return clone(known && known.revision > value.revision ? known : value);
     });
+  }
+
+  /** @param {Object} snapshot */
+  function progressRefreshRequired(snapshot) {
+    // Durable phases cover active work discovered at seed time. Background
+    // status closes the queued/running race before the first phase transition.
+    const activeOperation = operations(snapshot).some((operation) =>
+      PROGRESS_REFRESH_PHASES.has(operation.state) &&
+      !operation.recovery.required
+    );
+    if (activeOperation) return true;
+    return (snapshot && snapshot.background || []).some((entry) =>
+      entry &&
+      String(entry.op || "").startsWith("migration-") &&
+      ["queued", "running"].includes(String(entry.status || ""))
+    );
   }
 
   /** @param {number} value */
@@ -585,6 +606,7 @@
     validOperation,
     operations,
     mergeOperations,
+    progressRefreshRequired,
     bytes,
     duration,
     nextAction,

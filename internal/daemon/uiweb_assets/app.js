@@ -60,6 +60,10 @@
   let migrationRefreshError = "";
   let migrationPollTimer = null;
   let migrationPollLoading = false;
+  // A snapshot may finish after a newer SSE request arrives. Monotonic
+  // generations keep that newer demand pending instead of clearing it.
+  let migrationRefreshRequest = 0;
+  let migrationRefreshCompleted = 0;
   let seedRequest = 0;
   let seedLoading = false;
   let reconnectTimer = null;
@@ -1110,6 +1114,7 @@
     } else {
       values.unshift(operation);
     }
+    scheduleMigrationPoll();
   }
 
   /** @param {Object} view */
@@ -1750,7 +1755,7 @@
         ], "seeding"),
         text("The durable operation continues even if this browser dialog closes.", "muted")
       ]);
-      pollMigrationSnapshot();
+      requestMigrationRefresh();
     } catch {
       if (requestID !== migrationRequest || migrationFlow !== flow) return;
       flow.stage = "error";
@@ -2084,13 +2089,18 @@
 
   function renderMigration() {
     const values = root.Migration.operations(state.snapshot);
+    const progressRefresh = root.Migration.progressRefreshRequired(
+      state.snapshot
+    );
     const container = element("div", "migration-console");
     const toolbar = element("div", "config-toolbar");
     const status = element("p", "muted");
     status.textContent = safeText(
       migrationRefreshError ?
         `${migrationRefreshError}; last verified migration state is retained.` :
-        "Progress refreshes from the authenticated Manager snapshot every two seconds."
+        progressRefresh ?
+          "Active migration progress refreshes from the authenticated Manager every two seconds." :
+          "Migration refresh is event-triggered while idle; periodic refresh starts only for active work."
     );
     const actions = element("div", "row-actions");
     const exportButton = element("button");
@@ -2177,20 +2187,46 @@
     bodies.migration.replaceChildren(container);
   }
 
+  /** @param {boolean} clearRequest */
+  function cancelMigrationPoll(clearRequest) {
+    if (migrationPollTimer !== null) {
+      window.clearTimeout(migrationPollTimer);
+      migrationPollTimer = null;
+    }
+    if (clearRequest) migrationRefreshCompleted = migrationRefreshRequest;
+  }
+
+  function migrationPollRequired() {
+    return Boolean(
+      state &&
+      root.Client.hasCredential() &&
+      root.State.canMutate(state) &&
+      (migrationRefreshRequest > migrationRefreshCompleted ||
+       root.Migration.progressRefreshRequired(state.snapshot))
+    );
+  }
+
   function scheduleMigrationPoll() {
-    if (migrationPollTimer !== null) window.clearTimeout(migrationPollTimer);
+    cancelMigrationPoll(false);
+    if (!migrationPollRequired()) return;
     migrationPollTimer = window.setTimeout(() => {
       migrationPollTimer = null;
       pollMigrationSnapshot();
     }, 2000);
   }
 
+  function requestMigrationRefresh() {
+    migrationRefreshRequest++;
+    pollMigrationSnapshot();
+  }
+
   async function pollMigrationSnapshot() {
-    if (migrationPollLoading || !state || !root.Client.hasCredential()) {
+    if (migrationPollLoading || !migrationPollRequired()) {
       scheduleMigrationPoll();
       return;
     }
     migrationPollLoading = true;
+    const refreshRequest = migrationRefreshRequest;
     try {
       const snapshot = await root.Client.snapshot();
       if (snapshot.instanceId !== state.instanceId ||
@@ -2200,6 +2236,10 @@
       }
       state.snapshot.migrations = root.Migration.mergeOperations(
         state.snapshot.migrations || [], snapshot.migrations || []
+      );
+      migrationRefreshCompleted = Math.max(
+        migrationRefreshCompleted,
+        refreshRequest
       );
       migrationRefreshError = "";
       renderAll();
@@ -3209,6 +3249,7 @@
         cancelReconnect(true);
         root.State.streamConnected(state);
         renderAll();
+        scheduleMigrationPoll();
       },
       event: (event) => {
         const result = root.State.applyEvent(state, event);
@@ -3223,6 +3264,12 @@
         }
         if (["activity", "coverage", "risk"].includes(event.kind)) {
           loadDetails();
+        }
+        if (event.kind === "background" &&
+            String(event.payload && event.payload.op || "").startsWith(
+              "migration-"
+            )) {
+          requestMigrationRefresh();
         }
       },
       error: (reason) => {
@@ -3241,6 +3288,7 @@
     const automatic = Boolean(options.automatic);
     if (!automatic) reconnectAttempt = 0;
     cancelReconnect(false);
+    cancelMigrationPoll(false);
     const requestID = ++seedRequest;
     if (stream) {
       stream.close();
@@ -3265,6 +3313,7 @@
       const snapshot = await root.Client.snapshot();
       if (requestID !== seedRequest) return;
       state = root.State.reseed(state, snapshot);
+      migrationRefreshCompleted = migrationRefreshRequest;
       seedLoading = false;
       syncSessionScope();
       details = emptyDetails();
@@ -3429,10 +3478,7 @@
   });
   root.Client.onAuthorityLost((authority) => {
     cancelReconnect(true);
-    if (migrationPollTimer !== null) {
-      window.clearTimeout(migrationPollTimer);
-      migrationPollTimer = null;
-    }
+    cancelMigrationPoll(true);
     seedRequest++;
     seedLoading = false;
     if (stream) {

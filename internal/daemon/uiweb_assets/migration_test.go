@@ -168,10 +168,61 @@ function operation(id,revision,completed) {
 const current = operation("op_migration_browser001",4,4096);
 const stale = operation("op_migration_browser001",3,2048);
 const merged = migration.mergeOperations([current],[stale]);
+const waiting = operation("op_migration_browser002",1,0);
+waiting.state = "awaiting-confirmation";
+const recovery = operation("op_migration_browser003",1,1024);
+recovery.state = "recoverable-failure";
+recovery.recovery = {
+  required:true,
+  code:"migration.secret_input.required",
+  allowedActions:["resume"],
+  nextAction:"Provide the bundle passphrase to resume."
+};
+const terminal = operation("op_migration_browser004",2,4096);
+terminal.state = "complete";
+const autonomousPhases = [
+  "claiming","snapshotting","writing","sealing","materializing",
+  "preparing-secrets","adopting","verifying","committing",
+  "cancelling","rolling-back"
+];
+const waitingPhases = ["draft","validating","awaiting-confirmation"];
 JSON.stringify({
   valid:migration.validOperation(current),
   view:migration.operationView(current),
-  merged:merged[0]
+  merged:merged[0],
+  refresh:{
+    empty:migration.progressRefreshRequired({migrations:[]}),
+    active:migration.progressRefreshRequired({migrations:[current]}),
+    waiting:migration.progressRefreshRequired({migrations:[waiting]}),
+    recovery:migration.progressRefreshRequired({migrations:[recovery]}),
+    terminal:migration.progressRefreshRequired({migrations:[terminal]}),
+    queued:migration.progressRefreshRequired({
+      migrations:[waiting],
+      background:[{op:"migration-export",status:"queued"}]
+    }),
+    running:migration.progressRefreshRequired({
+      migrations:[],
+      background:[{op:"migration-import",status:"running"}]
+    }),
+    complete:migration.progressRefreshRequired({
+      migrations:[],
+      background:[{op:"migration-export",status:"complete"}]
+    }),
+    unrelated:migration.progressRefreshRequired({
+      migrations:[],
+      background:[{op:"environment-stop",status:"running"}]
+    }),
+    allAutonomous:autonomousPhases.every((phase, index) => {
+      const candidate = operation("op_migration_active"+index,1,0);
+      candidate.state = phase;
+      return migration.progressRefreshRequired({migrations:[candidate]});
+    }),
+    anyWaiting:waitingPhases.some((phase, index) => {
+      const candidate = operation("op_migration_waiting"+index,1,0);
+      candidate.state = phase;
+      return migration.progressRefreshRequired({migrations:[candidate]});
+    })
+  }
 });
 `)
 	if err != nil {
@@ -193,6 +244,19 @@ JSON.stringify({
 				Completed uint64 `json:"completedLogicalBytes"`
 			} `json:"progress"`
 		} `json:"merged"`
+		Refresh struct {
+			Empty         bool `json:"empty"`
+			Active        bool `json:"active"`
+			Waiting       bool `json:"waiting"`
+			Recovery      bool `json:"recovery"`
+			Terminal      bool `json:"terminal"`
+			Queued        bool `json:"queued"`
+			Running       bool `json:"running"`
+			Complete      bool `json:"complete"`
+			Unrelated     bool `json:"unrelated"`
+			AllAutonomous bool `json:"allAutonomous"`
+			AnyWaiting    bool `json:"anyWaiting"`
+		} `json:"refresh"`
 	}
 	if err := json.Unmarshal([]byte(value.String()), &proof); err != nil {
 		t.Fatal(err)
@@ -202,7 +266,11 @@ JSON.stringify({
 		proof.View.Components != "2 / total unknown" ||
 		proof.View.ETA != "unknown" || proof.View.CurrentItem == "" ||
 		!strings.Contains(proof.View.Next, "encrypted bundle") ||
-		proof.Merged.Revision != 4 || proof.Merged.Progress.Completed != 4096 {
+		proof.Merged.Revision != 4 || proof.Merged.Progress.Completed != 4096 ||
+		proof.Refresh.Empty || !proof.Refresh.Active || proof.Refresh.Waiting ||
+		proof.Refresh.Recovery || proof.Refresh.Terminal || !proof.Refresh.Queued ||
+		!proof.Refresh.Running || proof.Refresh.Complete || proof.Refresh.Unrelated ||
+		!proof.Refresh.AllAutonomous || proof.Refresh.AnyWaiting {
 		t.Fatalf("browser migration projection drifted: %+v", proof)
 	}
 }
@@ -344,6 +412,13 @@ func TestBrowserMigrationNeverUsesURLOrBrowserStorageForSecrets(t *testing.T) {
 		`password.type = "password"`,
 		`password.value = ""`,
 		`secretInputHandle`,
+		`root.Migration.progressRefreshRequired(state.snapshot)`,
+		`migrationRefreshRequest > migrationRefreshCompleted`,
+		`migrationRefreshCompleted = Math.max(`,
+		`event.kind === "background"`,
+		`.startsWith(`,
+		`"migration-"`,
+		`requestMigrationRefresh();`,
 		`}, 2000);`,
 	} {
 		if !strings.Contains(app, marker) {

@@ -767,7 +767,7 @@ async function main() {
       (url) => url.includes("/api/v1/operator/snapshot") ||
         url.includes("/api/v1/activity/")
     );
-    await delay(800);
+    await delay(2300);
     const idleReadCount = browserRequestCount(
       cdp,
       (url) => url.includes("/api/v1/operator/snapshot") ||
@@ -956,10 +956,28 @@ async function main() {
     const liveUpdateObserved = detailAfterLive > detailBaseline &&
       snapshotAfterLive === snapshotBaseline;
     if (!liveUpdateObserved) {
+      const snapshotRequests = redact(cdp.events
+        .filter((event) => event.method === "Network.requestWillBeSent" &&
+          event.params && event.params.request &&
+          event.params.request.url.includes("/api/v1/operator/snapshot"))
+        .map((event) => ({
+          requestId:event.params.requestId,
+          loaderId:event.params.loaderId,
+          timestamp:event.params.timestamp,
+          wallTime:event.params.wallTime,
+          url:event.params.request.url,
+          initiator:event.params.initiator
+        })));
+      await secureWrite(
+        "live-update-failure.json",
+        JSON.stringify({snapshotRequests}, null, 2) + "\n",
+        "utf8"
+      );
       throw new Error(
         "live event did not refresh detail through SSE-only orchestration: " +
         `detail=${detailBaseline}->${detailAfterLive} ` +
-        `snapshot=${snapshotBaseline}->${snapshotAfterLive}`
+        `snapshot=${snapshotBaseline}->${snapshotAfterLive} ` +
+        `snapshotRequests=${JSON.stringify(snapshotRequests)}`
       );
     }
 
